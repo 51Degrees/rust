@@ -23,12 +23,42 @@
 //! A tiny, pure-safe-Rust Mustache renderer scoped to the constructs the
 //! bundled `JavaScriptResource.mustache` template actually uses.
 //!
-//! It is a deliberately small replacement for the `ramhorns` engine, which was
-//! the only memory-unsafe dependency in the render path. Under concurrent test
-//! execution its unsafe internals corrupted the process heap, surfacing on
-//! Windows as an intermittent access violation (exit 0xC0000005) inside the
-//! allocator. This renderer uses no `unsafe` and no third-party engine, so the
-//! whole class of fault is gone.
+//! It is a deliberately small replacement for the third-party `ramhorns`
+//! Mustache engine, which was the only memory-unsafe dependency anywhere in the
+//! render path. The reasons it was removed are recorded here in full so the
+//! decision is not revisited blindly.
+//!
+//! # Why this crate does not use `ramhorns`
+//!
+//! While rendering this template, `ramhorns` corrupted the process heap from
+//! inside its own `unsafe` code. On Windows the corruption surfaced as an
+//! intermittent access violation (exit code `0xC0000005`) whose backtrace faulted
+//! in the system allocator (`RtlAllocateHeap` / `RtlFreeHeap`), not in any of our
+//! code. Removing `ramhorns` entirely and rendering with this `unsafe`-free
+//! module eliminated the crash completely, which is the evidence that the engine
+//! itself, rather than the surrounding code, was at fault.
+//!
+//! # Why no issue or pull request was raised upstream
+//!
+//! The fault only reproduced under the rustdoc *merged-doctest* harness, where
+//! many doctests are compiled into a single binary and run together. It could not
+//! be reproduced from standalone single-threaded or multi-threaded rendering, nor
+//! reduced to a minimal standalone case. Without a reliable, minimal reproduction
+//! there was nothing actionable to file: a report of the form "your `unsafe` code
+//! sometimes corrupts the heap, but only inside our particular test harness and
+//! we cannot show you how" is not useful to a maintainer, and we were not willing
+//! to assert a soundness bug in someone else's crate that we could not
+//! demonstrate in isolation. If a reliable reproduction is ever found (the crate
+//! is rechecked periodically for an unsafe-internals fix), the issue can be filed
+//! upstream at that point.
+//!
+//! The Rust toolchain version is not a factor here. The workspace MSRV was raised
+//! to 1.94 for the oxc minifier, which does not change a dependency's `unsafe`
+//! code soundness, so a newer compiler is not a reason to reconsider this.
+//!
+//! This renderer uses no `unsafe` and no third-party engine, so the whole class
+//! of fault is gone, and it produces byte-identical output to the previous engine
+//! for the constructs the template uses.
 //!
 //! # Supported constructs
 //!
