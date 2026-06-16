@@ -30,7 +30,7 @@
 //! off the async runtime, and mapping the result onto an axum response.
 //!
 //! It provides the two client-side endpoints, the evidence mapping and the
-//! caching, `Vary`, `ETag` and CORS behaviour, expressed through idiomatic axum
+//! caching, `Vary`, `ETag` and CORS behavior, expressed through idiomatic axum
 //! pieces: a
 //! [`FromRequestParts`](axum::extract::FromRequestParts) extractor, a
 //! [`from_fn_with_state`](axum::middleware::from_fn_with_state) middleware and a

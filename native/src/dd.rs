@@ -127,7 +127,7 @@ fn config_for(profile: PerformanceProfile) -> *mut sys::ConfigHash {
 
 /// A loaded Hash device detection data set.
 ///
-/// Owns a native [`sys::ResourceManager`] initialised from a data file. Cloning
+/// Owns a native [`sys::ResourceManager`] initialized from a data file. Cloning
 /// the [`Arc`] returned by [`Manager::open`] shares one loaded data set across
 /// threads cheaply. The data set is freed when the last reference is dropped,
 /// after every [`Results`] referencing it has also been dropped (the [`Arc`]
@@ -228,7 +228,7 @@ impl Manager {
             return Err(err);
         }
 
-        // Safety: a successful init leaves a non-null, initialised manager.
+        // Safety: a successful init leaves a non-null, initialized manager.
         let manager = NonNull::new(manager_ptr).expect("init produced a non-null manager");
         Ok(Arc::new(Manager {
             manager,
@@ -243,7 +243,7 @@ impl Manager {
 
     /// The number of required (available) properties in the loaded data set.
     pub fn property_count(&self) -> u32 {
-        // Safety: the manager is initialised for the lifetime of `self`.
+        // Safety: the manager is initialized for the lifetime of `self`.
         unsafe { sys::fiftyoneDegreesShimHashGetRequiredPropertyCount(self.as_ptr()) }
     }
 
@@ -303,7 +303,7 @@ impl Manager {
 
     /// Create a per-thread results structure for running detections.
     pub fn create_results(self: &Arc<Self>) -> Result<Results> {
-        // Safety: the manager is initialised. An overrides capacity of zero is
+        // Safety: the manager is initialized. An overrides capacity of zero is
         // the standard default.
         let results = unsafe { sys::fiftyoneDegreesResultsHashCreate(self.as_ptr(), 0) };
         let results = NonNull::new(results).ok_or_else(|| Error::Native {
@@ -319,7 +319,7 @@ impl Manager {
 
 impl Drop for Manager {
     fn drop(&mut self) {
-        // Safety: the manager was initialised by a successful `open`, and every
+        // Safety: the manager was initialized by a successful `open`, and every
         // `Results` referencing it held an `Arc` to this `Manager`, so all of
         // them have been dropped (and their data set references released) before
         // this runs. Freeing the manager then frees the data set, and the box is
@@ -475,7 +475,7 @@ impl Results {
     /// required property or has no value in the results.
     pub fn value_as_string(&self, property_name: &str, separator: &str) -> Result<Option<String>> {
         // Resolve once through the cached index. An unknown property has no
-        // value, matching the engine's own behaviour.
+        // value, matching the engine's own behavior.
         if self
             .manager
             .required_property_index(property_name)
@@ -533,7 +533,7 @@ impl Drop for Results {
 /// init status.
 fn exception_detail(exception: &mut sys::Exception) -> String {
     if exception.is_okay() {
-        return String::from("native initialisation reported a non-success status");
+        return String::from("native initialization reported a non-success status");
     }
-    exception.message_or("native initialisation failed with no message")
+    exception.message_or("native initialization failed with no message")
 }

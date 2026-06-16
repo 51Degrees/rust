@@ -24,7 +24,7 @@
 //!
 //! It assembles the two-element cloud pipeline, a [`CloudRequestEngine`] that
 //! makes the single HTTP call to the 51Degrees cloud service, followed by an
-//! [`IpIntelligenceCloudEngine`] that deserialises the `ip` member of the
+//! [`IpIntelligenceCloudEngine`] that deserializes the `ip` member of the
 //! response into an
 //! [`IpIntelligenceDataBase`](fiftyone_ip_intelligence_shared::IpIntelligenceDataBase).
 

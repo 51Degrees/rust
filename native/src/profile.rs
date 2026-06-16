@@ -25,11 +25,11 @@
 //! Both Device Detection and IP Intelligence ship the same family of predefined
 //! native configurations. They trade memory footprint against lookup speed in
 //! the same way, so a single profile enum picks the right configuration global
-//! for whichever engine is being initialised. The selection itself lives in the
+//! for whichever engine is being initialized. The selection itself lives in the
 //! engine specific submodules ([`crate::dd`] and [`crate::ipi`]) because each
 //! engine links its own copy of the configuration globals.
 
-/// The performance profile applied when a native engine manager is initialised.
+/// The performance profile applied when a native engine manager is initialized.
 ///
 /// The variants mirror the predefined native configuration globals exported by
 /// each engine (`...InMemoryConfig`, `...HighPerformanceConfig`,
@@ -40,7 +40,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PerformanceProfile {
     /// Load the data set entirely into memory with no caching. The data file is
-    /// not held open after initialisation. This is the fastest to query but uses
+    /// not held open after initialization. This is the fastest to query but uses
     /// the most memory.
     InMemory,
     /// Load everything into memory and drop the connection to the source file.
@@ -79,12 +79,12 @@ impl PerformanceProfile {
     /// `"high performance"` all resolve to
     /// [`PerformanceProfile::HighPerformance`].
     pub fn parse(name: &str) -> Option<PerformanceProfile> {
-        let normalised: String = name
+        let normalized: String = name
             .chars()
             .filter(|c| !c.is_whitespace() && *c != '-' && *c != '_')
             .map(|c| c.to_ascii_lowercase())
             .collect();
-        match normalised.as_str() {
+        match normalized.as_str() {
             "inmemory" => Some(PerformanceProfile::InMemory),
             "highperformance" => Some(PerformanceProfile::HighPerformance),
             "lowmemory" => Some(PerformanceProfile::LowMemory),

@@ -23,7 +23,7 @@
 //! Integration tests for the JSON builder element.
 //!
 //! Each test builds a small pipeline whose final element is the JSON builder,
-//! processes a flow data and asserts on the serialised JSON document. The
+//! processes a flow data and asserts on the serialized JSON document. The
 //! document is parsed back into a `serde_json::Value` for content assertions and
 //! inspected as a string for ordering assertions.
 
@@ -284,7 +284,7 @@ fn excludes_internal_elements_by_default() {
     assert!(value.get("set-headers").is_none(), "set-headers excluded");
     assert!(value.get("usage-sharing").is_none(), "usage excluded");
     assert!(value.get("device").is_some(), "device retained");
-    // The builder must never serialise its own element data.
+    // The builder must never serialize its own element data.
     assert!(
         value.get(JSON_BUILDER_ELEMENT_DATA_KEY).is_none(),
         "json builder excludes itself"
@@ -346,7 +346,7 @@ fn emits_nullreason_for_no_value_property() {
 #[test]
 fn serialises_engine_aspect_data() {
     // Exercise the engines dependency: an aspect engine writes AspectDataBase,
-    // and the builder serialises the values it actually stored. A property the
+    // and the builder serializes the values it actually stored. A property the
     // engine never set is absent from the data and is simply not emitted,
     // because the builder iterates the stored value dictionary rather than the
     // declared metadata.
@@ -387,7 +387,7 @@ fn serialises_engine_aspect_data() {
     let value = parse(&json);
     let device = value.get("device").expect("device present");
 
-    // The value the engine set serialises normally.
+    // The value the engine set serializes normally.
     assert_eq!(device.get("ismobile"), Some(&Value::Bool(true)));
     // The property the engine never stored is absent, with no nullreason.
     assert!(
@@ -707,7 +707,7 @@ fn javascript_value_serialised_as_string() {
     assert_eq!(
         device.get("hint"),
         Some(&Value::String("alert(1)".to_owned())),
-        "javascript value serialised as its source string"
+        "javascript value serialized as its source string"
     );
 }
 

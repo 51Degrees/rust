@@ -27,11 +27,11 @@
 /// The data key under which the JSON builder stores its element data.
 ///
 /// This is the element's own key, returned from
-/// [`fiftyone_pipeline_core::FlowElement::data_key`]. The serialised JSON string
+/// [`fiftyone_pipeline_core::FlowElement::data_key`]. The serialized JSON string
 /// itself is held under the [`JSON_PROPERTY_KEY`] property of that data.
 pub const JSON_BUILDER_ELEMENT_DATA_KEY: &str = "json-builder";
 
-/// The name of the single property the JSON builder populates: the serialised
+/// The name of the single property the JSON builder populates: the serialized
 /// JSON document, as a string.
 ///
 /// The property name is `"json"`. Read it from the element data with
@@ -79,7 +79,7 @@ pub const EVIDENCE_PROPERTIES_SUFFIX: &str = "evidenceproperties";
 
 /// The element data keys excluded from the JSON output by default.
 ///
-/// These elements either serialise the result themselves (the JSON and
+/// These elements either serialize the result themselves (the JSON and
 /// JavaScript builders), exist only as a transport detail (the cloud request
 /// engine response), or perform a side effect rather than producing data the
 /// client needs (set-headers and usage-sharing). The full set of internal

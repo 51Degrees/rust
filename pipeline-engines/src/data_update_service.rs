@@ -49,7 +49,7 @@
 //! # Scope of this baseline
 //!
 //! The service downloads, verifies, decompresses and applies updates, and runs
-//! the scheduler and watcher. Two behaviours are deliberate baseline limitations,
+//! the scheduler and watcher. Two behaviors are deliberate baseline limitations,
 //! noted inline: the publish timestamp is taken as the apply time rather than
 //! parsed out of the data-file header (the engine supplies the true value today),
 //! and a `429` response surfaces the server's `Retry-After` in the error but the

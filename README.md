@@ -7,7 +7,7 @@
 
 ## Introduction
 
-Rust implementations of the 51Degrees libraries, organised as a Cargo workspace.
+Rust implementations of the 51Degrees libraries, organized as a Cargo workspace.
 It lets a customer run cloud or on-premise Device Detection and IP Intelligence,
 in console or axum web applications, with full example coverage, docs and tests.
 
@@ -37,7 +37,7 @@ pure-Rust core up to the runnable examples.
 | [`fiftyone-pipeline-engines`](pipeline-engines) | AspectEngine/AspectData, AspectPropertyValue, missing-property and data-update services, and cache wiring. |
 | [`fiftyone-pipeline-engines-fiftyone`](pipeline-engines-fiftyone) | ShareUsage, SetHeaders and Sequence elements plus the FiftyOne metadata model. |
 | [`fiftyone-cloud-request-engine`](cloud-request-engine) | Cloud HTTP engine that resolves the accepted evidence keys and accessible properties at build time (with a persistable state for short-lived hosts) and recovery mode. |
-| [`fiftyone-json-builder`](json-builder) | JSON serialisation element. |
+| [`fiftyone-json-builder`](json-builder) | JSON serialization element. |
 | [`fiftyone-javascript-builder`](javascript-builder) | JavaScript snippet builder element with the bundled Mustache asset. Minification is an opt-in feature (see below). |
 
 ### Native FFI
@@ -86,7 +86,7 @@ path, so cloud-only users and most of CI build without a C compiler.
 | [`ip-intelligence-examples`](examples/ip-intelligence-examples) | Runnable IP-intelligence examples (cloud, on-premise and web). |
 | [`pipeline-examples`](examples/pipeline-examples) | Runnable pipeline examples: custom flow elements, caching, usage sharing and the combined-pipeline server-side examples. |
 | [`examples-benches`](examples/benches) | Criterion micro-benchmarks guarding the DD, IPI and JavaScript-builder throughput budgets. |
-| [`fodid`](fodid) | Standalone reader for the 51Did (51Degrees Identifier) value returned by the cloud. It parses the OWID envelope and is independent of the pipeline stack. |
+| [`fodid`](fodid) | Standalone reader for the 51Did (51Degrees Identifier) value returned by the cloud, described in the [identifiers documentation](https://51degrees.com/documentation/_identifiers__index.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=readme.md&utm_term=51did). It parses the OWID envelope and is independent of the pipeline stack. |
 
 ## Feature notes
 
@@ -265,6 +265,27 @@ The `fodid` crate depends on the
 [`owid`](https://github.com/SWAN-community/owid-rust) crate (the OWID envelope
 library a 51Did is built on), consumed as a git dependency. A network
 connection is required the first time the dependency is fetched.
+
+## Editor and IDE setup
+
+rust-analyzer drives code intelligence in any LSP editor (VS Code, Neovim,
+Helix, Zed), and the JetBrains RustRover IDE works out of the box.
+
+For VS Code the workspace ships `.vscode/tasks.json` and `.vscode/launch.json`,
+and `.vscode/extensions.json` recommends the two extensions they rely on:
+
+- [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+  for build, completion and inline diagnostics.
+- [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
+  for debugging. The launch configurations use its `lldb` debug type and `cargo`
+  integration, which resolve the built binary on Linux, macOS and Windows
+  (including the Windows `.exe` suffix). If CodeLLDB is not installed, VS Code
+  reports the launch configurations' debug type as unrecognised. Installing it
+  clears that.
+
+Opening the folder prompts to install the recommended extensions. Then run a
+task with Terminal then Run Task (Ctrl+Shift+B for the default build), and pick a
+configuration in the Run and Debug view to run or debug any example or test.
 
 ## Licence
 

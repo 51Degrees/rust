@@ -35,7 +35,7 @@
 //! bit file offsets and must link its own `common-cxx` (see the [`common`]
 //! module docs). Only the IP Intelligence specific surface is declared on top:
 //!
-//! - **Initialisation** ([`fiftyoneDegreesIpiInitManagerFromFile`],
+//! - **Initialization** ([`fiftyoneDegreesIpiInitManagerFromFile`],
 //!   [`fiftyoneDegreesIpiInitManagerFromMemory`] and the size helpers) with the
 //!   predefined [`ConfigIpi`] globals
 //!   ([`fiftyoneDegreesIpiDefaultConfig`] and the in memory, high performance,
@@ -105,13 +105,13 @@ pub use common::{
 /// crate depended on `fiftyone-common-sys`, that crate's `fiftyone-common-c`
 /// native library would also be linked, and the duplicate `common-cxx` symbols
 /// would be bound inconsistently across the two offset widths, which corrupts
-/// the data set header read and makes initialisation fail with an incorrect
+/// the data set header read and makes initialization fail with an incorrect
 /// version error. Declaring the handful of shared types here keeps a single,
 /// offset-consistent copy of `common-cxx` in any binary that links this crate.
 pub mod common {
     use std::os::raw::{c_char, c_int};
 
-    /// Status returned from the initialisation of a resource, mirroring
+    /// Status returned from the initialization of a resource, mirroring
     /// `fiftyoneDegreesStatusCode` from `status.h`. The discriminants are the
     /// enum's natural ordinal values, matching the header order.
     #[repr(C)]
@@ -724,7 +724,7 @@ extern "C" {
     /// manager. Release it with [`fiftyoneDegreesDataSetIpiRelease`].
     ///
     /// # Safety
-    /// `manager` must point to a manager initialised by one of the IP
+    /// `manager` must point to a manager initialized by one of the IP
     /// Intelligence init functions.
     pub fn fiftyoneDegreesDataSetIpiGet(manager: *mut ResourceManager) -> *mut DataSetIpi;
 
@@ -747,13 +747,13 @@ extern "C" {
     /// Device Detection one.
     ///
     /// # Safety
-    /// `manager` must point to an initialised manager.
+    /// `manager` must point to an initialized manager.
     #[link_name = "ipi_fiftyoneDegreesResourceManagerFree"]
     pub fn fiftyoneDegreesResourceManagerFree(manager: *mut ResourceManager);
 
-    // -- initialisation (ipi.h) --
+    // -- initialization (ipi.h) --
 
-    /// Returns the constant memory size needed to initialise from a file, or
+    /// Returns the constant memory size needed to initialize from a file, or
     /// zero when the configuration allows runtime allocation.
     ///
     /// # Safety
@@ -766,7 +766,7 @@ extern "C" {
         exception: *mut Exception,
     ) -> usize;
 
-    /// Initialises a resource manager from an IP Intelligence data file.
+    /// Initializes a resource manager from an IP Intelligence data file.
     ///
     /// # Safety
     /// `manager` must point to a writable [`ResourceManager`]. `config` and
@@ -780,7 +780,7 @@ extern "C" {
         exception: *mut Exception,
     ) -> StatusCode;
 
-    /// Returns the constant memory size needed to initialise from memory, or
+    /// Returns the constant memory size needed to initialize from memory, or
     /// zero when the configuration allows runtime allocation.
     ///
     /// # Safety
@@ -794,7 +794,7 @@ extern "C" {
         exception: *mut Exception,
     ) -> usize;
 
-    /// Initialises a resource manager from an IP Intelligence data set held in
+    /// Initializes a resource manager from an IP Intelligence data set held in
     /// contiguous memory. The memory must outlive the manager.
     ///
     /// # Safety
@@ -814,7 +814,7 @@ extern "C" {
     /// configuration.
     ///
     /// # Safety
-    /// `manager` must be initialised. `file_name` must be a valid null
+    /// `manager` must be initialized. `file_name` must be a valid null
     /// terminated string. `exception` must point to a cleared [`Exception`].
     pub fn fiftyoneDegreesIpiReloadManagerFromFile(
         manager: *mut ResourceManager,
@@ -826,7 +826,7 @@ extern "C" {
     /// configuration.
     ///
     /// # Safety
-    /// `manager` must be initialised. `source` must point to `length` readable
+    /// `manager` must be initialized. `source` must point to `length` readable
     /// bytes that outlive the manager. `exception` must point to a cleared
     /// [`Exception`].
     pub fn fiftyoneDegreesIpiReloadManagerFromMemory(
@@ -839,7 +839,7 @@ extern "C" {
     /// Reloads the data set from the file the manager was created with.
     ///
     /// # Safety
-    /// `manager` must be initialised. `exception` must point to a cleared
+    /// `manager` must be initialized. `exception` must point to a cleared
     /// [`Exception`].
     pub fn fiftyoneDegreesIpiReloadManagerFromOriginalFile(
         manager: *mut ResourceManager,
@@ -852,7 +852,7 @@ extern "C" {
     /// Free it with [`fiftyoneDegreesResultsIpiFree`].
     ///
     /// # Safety
-    /// `manager` must point to an initialised IP Intelligence manager.
+    /// `manager` must point to an initialized IP Intelligence manager.
     pub fn fiftyoneDegreesResultsIpiCreate(manager: *mut ResourceManager) -> *mut ResultsIpi;
 
     /// Frees a results structure and releases its data set reference.
@@ -893,7 +893,7 @@ extern "C" {
     /// Processes the evidence value pairs and populates the results.
     ///
     /// # Safety
-    /// `results` must be valid and reference an initialised manager. `evidence`
+    /// `results` must be valid and reference an initialized manager. `evidence`
     /// must be a valid evidence array. `exception` must point to a cleared
     /// [`Exception`].
     pub fn fiftyoneDegreesResultsIpiFromEvidence(
@@ -995,7 +995,7 @@ extern "C" {
     /// value provided, returning the number of matches.
     ///
     /// # Safety
-    /// `manager` must be initialised. `property_name` and `value_name` must be
+    /// `manager` must be initialized. `property_name` and `value_name` must be
     /// valid null terminated strings. `callback` must be sound for `state`.
     /// `exception` must point to a cleared [`Exception`].
     pub fn fiftyoneDegreesIpiIterateProfilesForPropertyAndValue(
@@ -1058,7 +1058,7 @@ extern "C" {
     /// library, so the deeply nested `available` field can be read from C.
     ///
     /// # Safety
-    /// `manager` must point to a manager initialised by one of the IP
+    /// `manager` must point to a manager initialized by one of the IP
     /// Intelligence init functions.
     pub fn fiftyoneDegreesShimIpiGetRequiredPropertyCount(manager: *mut ResourceManager) -> u32;
 
@@ -1069,7 +1069,7 @@ extern "C" {
     /// available. Defined by this crate's `src/shim.c`.
     ///
     /// # Safety
-    /// `manager` must be initialised. `buffer` must point to `length` writable
+    /// `manager` must be initialized. `buffer` must point to `length` writable
     /// bytes.
     pub fn fiftyoneDegreesShimIpiGetRequiredPropertyName(
         manager: *mut ResourceManager,
@@ -1085,7 +1085,7 @@ extern "C" {
     /// crate's `src/shim.c`.
     ///
     /// # Safety
-    /// `manager` must be initialised. `property_name` must be a valid null
+    /// `manager` must be initialized. `property_name` must be a valid null
     /// terminated string.
     pub fn fiftyoneDegreesShimIpiGetRequiredPropertyIndexFromName(
         manager: *mut ResourceManager,
@@ -1153,7 +1153,7 @@ mod tests {
     }
 
     /// Full end to end smoke test against the Lite data file when it is present:
-    /// initialise a manager, look up a public IP address, read a property value
+    /// initialize a manager, look up a public IP address, read a property value
     /// with its weighting, then free everything. When the file is absent the
     /// test still asserts the symbols link by exercising the reason message.
     #[test]
@@ -1184,7 +1184,7 @@ mod tests {
 
             // The init function ran cleanly through the FFI boundary and
             // returned a well defined status. That alone proves the
-            // initialisation symbols and the whole `common-cxx` plus
+            // initialization symbols and the whole `common-cxx` plus
             // `ip-graph-cxx` plus `ipi` link is sound on the host toolchain.
             //
             // The bundled Lite data file in this checkout is format version

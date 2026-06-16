@@ -37,7 +37,7 @@ pub const JSON_BUILDER_DATA_KEY: TypedKey<JsonBuilderData> =
 
 /// The element data the JSON builder writes into the flow data.
 ///
-/// It carries exactly one value, the serialised JSON document, accessible
+/// It carries exactly one value, the serialized JSON document, accessible
 /// through [`JsonBuilderData::json`] or by the property name
 /// [`crate::JSON_PROPERTY_KEY`].
 #[derive(Debug, Clone, Default)]
@@ -54,12 +54,12 @@ impl JsonBuilderData {
         }
     }
 
-    /// The serialised JSON document.
+    /// The serialized JSON document.
     pub fn json(&self) -> &str {
         &self.json
     }
 
-    /// Replace the serialised JSON document. Used by the element once it has
+    /// Replace the serialized JSON document. Used by the element once it has
     /// built the document.
     pub fn set_json(&mut self, json: impl Into<String>) {
         self.json = json.into();

@@ -100,7 +100,7 @@ impl Pipeline {
     /// Run every element against the flow data in order.
     ///
     /// Each element's `process` is called in turn. On an element error the
-    /// behaviour depends on `suppress_process_exceptions`:
+    /// behavior depends on `suppress_process_exceptions`:
     ///
     /// - **Suppressed** (`true`): the error is recorded on the flow data via
     ///   [`FlowData::errors`] and the remaining elements still run. The method

@@ -41,7 +41,7 @@
 //!    [`WebIntegrationOptions::use_set_header_properties`] is set), after the
 //!    core elements so it can see every `SetHeader*` property they produced.
 //! 4. [`fiftyone_json_builder::JsonBuilderElement`] as the penultimate element,
-//!    so it serialises the results of everything before it.
+//!    so it serializes the results of everything before it.
 //! 5. [`fiftyone_javascript_builder::JavaScriptBuilderElement`] last, because it
 //!    wraps the JSON the JSON builder produced.
 //!

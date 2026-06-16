@@ -38,7 +38,7 @@
 //!   [`fiftyoneDegreesHashLowMemoryConfig`],
 //!   [`fiftyoneDegreesHashBalancedConfig`] and
 //!   [`fiftyoneDegreesHashBalancedTempConfig`]).
-//! - **Manager initialisation** ([`fiftyoneDegreesHashInitManagerFromFile`] and
+//! - **Manager initialization** ([`fiftyoneDegreesHashInitManagerFromFile`] and
 //!   [`fiftyoneDegreesHashInitManagerFromMemory`], plus the matching size
 //!   helpers).
 //! - **Results** ([`fiftyoneDegreesResultsHashCreate`], the three process
@@ -59,7 +59,7 @@
 //!
 //! The deeply nested data set and results structures are exposed as opaque
 //! pointer types. Only [`ConfigHash`] and its base structures, which a caller
-//! constructs to drive initialisation, are given a concrete `#[repr(C)]`
+//! constructs to drive initialization, are given a concrete `#[repr(C)]`
 //! layout. The configuration globals are used unmodified in the common case, so
 //! most callers never need to touch the configuration layout at all.
 //!
@@ -107,7 +107,7 @@ pub use fiftyone_common_sys::{
 pub enum HashMatchMethod {
     /// No match method was used.
     None = 0,
-    /// The performance optimised graph produced the match.
+    /// The performance optimized graph produced the match.
     Performance,
     /// A combination of graphs produced the match.
     Combined,
@@ -151,7 +151,7 @@ pub enum ResultsNoValueReason {
 /// Configuration applied to a single managed collection.
 ///
 /// Mirrors `fiftyoneDegreesCollectionConfig` from `common-cxx/collection.h`. The
-/// fields tune the in memory caching and loading behaviour for one collection
+/// fields tune the in memory caching and loading behavior for one collection
 /// within the data set.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -215,7 +215,7 @@ pub struct ConfigDeviceDetection {
 /// Mirrors `fiftyoneDegreesConfigHash` from `hash.h`. The predefined global
 /// configurations such as [`fiftyoneDegreesHashDefaultConfig`] are values of
 /// this type. A caller passes a pointer to one of them, or to a copy it has
-/// modified, into the manager initialisation methods.
+/// modified, into the manager initialization methods.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ConfigHash {
@@ -243,9 +243,9 @@ pub struct ConfigHash {
     pub difference: i32,
     /// Maximum allowed drift when matching hashes.
     pub drift: i32,
-    /// True if the performance optimised graph should be used.
+    /// True if the performance optimized graph should be used.
     pub use_performance_graph: bool,
-    /// True if the predictive optimised graph should be used.
+    /// True if the predictive optimized graph should be used.
     pub use_predictive_graph: bool,
     /// True if the route through each graph should be traced (debug only).
     pub trace_route: bool,
@@ -313,7 +313,7 @@ extern "C" {
 // ---------------------------------------------------------------------------
 
 extern "C" {
-    /// Returns the constant number of bytes needed to initialise a Hash manager
+    /// Returns the constant number of bytes needed to initialize a Hash manager
     /// from a file with the given configuration, or zero if not constant.
     ///
     /// # Safety
@@ -326,7 +326,7 @@ extern "C" {
         exception: *mut Exception,
     ) -> usize;
 
-    /// Initialises `manager` with a Hash data set loaded from `file_name`.
+    /// Initializes `manager` with a Hash data set loaded from `file_name`.
     ///
     /// # Safety
     /// `manager` must point to a zeroed [`ResourceManager`]. `file_name` must be
@@ -340,7 +340,7 @@ extern "C" {
         exception: *mut Exception,
     ) -> StatusCode;
 
-    /// Returns the constant number of bytes needed to initialise a Hash manager
+    /// Returns the constant number of bytes needed to initialize a Hash manager
     /// from a memory buffer, or zero if not constant.
     ///
     /// # Safety
@@ -354,7 +354,7 @@ extern "C" {
         exception: *mut Exception,
     ) -> usize;
 
-    /// Initialises `manager` with a Hash data set read from a memory buffer.
+    /// Initializes `manager` with a Hash data set read from a memory buffer.
     ///
     /// # Safety
     /// `manager` must point to a zeroed [`ResourceManager`]. `memory` must point
@@ -373,7 +373,7 @@ extern "C" {
     /// returned pointer must be freed with [`fiftyoneDegreesResultsHashFree`].
     ///
     /// # Safety
-    /// `manager` must be an initialised Hash manager.
+    /// `manager` must be an initialized Hash manager.
     pub fn fiftyoneDegreesResultsHashCreate(
         manager: *mut ResourceManager,
         overrides_capacity: u32,
@@ -512,7 +512,7 @@ extern "C" {
     /// reference must be released with [`fiftyoneDegreesDataSetHashRelease`].
     ///
     /// # Safety
-    /// `manager` must be an initialised Hash manager.
+    /// `manager` must be an initialized Hash manager.
     pub fn fiftyoneDegreesDataSetHashGet(manager: *mut ResourceManager) -> *mut DataSetHash;
 
     /// Releases a data set reference obtained from
@@ -532,7 +532,7 @@ extern "C" {
     /// managed by `manager`, or zero if no data set is available.
     ///
     /// # Safety
-    /// `manager` must be an initialised Hash manager.
+    /// `manager` must be an initialized Hash manager.
     pub fn fiftyoneDegreesShimHashGetRequiredPropertyCount(manager: *mut ResourceManager) -> u32;
 
     /// Writes the name of the required property at `required_property_index`
@@ -540,7 +540,7 @@ extern "C" {
     /// characters written, excluding the terminator.
     ///
     /// # Safety
-    /// `manager` must be an initialised Hash manager. `buffer` must point to
+    /// `manager` must be an initialized Hash manager. `buffer` must point to
     /// `length` writable bytes.
     pub fn fiftyoneDegreesShimHashGetRequiredPropertyName(
         manager: *mut ResourceManager,
@@ -553,7 +553,7 @@ extern "C" {
     /// property is not one of the required properties.
     ///
     /// # Safety
-    /// `manager` must be an initialised Hash manager. `property_name` must be a
+    /// `manager` must be an initialized Hash manager. `property_name` must be a
     /// valid null terminated string.
     pub fn fiftyoneDegreesShimHashGetRequiredPropertyIndexFromName(
         manager: *mut ResourceManager,
@@ -564,7 +564,7 @@ extern "C" {
     /// by `manager`, or zero if no data set is available.
     ///
     /// # Safety
-    /// `manager` must be an initialised Hash manager.
+    /// `manager` must be an initialized Hash manager.
     pub fn fiftyoneDegreesShimHashGetEvidenceKeyCount(manager: *mut ResourceManager) -> u32;
 
     /// Writes the name of the HTTP header evidence key at `header_index` into
@@ -572,7 +572,7 @@ extern "C" {
     /// characters written, excluding the terminator.
     ///
     /// # Safety
-    /// `manager` must be an initialised Hash manager. `buffer` must point to
+    /// `manager` must be an initialized Hash manager. `buffer` must point to
     /// `length` writable bytes.
     pub fn fiftyoneDegreesShimHashGetEvidenceKey(
         manager: *mut ResourceManager,
@@ -617,7 +617,7 @@ mod tests {
     #[test]
     fn default_config_global_links() {
         unsafe {
-            // The default configuration is the Balanced one. Its initialiser in
+            // The default configuration is the Balanced one. Its initializer in
             // hash.c disables the performance graph, enables the predictive
             // graph and disables tracing. Matching these end-of-struct values
             // proves the preceding nested base structures are laid out exactly.
@@ -646,7 +646,7 @@ mod tests {
         }
     }
 
-    /// Full smoke test: initialise a manager from the Lite data file, run one
+    /// Full smoke test: initialize a manager from the Lite data file, run one
     /// detection from a desktop user agent, read IsMobile, enumerate a couple of
     /// properties and evidence keys, then free everything in the correct order.
     ///

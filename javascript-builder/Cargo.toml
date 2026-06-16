@@ -43,7 +43,7 @@ fiftyone-json-builder = { path = "../json-builder" }
 # rendering. Removing it entirely eliminated the crash. The in-crate renderer
 # supports exactly the constructs the template uses and produces byte-identical
 # output.
-# serde_json serialises the request parameters object into the template.
+# serde_json serializes the request parameters object into the template.
 serde_json.workspace = true
 # URL-encoding of the request parameter keys and values. percent-encoding is
 # already used elsewhere in the workspace so it is reused here for a single

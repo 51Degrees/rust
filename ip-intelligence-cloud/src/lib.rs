@@ -33,7 +33,7 @@
 //! [`IpIntelligenceCloudEngine`]. The request engine makes the single HTTP call
 //! and stores the raw JSON response under its `cloud` data key. This engine then
 //! reads that JSON, slices out the part it owns (the `ip` member) and
-//! deserialises it into the shared
+//! deserializes it into the shared
 //! [`IpIntelligenceDataBase`], stored under [`IP_DATA_KEY`]. Because both the
 //! cloud and on-premise engines produce that same type under that same key, a
 //! consuming application can swap one engine for the other without changing how

@@ -364,7 +364,7 @@ fn lite_file_loads_or_is_rejected_as_documented() {
     // current-format Lite file loads and works like any other on-premise tier,
     // though it carries the smaller free-tier property set (location only, no
     // autonomous-system data), so no properties are restricted here. The test
-    // accepts both outcomes and asserts the matching behaviour, so it stays green
+    // accepts both outcomes and asserts the matching behavior, so it stays green
     // against whichever Lite file a checkout carries while still exercising it.
     match IpIntelligenceOnPremiseEngineBuilder::new(&file)
         .performance_profile(PerformanceProfile::LowMemory)

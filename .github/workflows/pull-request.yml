@@ -136,7 +136,7 @@ jobs:
 
       # 8. Live cloud tests. These are #[ignore]d so the steps above stay green
       #    offline; here they run with a real resource key when one is available.
-      #    The key is sourced from the organisation secrets through the common-ci
+      #    The key is sourced from the organization secrets through the common-ci
       #    central script when present, with a direct fallback to the well-known
       #    secret names so the tests still run if the script is unavailable. The
       #    examples-shared resolver reads 51DEGREES_RESOURCE_KEY first, then the
@@ -152,7 +152,7 @@ jobs:
         env:
           SECRETS: ${{ toJSON(secrets) }}
         run: |
-          # Map every organisation secret into the process environment so the
+          # Map every organization secret into the process environment so the
           # central script (when present) and the direct fallback both see them.
           $all = ConvertFrom-Json -AsHashtable $env:SECRETS
           $script = './common-ci/steps/set-resource-keys.ps1'

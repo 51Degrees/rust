@@ -84,11 +84,11 @@ const URL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 /// - **enable cookies**: the `query.fod-js-enable-cookies` evidence parsed as a
 ///   boolean if present, else the configured default (true).
 /// - **callback URL**: built only when protocol, host and endpoint are all
-///   present, normalising the single slash between host and endpoint. When a URL
+///   present, normalizing the single slash between host and endpoint. When a URL
 ///   is built the background-update mechanism is enabled.
 /// - **parameters**: every `query.*` evidence entry except the session id and
 ///   sequence, with the prefix stripped and the key and value URL-encoded,
-///   serialised as a JSON object.
+///   serialized as a JSON object.
 /// - **has delayed properties**: true when the JSON payload contains the
 ///   `delayexecution` marker.
 /// - **supports promises**: true when the device-detection `Promise` property is
@@ -239,7 +239,7 @@ impl JavaScriptBuilderElement {
     /// Build the callback URL, or `None` if protocol, host or endpoint is
     /// missing.
     ///
-    /// The single slash between host and endpoint is normalised: a slash is
+    /// The single slash between host and endpoint is normalized: a slash is
     /// added when neither side has one, and a duplicate is removed when both
     /// sides have one.
     fn build_url(protocol: &str, host: &str, endpoint: &str) -> Option<String> {
@@ -284,8 +284,8 @@ impl JavaScriptBuilderElement {
     ///
     /// Every `query.*` evidence entry except the session id and sequence is
     /// included. The `query.` prefix is stripped, then the key and value are
-    /// URL-encoded. The result is serialised as a JSON object. A `BTreeMap` is
-    /// used so the key order, and therefore the serialised JSON, is
+    /// URL-encoded. The result is serialized as a JSON object. A `BTreeMap` is
+    /// used so the key order, and therefore the serialized JSON, is
     /// deterministic.
     fn build_parameters(data: &FlowData) -> String {
         let query_prefix = format!("{EVIDENCE_QUERY_PREFIX}{EVIDENCE_SEPARATOR}");

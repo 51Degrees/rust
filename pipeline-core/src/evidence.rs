@@ -124,7 +124,7 @@ impl EvidencePrefix {
 /// the same way every time.
 fn key_precedence(key: &str) -> (u32, &str) {
     // Split into prefix and the remainder. A key without a separator has no
-    // recognised prefix, so it falls into the alphabetical bucket.
+    // recognized prefix, so it falls into the alphabetical bucket.
     let prefix = key
         .split_once(constants::EVIDENCE_SEPARATOR)
         .map(|(p, _)| p);
@@ -383,7 +383,7 @@ impl EvidenceKeyFilter for EvidenceKeyFilterWhitelist {
 /// logical OR.
 ///
 /// A key is included if any child filter includes it. Its order is taken from
-/// the first child that recognises it. This is how a pipeline combines the
+/// the first child that recognizes it. This is how a pipeline combines the
 /// filters of all its elements into one pipeline-wide filter (used for the web
 /// `Vary` whitelist).
 #[derive(Default)]

@@ -292,7 +292,7 @@ fn json_content_type_and_length() {
     assert_eq!(response.header("Content-Type"), Some("application/json"));
     let len: usize = response.header("Content-Length").unwrap().parse().unwrap();
     assert_eq!(len, response.body.len());
-    // The serialised JSON includes our property.
+    // The serialized JSON includes our property.
     assert!(response.body_str().unwrap().contains("ismobile"));
 }
 

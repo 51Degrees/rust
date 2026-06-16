@@ -48,7 +48,7 @@ pub struct PropertyMetaData {
     /// The data key of the [`crate::FlowElement`] that populates this property.
     pub element_data_key: String,
 
-    /// The category the property belongs to, used to organise elements that
+    /// The category the property belongs to, used to organize elements that
     /// populate many properties. Empty if uncategorised.
     pub category: String,
 

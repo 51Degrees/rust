@@ -60,7 +60,7 @@ pub struct ExampleOptions {
 struct BenchmarkResult {
     /// The total number of detections performed.
     detections: u64,
-    /// How many were detected as mobile, read to keep the optimiser honest.
+    /// How many were detected as mobile, read to keep the optimizer honest.
     mobile: u64,
     /// The wall-clock time the timed phase took.
     elapsed: Duration,
@@ -355,7 +355,7 @@ mod tests {
  * Each thread processes a disjoint stripe of the User-Agent list (every
  * Nth entry) so the work is shared with no per-item locking, and the per-thread
  * counts are accumulated atomically. A property is read on each detection so the
- * optimiser cannot elide the work being measured. Per-detection errors are
+ * optimizer cannot elide the work being measured. Per-detection errors are
  * ignored so a single odd record cannot abort the run.
  *
  * Usage sharing is intentionally not enabled. Console examples must not add the

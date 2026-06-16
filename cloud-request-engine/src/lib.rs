@@ -55,7 +55,7 @@
 //! from the cloud. The builder fetches both as it builds the engine, so a built
 //! engine is fully resolved and immutable with no lazy first-use discovery. If
 //! either fetch fails, [`CloudRequestEngineBuilder::build`] returns an error
-//! rather than producing a half-initialised engine.
+//! rather than producing a half-initialized engine.
 //!
 //! Because both results depend only on the resource key, a consumer can persist
 //! them and skip the build-time fetch on the next start. The builder retains the

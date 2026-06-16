@@ -23,7 +23,7 @@
 //! Mapping native status codes and exceptions onto the pipeline error model.
 //!
 //! Every native call either succeeds or reports a failure in one of two ways. A
-//! `StatusCode` other than `Success` is returned from an initialisation call, or
+//! `StatusCode` other than `Success` is returned from an initialization call, or
 //! an `Exception` structure is set by a processing call. Both are surfaced to
 //! the safe layer as [`fiftyone_pipeline_core::Error::Native`], carrying the
 //! status name and a human readable message taken from the native library where
@@ -190,7 +190,7 @@ macro_rules! status_name {
 // a `#[macro_export]` (it is an internal mapping helper, not public surface).
 pub(crate) use status_name;
 
-/// Convert a native initialisation status into a [`Result`].
+/// Convert a native initialization status into a [`Result`].
 ///
 /// A success status yields `Ok(())`. Any other status yields an
 /// [`Error::Native`] whose `status` is the code name and whose `message` is the

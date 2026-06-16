@@ -1,7 +1,7 @@
 [package]
 name = "fiftyone-json-builder"
 version = "0.1.0"
-description = "JSON serialisation element for the 51Degrees pipeline."
+description = "JSON serialization element for the 51Degrees pipeline."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -21,7 +21,7 @@ fiftyone-pipeline-core = { path = "../pipeline-core" }
 # which this crate never uses, so it compiles for wasm32-wasip1. Enable the
 # `data-update` feature to re-export it.
 fiftyone-pipeline-engines = { path = "../pipeline-engines", default-features = false }
-# serde_json with preserve_order keeps the serialised key order deterministic so
+# serde_json with preserve_order keeps the serialized key order deterministic so
 # the JSON (and any ETag computed from it downstream) is stable across runs. The
 # indexmap-backed Map this enables preserves insertion order rather than sorting.
 serde_json = { version = "1", features = ["preserve_order"] }

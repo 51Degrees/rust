@@ -22,7 +22,7 @@
 
 //! # 51Degrees JSON builder
 //!
-//! The JSON builder element serialises every piece of element data in a
+//! The JSON builder element serializes every piece of element data in a
 //! [`fiftyone_pipeline_core::FlowData`] into a single JSON object and stores it
 //! on the flow data under the [`JSON_PROPERTY_KEY`] property of its own element
 //! data. It implements the
@@ -45,7 +45,7 @@
 //!
 //! ## Determinism
 //!
-//! The serialiser uses `serde_json` with the `preserve_order` feature so the
+//! The serializer uses `serde_json` with the `preserve_order` feature so the
 //! key order is the insertion order rather than a hash order. Insertion order is
 //! itself made deterministic by sorting element keys and property names, so the
 //! same flow data always yields byte-identical JSON. That stability is what lets

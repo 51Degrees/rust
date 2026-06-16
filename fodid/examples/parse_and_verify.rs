@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     payload[0] = 0b1010_0101; // usage flags
     payload[1..5].copy_from_slice(&0x1234_5678u32.to_le_bytes()); // License Id
     for (i, b) in payload[5..37].iter_mut().enumerate() {
-        *b = 0x20 + i as u8; // a stable, recognisable hash
+        *b = 0x20 + i as u8; // a stable, recognizable hash
     }
 
     // The cloud signs and base64 encodes the envelope; that string is the

@@ -352,7 +352,7 @@ mod tests {
  * How the JavaScript gets to the client
  * -------------------------------------
  * The element declares `dobjavascript` as a JavaScript-typed property and stores
- * its value as a `PropertyValue::JavaScript`. The JSON builder serialises it and
+ * its value as a `PropertyValue::JavaScript`. The JSON builder serializes it and
  * the JavaScript builder wraps it into the bundle served at 51Degrees.core.js.
  * The element advertises `cookie.date-of-birth` as its evidence so the web layer
  * knows the response varies on that cookie.

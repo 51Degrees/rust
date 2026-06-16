@@ -211,7 +211,7 @@ enum Token {
 
 /// Split the source into literal-text and tag tokens.
 ///
-/// Triple-brace `{{{name}}}` is recognised before double-brace so the third
+/// Triple-brace `{{{name}}}` is recognized before double-brace so the third
 /// brace is consumed. The tag body is trimmed of surrounding ASCII whitespace,
 /// matching how the previous engine tokenised names.
 fn lex(source: &str) -> Result<Vec<Token>, ParseError> {

@@ -118,7 +118,7 @@ impl JsonBuilderElementBuilder {
     ///
     /// Use with care: the JSON and JavaScript builders normally exclude
     /// themselves through the defaults, so a replacement list should keep
-    /// `json-builder` and `javascript` to avoid the builders serialising their
+    /// `json-builder` and `javascript` to avoid the builders serializing their
     /// own output.
     pub fn set_element_exclusion_list<I, S>(mut self, keys: I) -> Self
     where

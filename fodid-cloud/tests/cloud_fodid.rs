@@ -70,7 +70,7 @@ const FLAGS: u8 = 0b0000_0001;
 const LICENSE_ID: u32 = 0x1234_5678;
 
 /// A canonical 37-byte 51Did payload: flags, little-endian licence id and a
-/// recognisable 32-byte hash (0x40..0x5F).
+/// recognizable 32-byte hash (0x40..0x5F).
 fn canonical_payload() -> Vec<u8> {
     // 1-byte flags + 4-byte licence id + 32-byte hash = 37 bytes.
     let mut payload = vec![0u8; 37];
@@ -327,7 +327,7 @@ fn live_cloud_returns_a_parseable_identifier() {
 
     let mut data = pipeline.create_flow_data_with(sample_evidence());
     // Processing must succeed regardless of the key's product tier: this catches
-    // transport, authentication and deserialisation regressions.
+    // transport, authentication and deserialization regressions.
     data.process().expect("live cloud processing succeeds");
 
     let fodid = data.get(FODID_DATA_KEY).expect("identifier data present");

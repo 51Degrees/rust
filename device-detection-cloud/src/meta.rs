@@ -117,7 +117,7 @@ pub(crate) fn cloud_json(data: &FlowData, engine_name: &str) -> Result<Option<St
 
 /// Map a cloud value-type name onto the nearest core [`PropertyValueType`].
 ///
-/// The cloud reports JSON-flavoured type names (for example `String`, `Bool`,
+/// The cloud reports JSON-flavored type names (for example `String`, `Bool`,
 /// `Array`). Anything unrecognised is treated as a string, which is the safest
 /// fallback because every value can be read back as text.
 pub(crate) fn map_value_type(cloud_type: &str) -> PropertyValueType {

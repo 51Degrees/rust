@@ -68,7 +68,7 @@ use fiftyone_pipeline_core::{Evidence, EvidenceBuilder, EvidenceKeyFilter};
 ///
 /// All names are returned as the request presents them. [`build_evidence`]
 /// lowercases keys when it builds the [`Evidence`], so an implementation need
-/// not normalise case itself.
+/// not normalize case itself.
 pub trait RequestData {
     /// The request headers as `(name, value)` pairs. A header that appears more
     /// than once may be returned either as repeated pairs or as a single joined

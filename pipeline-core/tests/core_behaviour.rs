@@ -20,11 +20,11 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! Behavioural tests for the pipeline core.
+//! Behavioral tests for the pipeline core.
 //!
 //! These cover the specification rules the plan calls out: evidence
 //! case-insensitivity and precedence, `generate_key` determinism, typed vs
-//! string element-data access, no-value behaviour, sequential pipeline
+//! string element-data access, no-value behavior, sequential pipeline
 //! processing and suppress-vs-propagate error handling.
 
 use std::any::Any;
@@ -360,7 +360,7 @@ fn flow_data_exposes_only_filtered_evidence_to_an_element() {
 }
 
 // ---------------------------------------------------------------------------
-// Typed vs string element-data access, and no-value behaviour.
+// Typed vs string element-data access, and no-value behavior.
 // ---------------------------------------------------------------------------
 
 fn single_element_pipeline() -> (Arc<Pipeline>, Arc<std::sync::Mutex<Vec<&'static str>>>) {

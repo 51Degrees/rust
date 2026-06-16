@@ -25,7 +25,7 @@
 //! This crate is the single safe boundary over the three raw FFI crates
 //! ([`fiftyone_common_sys`], [`fiftyone_device_detection_sys`] and
 //! [`fiftyone_ip_intelligence_sys`]). It turns the manual, unchecked native
-//! life cycle (initialise a resource manager, take handles, create results,
+//! life cycle (initialize a resource manager, take handles, create results,
 //! process, read values, free in the right order) into ordinary Rust values
 //! that free themselves and enforce the correct ordering through ownership.
 //!

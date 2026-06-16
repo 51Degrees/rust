@@ -67,7 +67,7 @@ use std::os::raw::{c_char, c_int, c_void};
 // Status codes (status.h)
 // ---------------------------------------------------------------------------
 
-/// Status returned from the initialisation of a resource.
+/// Status returned from the initialization of a resource.
 ///
 /// Mirrors `fiftyoneDegreesStatusCode` from `status.h`. The discriminants are
 /// the enum's natural ordinal values, which is the ABI the C library uses, so
@@ -433,7 +433,7 @@ extern "C" {
 
     // -- resource.h --
 
-    /// Initialise a preallocated [`ResourceManager`] with a resource to manage.
+    /// Initialize a preallocated [`ResourceManager`] with a resource to manage.
     ///
     /// # Safety
     /// `manager` must point to a writable [`ResourceManager`]. `resource_handle`
@@ -448,7 +448,7 @@ extern "C" {
     /// Frees the manager and, once no handles remain in use, its resource.
     ///
     /// # Safety
-    /// `manager` must point to a manager previously initialised with
+    /// `manager` must point to a manager previously initialized with
     /// [`fiftyoneDegreesResourceManagerInit`].
     pub fn fiftyoneDegreesResourceManagerFree(manager: *mut ResourceManager);
 
@@ -456,7 +456,7 @@ extern "C" {
     /// be released with [`fiftyoneDegreesResourceHandleDecUse`].
     ///
     /// # Safety
-    /// `manager` must point to an initialised manager.
+    /// `manager` must point to an initialized manager.
     pub fn fiftyoneDegreesResourceHandleIncUse(
         manager: *mut ResourceManager,
     ) -> *mut ResourceHandle;
@@ -479,7 +479,7 @@ extern "C" {
     /// once it is no longer in use.
     ///
     /// # Safety
-    /// `manager` must be initialised and `new_resource_handle` must point to the
+    /// `manager` must be initialized and `new_resource_handle` must point to the
     /// handle pointer inside `new_resource`.
     pub fn fiftyoneDegreesResourceReplace(
         manager: *mut ResourceManager,
@@ -605,7 +605,7 @@ mod tests {
         }
     }
 
-    /// A resource manager round-trip: initialise with a heap resource, take and
+    /// A resource manager round-trip: initialize with a heap resource, take and
     /// release a handle, then free. This exercises the resource and threading
     /// parts of the C library through the FFI boundary.
     #[test]

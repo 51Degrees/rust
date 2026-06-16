@@ -69,7 +69,7 @@ struct Endpoints {
 /// engine is fully resolved and immutable: there is no lazy first-use discovery.
 /// If either fetch fails (for example the cloud is unavailable),
 /// [`CloudRequestEngineBuilder::build`] returns an error rather than producing a
-/// half-initialised engine.
+/// half-initialized engine.
 ///
 /// # Persisting discovered state
 ///
@@ -243,7 +243,7 @@ impl CloudRequestEngine {
 }
 
 /// Strip a known evidence prefix from a key, leaving the field name. A key with
-/// no recognised `prefix.field` separator is returned unchanged.
+/// no recognized `prefix.field` separator is returned unchanged.
 fn strip_prefix(key: &str) -> String {
     match key.split_once('.') {
         Some((prefix, field)) if EvidencePrefix::parse(prefix).is_some() => field.to_owned(),

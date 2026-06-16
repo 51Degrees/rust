@@ -127,7 +127,7 @@ fn evidence_records(yaml: &str) -> impl Iterator<Item = Result<BTreeMap<String, 
 }
 
 /// Process one evidence record and return the input plus the detected properties
-/// as an ordered map ready to serialise.
+/// as an ordered map ready to serialize.
 fn analyse_evidence(
     pipeline: &Arc<Pipeline>,
     evidence: &BTreeMap<String, String>,
@@ -185,11 +185,11 @@ fn analyse_evidence(
     Ok(out)
 }
 
-/// Serialise one record as a YAML document and append it to `output`, preceded by
+/// Serialize one record as a YAML document and append it to `output`, preceded by
 /// the `---` document separator so the file is a valid multi-document stream.
 fn write_record(output: &mut std::fs::File, record: &BTreeMap<String, String>) -> Result<()> {
     let mut document = String::from("---\n");
-    let body = serde_norway::to_string(record).context("failed to serialise a result record")?;
+    let body = serde_norway::to_string(record).context("failed to serialize a result record")?;
     document.push_str(&body);
     output
         .write_all(document.as_bytes())

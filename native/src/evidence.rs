@@ -65,7 +65,7 @@ use fiftyone_pipeline_core::Evidence;
 /// together with the field part of the key that the native side uses as its key.
 ///
 /// The pipeline key is `prefix.field` with the prefix lowercased (see the
-/// evidence specification). The native engine recognises three categories that
+/// evidence specification). The native engine recognizes three categories that
 /// matter to detection: HTTP header strings, query string values (which the
 /// engine also treats as header-like string evidence) and server values such as
 /// the client IP, which arrive as an IP address string. Keys whose prefix the
@@ -179,7 +179,7 @@ impl Drop for EvidencePool {
 /// which the native side reads them. The pool is reused on the next call, so no
 /// native allocation happens once it has grown large enough.
 ///
-/// Keys whose prefix the native engine does not recognise are skipped. When no
+/// Keys whose prefix the native engine does not recognize are skipped. When no
 /// usable evidence remains the array is still passed (empty), which the engine
 /// handles by producing a result with no matched values.
 ///

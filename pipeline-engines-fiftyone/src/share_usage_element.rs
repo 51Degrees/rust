@@ -464,7 +464,7 @@ impl ShareUsageElement {
     /// Decide whether this request is in the shared sample.
     ///
     /// A deterministic counter-based sampler is used rather than a random one so
-    /// the behaviour is reproducible and free of per-request RNG state. A share
+    /// the behavior is reproducible and free of per-request RNG state. A share
     /// percentage of `p` shares roughly one request in `round(1/p)`.
     fn in_sample(&self) -> bool {
         let p = self.config.share_percentage;

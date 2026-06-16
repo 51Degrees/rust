@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! Behavioural tests for the sharded LRU cache and the flow-data-keyed cache.
+//! Behavioral tests for the sharded LRU cache and the flow-data-keyed cache.
 //!
 //! These cover hit/miss, eviction order, recency promotion on read and write,
 //! sharding (capacity scaling and per-key shard stability), concurrent access,

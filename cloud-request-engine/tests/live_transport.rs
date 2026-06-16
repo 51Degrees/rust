@@ -151,7 +151,7 @@ fn posts_url_encoded_form_with_stripped_prefixes_and_origin() {
 fn transport_failure_to_dead_endpoint_fails_the_build() {
     // Point at a port nothing is listening on. The builder's discovery fetch
     // fails at the transport level, so the build itself returns a cloud error
-    // rather than producing a half-initialised engine.
+    // rather than producing a half-initialized engine.
     let result = CloudRequestEngine::builder()
         .resource_key("rk")
         .endpoint("http://127.0.0.1:1/") // port 1: refused

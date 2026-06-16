@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! Behavioural tests for the 51Did reader, covering parsing, construction and
+//! Behavioral tests for the 51Did reader, covering parsing, construction and
 //! the guard paths.
 
 use fodid::{Error, FodId, IdType};

@@ -193,7 +193,7 @@ fn benchmark(
                         // A failed lookup (for example a malformed address) is
                         // not fatal to the benchmark; only successful lookups
                         // are counted, and the result is read to ensure the
-                        // work is not optimised away.
+                        // work is not optimized away.
                         if data.process().is_ok() && data.get(IP_DATA_KEY).is_some() {
                             local += 1;
                         }

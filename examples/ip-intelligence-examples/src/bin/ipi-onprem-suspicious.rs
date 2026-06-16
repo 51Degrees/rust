@@ -22,7 +22,7 @@
 
 //! On-premise IP Intelligence "suspicious" console example.
 //!
-//! Combines the diversity and behavioural properties an Enterprise data file
+//! Combines the diversity and behavioral properties an Enterprise data file
 //! carries to make a basic judgement about whether an IP address is a likely
 //! source of suspicious requests. The descriptive block the documentation tooling
 //! renders lives at the bottom of the file.
@@ -36,7 +36,7 @@ use fiftyone_ip_intelligence::{
 };
 use fiftyone_pipeline_core::{Evidence, Pipeline};
 
-/// The behavioural and diversity properties this example reads. They are carried
+/// The behavioral and diversity properties this example reads. They are carried
 /// by an Enterprise data file and are requested by name so the on-premise engine
 /// surfaces them. An ASN or Lite file does not carry them, in which case each
 /// reads back as a no-value and the verdict falls through to its safe default.
@@ -61,7 +61,7 @@ pub struct ExampleOptions {
 
 impl ExampleOptions {
     /// Default options, using the best-available loadable data-file tier. In
-    /// practice the diversity and behavioural properties are only present in an
+    /// practice the diversity and behavioral properties are only present in an
     /// Enterprise file, so the verdict is meaningful only when an Enterprise file
     /// is resolved.
     pub fn from_env() -> Option<Self> {
@@ -69,7 +69,7 @@ impl ExampleOptions {
     }
 
     /// Options pinned to a specific data-file tier. The test pins the Enterprise
-    /// tier, the only tier that carries the diversity and behavioural properties
+    /// tier, the only tier that carries the diversity and behavioral properties
     /// this example relies on, and skips when it is not reachable.
     pub fn for_tier(tier: examples_shared::IpiTier) -> Option<Self> {
         Some(ExampleOptions {
@@ -83,7 +83,7 @@ impl ExampleOptions {
     }
 }
 
-/// The diversity and behavioural values read for one IP, already reduced to the
+/// The diversity and behavioral values read for one IP, already reduced to the
 /// single most probable candidate of each weighted property.
 struct SuspiciousInputs {
     /// Whether the IP's primary connection is cellular. Cellular ranges naturally
@@ -110,12 +110,12 @@ struct SuspiciousInputs {
 /// `out`.
 ///
 /// Builds an on-premise IP Intelligence pipeline, requesting the diversity and
-/// behavioural properties, and for each IP prints the contributing values and an
+/// behavioral properties, and for each IP prints the contributing values and an
 /// IsSuspicious verdict. Usage sharing is not enabled, because this is a console
 /// example. A production deployment, and every web example, should enable it.
 pub fn run(options: &ExampleOptions, out: &mut dyn Write) -> anyhow::Result<()> {
     // LowMemory pages the (potentially multi-gigabyte) Enterprise data file from
-    // disk rather than loading it entirely into memory. The behavioural
+    // disk rather than loading it entirely into memory. The behavioral
     // properties are requested by name so the engine surfaces them in addition to
     // the typed location and network set.
     let pipeline: Arc<Pipeline> = IpIntelligencePipelineBuilder::on_premise(&options.data_file)
@@ -154,7 +154,7 @@ fn assess_ip(pipeline: &Arc<Pipeline>, ip: &str, out: &mut dyn Write) -> anyhow:
         .context("the pipeline produced no IP Intelligence data")?;
 
     // The on-premise engine surfaces every non-typed property as a weighted
-    // string, so each behavioural property is read through `weighted_string` and
+    // string, so each behavioral property is read through `weighted_string` and
     // reduced to its most probable candidate. A property the data tier does not
     // carry reads back as a no-value, which the helpers map to a safe default.
     let inputs = SuspiciousInputs {
@@ -294,7 +294,7 @@ fn main() -> anyhow::Result<()> {
                 writeln!(
                     out,
                     "No IP Intelligence data file could be located. Set {} to an \
-                     Enterprise .ipi file (the diversity and behavioural properties this \
+                     Enterprise .ipi file (the diversity and behavioral properties this \
                      example reads are only present in an Enterprise file). Contact \
                      51Degrees for one: \
                      https://51degrees.com/contact-us?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-ip-intelligence-examples-src-bin-ipi-onprem-suspicious.rs&utm_term=enterprise-data-required.",
@@ -314,7 +314,7 @@ mod tests {
 
     /// The example runs end to end against an Enterprise data file and prints a
     /// verdict per IP. It pins the Enterprise tier, the only tier that carries the
-    /// diversity and behavioural properties, and skips cleanly when that file is
+    /// diversity and behavioral properties, and skips cleanly when that file is
     /// not reachable, so a plain `cargo test` stays green off the 51Degrees
     /// network.
     #[test]
@@ -402,7 +402,7 @@ mod tests {
  *
  * You will learn:
  *
- * 1. How to request the diversity and behavioural properties (IsCellular,
+ * 1. How to request the diversity and behavioral properties (IsCellular,
  *    HardwareDiversity, BrowserDiversity, LocationConfidence, IsHosted,
  *    CountryCode, RegisteredCountry, HumanProbability) from the on-premise IP
  *    Intelligence engine.
@@ -434,7 +434,7 @@ mod tests {
  * # Data file
  *
  * This example requires an Enterprise IP Intelligence data file (`.ipi`), which is
- * the tier that carries the diversity and behavioural properties. The data file is
+ * the tier that carries the diversity and behavioral properties. The data file is
  * resolved by `examples_shared::ipi_data_path`. Contact 51Degrees for an
  * Enterprise file: <https://51degrees.com/contact-us?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-ip-intelligence-examples-src-bin-ipi-onprem-suspicious.rs&utm_term=ipi-onprem-suspicious>.
  *

@@ -60,7 +60,7 @@ struct DerivedMetadata {
 ///
 /// The engine consumes the JSON response stored by a
 /// [`CloudRequestEngine`] earlier in the same pipeline, slices out the `ip`
-/// member it owns and deserialises it into an [`IpIntelligenceDataBase`], which
+/// member it owns and deserializes it into an [`IpIntelligenceDataBase`], which
 /// it stores under [`IP_DATA_KEY`]. That is the same element-data type and key
 /// the on-premise engine produces, so the two are interchangeable to a
 /// consumer.
@@ -598,7 +598,7 @@ mod tests {
                 .build(),
         );
         // Processing must succeed regardless of the key's product tier: this
-        // catches transport, authentication and deserialisation regressions.
+        // catches transport, authentication and deserialization regressions.
         data.process().expect("live cloud processing succeeds");
 
         let ip = data.get(IP_DATA_KEY).expect("ip data present");

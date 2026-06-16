@@ -163,7 +163,7 @@ impl IpIntelligenceOnPremiseEngine {
     /// [`IpIntelligenceDataBase`].
     ///
     /// Returns a no-IP error when the evidence carries no client IP address,
-    /// mirroring the native wrapper's behaviour. Native results are created and
+    /// mirroring the native wrapper's behavior. Native results are created and
     /// dropped within this call, so nothing native escapes or is cached.
     fn lookup(&self, data: &FlowData) -> Result<IpIntelligenceDataBase> {
         let ip = client_ip_from_evidence(data.evidence()).ok_or_else(|| Error::Native {

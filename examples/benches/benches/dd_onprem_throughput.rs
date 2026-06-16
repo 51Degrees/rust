@@ -92,7 +92,7 @@ fn load_records(path: &Path, max: usize) -> Vec<BTreeMap<String, String>> {
     records
 }
 
-/// Run one detection per record, reading `IsMobile` so the optimiser cannot elide
+/// Run one detection per record, reading `IsMobile` so the optimizer cannot elide
 /// the work being measured, and return how many detections succeeded.
 ///
 /// Per-detection errors are ignored: a single malformed record must not abort the
@@ -108,7 +108,7 @@ fn detect_all(pipeline: &Arc<Pipeline>, records: &[BTreeMap<String, String>]) ->
         if data.process().is_ok() {
             if let Some(device) = data.get(DEVICE_DATA_KEY) {
                 // Read a property so the detection result is observed. black_box
-                // stops the compiler optimising the read (and so the detection)
+                // stops the compiler optimizing the read (and so the detection)
                 // away.
                 let is_mobile = device.is_mobile().as_option().copied().unwrap_or(false);
                 black_box(is_mobile);
@@ -150,7 +150,7 @@ fn dd_onprem_throughput(c: &mut Criterion) {
     let pipeline = build_pipeline(&data_file);
 
     // A warm-up detection primes the data set and caches so the first measured
-    // iteration is not skewed by one-off initialisation.
+    // iteration is not skewed by one-off initialization.
     let _ = detect_all(&pipeline, &records);
 
     let mut group = c.benchmark_group("dd_onprem");
@@ -197,7 +197,7 @@ criterion_main!(benches);
  *   for speed. Swap the profile in `build_pipeline` to compare the options.
  * - A single requested property (`IsMobile`) means detection resolves one
  *   component, the fastest realistic configuration. A property is read on each
- *   detection, behind `black_box`, so the optimiser cannot remove the work.
+ *   detection, behind `black_box`, so the optimizer cannot remove the work.
  *
  * Usage sharing is intentionally not enabled: the `ShareUsageElement` is omitted,
  * as it must be for console and offline tooling, and would otherwise add network

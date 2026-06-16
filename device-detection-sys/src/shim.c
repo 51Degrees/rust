@@ -23,7 +23,7 @@
 /*
  * Property enumeration shim for fiftyone-device-detection-sys.
  *
- * The set of properties a Hash data set was initialised with lives in the
+ * The set of properties a Hash data set was initialized with lives in the
  * `available` member of the base data set, several layers of nested structures
  * deep. Reaching it from Rust would require mirroring every intermediate C
  * struct exactly, which is fragile across platforms and compiler versions. The

@@ -53,7 +53,7 @@ fn build_pipeline(
 /// Render the JavaScript once: process a flow data carrying a host header (so the
 /// callback URL and the update mechanism are emitted, the fuller template path)
 /// and return the rendered length, read behind `black_box` so the render cannot
-/// be optimised away.
+/// be optimized away.
 fn render_once(pipeline: &Arc<Pipeline>) -> usize {
     let mut data = pipeline.create_flow_data_with(
         Evidence::builder()
@@ -78,7 +78,7 @@ fn javascript_builder_render(c: &mut Criterion) {
     let mut group = c.benchmark_group("javascript_builder");
 
     // The plain template render: minification off, so the element emits the
-    // unminified Mustache output. This is the default behaviour of the crate.
+    // unminified Mustache output. This is the default behavior of the crate.
     let plain = build_pipeline(|b| b.set_minify(false).build());
     // Warm the lazily-compiled template so the first measured iteration is steady
     // state rather than the one-off compile.

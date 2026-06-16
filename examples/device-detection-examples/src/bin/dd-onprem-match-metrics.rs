@@ -193,13 +193,13 @@ fn compare_property_count_timing(options: &ExampleOptions) -> Result<()> {
 }
 
 /// Run `iterations` detections of `pairs` through `pipeline` and return the total
-/// elapsed time, touching a property each time so the work is not optimised away.
+/// elapsed time, touching a property each time so the work is not optimized away.
 fn time_detections(
     pipeline: &Arc<Pipeline>,
     pairs: &[(&str, &str)],
     iterations: usize,
 ) -> Result<Duration> {
-    // One warm-up detection so the first-call data-set initialisation is not
+    // One warm-up detection so the first-call data-set initialization is not
     // counted in the timed loop.
     let mut warm = pipeline.create_flow_data_with(
         Evidence::builder()
@@ -218,7 +218,7 @@ fn time_detections(
         );
         data.process().context("timed detection failed")?;
         if let Some(device) = data.get(DEVICE_DATA_KEY) {
-            // Read IsMobile to keep the optimiser from eliding the detection.
+            // Read IsMobile to keep the optimizer from eliding the detection.
             if device.is_mobile().as_option().copied().unwrap_or(false) {
                 sink = sink.wrapping_add(1);
             }

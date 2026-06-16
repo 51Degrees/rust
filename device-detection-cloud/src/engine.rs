@@ -49,7 +49,7 @@ use crate::meta::{cloud_json, refresh_product_metadata};
 ///
 /// This engine consumes no evidence of its own. Instead it reads the raw JSON a
 /// [`CloudRequestEngine`] stored under the `cloud` data key, slices out the
-/// `device` member, and deserialises it into the shared
+/// `device` member, and deserializes it into the shared
 /// [`DeviceDataBase`](fiftyone_device_detection_shared::DeviceDataBase). It must
 /// therefore sit *after* a `CloudRequestEngine` in the pipeline. The engine is
 /// constructed from an [`Arc<CloudRequestEngine>`], the same instance added to
@@ -73,7 +73,7 @@ use crate::meta::{cloud_json, refresh_product_metadata};
 /// engine's statically-known core metadata until [`DeviceDetectionCloudEngine::refresh_properties`]
 /// (or the first `process`) has pulled the device product's properties from the
 /// request engine. The metadata is not hard-cached at construction, matching the
-/// request engine's own lazy initialisation.
+/// request engine's own lazy initialization.
 ///
 /// # Example
 ///

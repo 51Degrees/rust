@@ -100,7 +100,7 @@ impl<T> WeightedValue<T> {
 /// - [`PropertyValue::JavaScript`] is the custom JavaScript type, a string
 ///   carrying a snippet intended to run on the client device. It is a distinct
 ///   variant (rather than a plain string) so the JSON and JavaScript builder
-///   elements can recognise it without separate metadata.
+///   elements can recognize it without separate metadata.
 /// - [`PropertyValue::KeyValueList`] is the "array of key-value-pair
 ///   collections" type, used where an element returns several sub-records (for
 ///   example TAC lookup or hardware-profile lookup).

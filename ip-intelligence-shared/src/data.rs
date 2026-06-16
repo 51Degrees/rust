@@ -478,7 +478,7 @@ impl IpIntelligenceDataBase {
     }
 }
 
-/// Normalise a property name to the lowercase form used as the store key, so
+/// Normalize a property name to the lowercase form used as the store key, so
 /// lookups are case-insensitive like the core property bag.
 fn key(name: &str) -> String {
     name.to_lowercase()

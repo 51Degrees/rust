@@ -23,7 +23,7 @@
 /*
  * Property enumeration shim for fiftyone-ip-intelligence-sys.
  *
- * The set of properties an IP Intelligence data set was initialised with lives
+ * The set of properties an IP Intelligence data set was initialized with lives
  * in the `available` member of the base data set, several layers of nested
  * structures deep (DataSetIpi -> DataSetIpiBase b -> DataSetBase b). Reaching it
  * from Rust would require mirroring every intermediate C struct exactly, which

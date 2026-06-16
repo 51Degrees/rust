@@ -47,7 +47,7 @@ use crate::ci_map::ci_get;
 use crate::error::NoValueError;
 use crate::value::PropertyValue;
 
-/// The behaviour every element-data type must provide.
+/// The behavior every element-data type must provide.
 ///
 /// The trait is bound on [`Any`] so [`crate::FlowData`] can downcast a stored
 /// `dyn ElementData` back to its concrete type given a [`crate::TypedKey`]. It

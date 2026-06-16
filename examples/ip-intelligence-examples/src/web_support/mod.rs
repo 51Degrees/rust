@@ -191,7 +191,7 @@ pub fn coordinates(ip: &dyn IpIntelligenceData) -> Option<(String, String)> {
 const MAP_SECTION_ID: &str = "map-section";
 const MAP_CANVAS_ID: &str = "map";
 
-/// Build the inline `<script>` that initialises the Leaflet location map for the
+/// Build the inline `<script>` that initializes the Leaflet location map for the
 /// supplied coordinates. When no coordinates resolved the map stays hidden and
 /// an empty string is returned, so the page renders without a map.
 pub fn map_init_script(coordinates: &Option<(String, String)>) -> String {
@@ -272,7 +272,7 @@ pub struct PageOptions<'a> {
     pub form_value: &'a str,
     /// The contact-us banner HTML for this deployment.
     pub message_html: &'a str,
-    /// The pre-rendered map-initialisation `<script>` (empty when no
+    /// The pre-rendered map-initialization `<script>` (empty when no
     /// coordinates resolved).
     pub map_script: &'a str,
 }

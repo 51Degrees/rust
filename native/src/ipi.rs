@@ -132,7 +132,7 @@ fn config_for(profile: PerformanceProfile) -> *mut sys::ConfigIpi {
 
 /// A loaded IP Intelligence data set.
 ///
-/// Owns a native [`sys::ResourceManager`] initialised from an `.ipi` data file.
+/// Owns a native [`sys::ResourceManager`] initialized from an `.ipi` data file.
 /// Shared across threads behind the [`Arc`] returned by [`Manager::open`]. The
 /// data set is freed once the last reference and every referencing [`Results`]
 /// have been dropped.
@@ -225,7 +225,7 @@ impl Manager {
 
     /// Create a per-thread results structure for running lookups.
     pub fn create_results(self: &Arc<Self>) -> Result<Results> {
-        // Safety: the manager is initialised.
+        // Safety: the manager is initialized.
         let results = unsafe { sys::fiftyoneDegreesResultsIpiCreate(self.as_ptr()) };
         let results = NonNull::new(results).ok_or_else(|| Error::Native {
             status: String::from("InsufficientMemory"),
@@ -240,7 +240,7 @@ impl Manager {
 
 impl Drop for Manager {
     fn drop(&mut self) {
-        // Safety: the manager was initialised by a successful `open` and every
+        // Safety: the manager was initialized by a successful `open` and every
         // referencing `Results` held an `Arc`, so they have all been dropped.
         unsafe {
             sys::fiftyoneDegreesResourceManagerFree(self.manager.as_ptr());
@@ -379,8 +379,8 @@ impl Results {
 
         // Resolve the property to its required-property index. An unknown
         // property has no weighted values, so report an empty list rather than
-        // an error, matching the string getter's absent-value behaviour.
-        // Safety: the manager is initialised and the name is null terminated.
+        // an error, matching the string getter's absent-value behavior.
+        // Safety: the manager is initialized and the name is null terminated.
         let index = unsafe {
             sys::fiftyoneDegreesShimIpiGetRequiredPropertyIndexFromName(
                 self.manager.as_ptr(),
@@ -519,9 +519,9 @@ impl Drop for Results {
 /// a fallback when none is available.
 fn exception_detail(exception: &mut sys::Exception) -> String {
     if exception.is_okay() {
-        return String::from("native initialisation reported a non-success status");
+        return String::from("native initialization reported a non-success status");
     }
-    exception.message_or("native initialisation failed with no message")
+    exception.message_or("native initialization failed with no message")
 }
 
 #[cfg(test)]

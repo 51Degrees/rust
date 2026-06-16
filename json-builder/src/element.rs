@@ -124,7 +124,7 @@ impl PipelineConfig {
     }
 }
 
-/// Serialises all element data in a flow data into a single JSON object.
+/// Serializes all element data in a flow data into a single JSON object.
 ///
 /// # Output shape
 ///
@@ -137,7 +137,7 @@ impl PipelineConfig {
 /// - `<name>` carries the value. A property that is present in the element data
 ///   but has no value (its [`fiftyone_pipeline_core::ElementData::get`] returns
 ///   `Err`) emits JSON `null`. A property the producing element never stored is
-///   simply absent from the output, because serialisation works from the stored
+///   simply absent from the output, because serialization works from the stored
 ///   value dictionary rather than the declared metadata.
 /// - `<name>nullreason` carries the explanation string when the property is
 ///   present but has no value.
@@ -157,7 +157,7 @@ impl PipelineConfig {
 ///
 /// # Determinism
 ///
-/// Element keys and property names are sorted before serialisation and the
+/// Element keys and property names are sorted before serialization and the
 /// `serde_json` map preserves insertion order, so the same flow data always
 /// produces byte-identical JSON. This stability is required for stable ETags
 /// downstream.
@@ -326,7 +326,7 @@ impl JsonBuilderElement {
         serde_json::to_string_pretty(&Value::Object(root)).unwrap_or_else(|_| "{}".to_owned())
     }
 
-    /// Serialise one element's data into a JSON object, adding the sibling keys.
+    /// Serialize one element's data into a JSON object, adding the sibling keys.
     fn element_values(
         &self,
         element_data: &dyn ElementData,
@@ -472,7 +472,7 @@ impl FlowElement for JsonBuilderElement {
 
 /// Convert a core [`PropertyValue`] to a `serde_json` value.
 ///
-/// A [`PropertyValue::JavaScript`] is serialised as a plain string (the snippet)
+/// A [`PropertyValue::JavaScript`] is serialized as a plain string (the snippet)
 /// because the client treats it as code, and a [`PropertyValue::KeyValueList`]
 /// becomes an array of objects so nested records survive the round trip.
 fn property_value_to_json(value: &PropertyValue) -> Value {

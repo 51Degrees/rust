@@ -103,7 +103,7 @@ impl FlowData {
     /// Each element is run in order. Whether errors propagate or are recorded
     /// is governed by the pipeline's `suppress_process_exceptions` flag (see
     /// [`crate::Pipeline::is_suppress_process_exceptions`] for the exact
-    /// behaviour). Processing more than once is allowed but unusual.
+    /// behavior). Processing more than once is allowed but unusual.
     pub fn process(&mut self) -> Result<()> {
         // Clone the Arc so we do not hold an immutable borrow of `self` (via
         // `self.pipeline`) while `process` needs `&mut self`.

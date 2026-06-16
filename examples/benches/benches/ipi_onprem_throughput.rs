@@ -96,7 +96,7 @@ fn load_ips(path: &Path, max: usize) -> Vec<String> {
     ips
 }
 
-/// Look every IP up once, reading the result so the optimiser cannot elide the
+/// Look every IP up once, reading the result so the optimizer cannot elide the
 /// work, and return how many lookups succeeded.
 ///
 /// A failed lookup (for example a malformed address) is not fatal, so only
@@ -108,7 +108,7 @@ fn look_up_all(pipeline: &Arc<Pipeline>, ips: &[String]) -> u64 {
             .create_flow_data_with(Evidence::builder().add(CLIENT_IP_KEY, ip.clone()).build());
         if data.process().is_ok() {
             if let Some(ipi) = data.get(IP_DATA_KEY) {
-                // Observe the result so the lookup is not optimised away.
+                // Observe the result so the lookup is not optimized away.
                 black_box(&ipi);
                 lookups += 1;
             }
@@ -150,7 +150,7 @@ fn ipi_onprem_throughput(c: &mut Criterion) {
     let pipeline = build_pipeline(&data_file);
 
     // Warm the data file's caches with one untimed pass so the first measured
-    // iteration reflects steady state rather than one-off initialisation.
+    // iteration reflects steady state rather than one-off initialization.
     let _ = look_up_all(&pipeline, &ips);
 
     let mut group = c.benchmark_group("ipi_onprem");
@@ -189,7 +189,7 @@ criterion_main!(benches);
  *   lookups. The other profiles (InMemory, LowMemory, Balanced, Default) trade
  *   memory for speed. Swap the profile in `build_pipeline` to compare them.
  * - A single requested property (`Asn`) keeps the lookup minimal. The result is
- *   read behind `black_box` so the optimiser cannot remove the work.
+ *   read behind `black_box` so the optimizer cannot remove the work.
  * - Auto-update and the file-system watcher are disabled so no background thread
  *   perturbs the timing.
  *

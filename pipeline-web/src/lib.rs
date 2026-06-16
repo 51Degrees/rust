@@ -81,7 +81,7 @@
 //!     WebIntegrationOptions, WebPipeline,
 //! };
 //!
-//! // A trivial element so the pipeline has something to serialise.
+//! // A trivial element so the pipeline has something to serialize.
 //! struct DeviceData(MapElementData);
 //! impl ElementData for DeviceData {
 //!     fn get(&self, n: &str) -> std::result::Result<

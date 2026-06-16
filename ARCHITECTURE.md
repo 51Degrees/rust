@@ -141,6 +141,6 @@ promise/fetch conditional expressions in the generated template, so it always
 falls back to the unminified output. Rather than ship a default that does no
 useful work, the element emits the correct, unminified template output, and the
 builder's `set_minify(true)` flag is honoured only when the feature is enabled
-(with the same fall-back-on-error behaviour, so a request never crashes).
+(with the same fall-back-on-error behavior, so a request never crashes).
 Integrating a robust minifier so this can be on by default is a tracked
 follow-up.

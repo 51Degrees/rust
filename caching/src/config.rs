@@ -86,7 +86,7 @@ impl CacheBuilder {
 
     /// Set the number of shards (the concurrency level). More shards reduce
     /// lock contention between threads at the cost of slightly looser global
-    /// LRU behaviour. Values below one are treated as one.
+    /// LRU behavior. Values below one are treated as one.
     pub fn concurrency(mut self, concurrency: usize) -> Self {
         self.concurrency = concurrency;
         self

@@ -34,7 +34,7 @@
 //! than back into the evidence collection. Downstream elements that need the
 //! values (notably the [`crate::ShareUsageElement`]) read them from the element
 //! data, or from evidence when the caller supplied them. The observable
-//! behaviour is a stable session id and a monotonically increasing sequence.
+//! behavior is a stable session id and a monotonically increasing sequence.
 
 use std::any::Any;
 

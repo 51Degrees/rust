@@ -31,7 +31,7 @@
 //! elevation"). Embedding a manifest that declares `requestedExecutionLevel
 //! level="asInvoker"` tells Windows not to apply the heuristic, so every example
 //! bin runs as an ordinary user process. This affects only how the executables
-//! are launched on Windows; it changes no behaviour and no example code.
+//! are launched on Windows; it changes no behavior and no example code.
 //!
 //! The manifest is embedded straight by the MSVC linker (`link.exe`), so the
 //! build needs no extra crates. On every other target the script does nothing.

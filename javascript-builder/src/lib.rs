@@ -42,7 +42,7 @@
 //! ## Configuration and per-request overrides
 //!
 //! [`JavaScriptBuilderElementBuilder`] sets the host, endpoint, protocol, object
-//! name, cookie behaviour and minification. Several of those can be overridden
+//! name, cookie behavior and minification. Several of those can be overridden
 //! per request through evidence (`query.fod-js-object-name`,
 //! `query.fod-js-enable-cookies`, `header.host` and `header.protocol`). See
 //! [`JavaScriptBuilderElement`] for the full derivation rules.

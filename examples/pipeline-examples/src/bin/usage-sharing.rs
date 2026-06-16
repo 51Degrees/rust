@@ -118,7 +118,7 @@ impl Default for UsageSharingOptions {
     fn default() -> Self {
         let defaults = ShareUsageConfig::default();
         UsageSharingOptions {
-            // Share everything in the example so the behaviour is obvious. A
+            // Share everything in the example so the behavior is obvious. A
             // production application usually keeps the small specification
             // default.
             share_percentage: 1.0,

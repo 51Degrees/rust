@@ -60,7 +60,7 @@
 //! message. A shared [`DeviceData`](fiftyone_device_detection_shared::DeviceData)
 //! accessor for the absent property therefore returns
 //! [`AspectPropertyValue::NoValue`](fiftyone_pipeline_engines::AspectPropertyValue::NoValue),
-//! which is the behaviour the
+//! which is the behavior the
 //! [null-values specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/features/properties.md#null-values)
 //! requires.
 
