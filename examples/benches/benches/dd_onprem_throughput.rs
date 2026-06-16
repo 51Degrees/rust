@@ -57,7 +57,7 @@ const RECORD_COUNT: usize = 500;
 /// with `.share_usage(true)`.
 fn build_pipeline(data_file: &Path) -> Arc<Pipeline> {
     DeviceDetectionPipelineBuilder::on_premise(data_file)
-        .performance_profile(PerformanceProfile::HighPerformance)
+        .performance_profile(PerformanceProfile::InMemory)
         .property("IsMobile")
         .build()
         .expect("the benchmark on-premise pipeline should build from the Lite .hash file")

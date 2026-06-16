@@ -112,9 +112,9 @@ impl PipelineConfig {
     /// Drop every recorded evidence name that is not itself a delayed-execution
     /// JavaScript property, and drop any property left with an empty list. The
     /// full delayed-execution set is known only after the whole pipeline has been
-    /// walked, so this runs as a second pass. It matches the .NET
-    /// JsonBuilderElement, which lists an evidence property only when the client
-    /// has to run it to gather the evidence.
+    /// walked, so this runs as a second pass. As the specification requires, an
+    /// evidence property is listed only when the client has to run it to gather
+    /// the evidence.
     fn retain_delayed_evidence(&mut self) {
         let delayed = &self.delayed_execution;
         self.delayed_evidence.retain(|_, evidence| {

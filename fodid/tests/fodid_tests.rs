@@ -20,8 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! Port of the .NET `FodIdTests` suite so the behaviour matches across
-//! languages.
+//! Behavioural tests for the 51Did reader, covering parsing, construction and
+//! the guard paths.
 
 use fodid::{Error, FodId, IdType};
 use owid::{Creator, Crypto, Owid};
@@ -52,8 +52,7 @@ fn canonical_payload() -> Vec<u8> {
     payload
 }
 
-/// Generates a key pair and exposes the PEM forms, mirroring the .NET
-/// TestInitialize.
+/// Generates a key pair and exposes the PEM forms, used to set up each test.
 struct Fixture {
     public_pem: String,
     private_pem: String,
@@ -68,8 +67,8 @@ impl Fixture {
         }
     }
 
-    /// Creates and signs a real OWID with the given payload, mirroring the
-    /// .NET `SignedOwid` helper.
+    /// Creates and signs a real OWID with the given payload, a signing helper
+    /// for the tests.
     fn signed_owid(&self, payload: Vec<u8>) -> Owid {
         let crypto = Crypto::new_sign_only(&self.private_pem).expect("import private key");
         let creator = Creator::new(TEST_DOMAIN, crypto).expect("create creator");
@@ -257,8 +256,7 @@ fn constructor_invalid_base64_errors() {
 
 #[test]
 fn constructor_from_owid_short_payload_errors() {
-    // Promoting an OWID whose payload is too short is rejected. This is the
-    // Rust-idiomatic counterpart of the .NET `FodId(Owid)` guard: a null OWID
+    // Promoting an OWID whose payload is too short is rejected. A null OWID
     // cannot exist in Rust, so the meaningful reject path for the from-OWID
     // constructor is a payload shorter than the 37-byte minimum.
     let fixture = Fixture::new();
@@ -273,9 +271,8 @@ fn constructor_from_owid_short_payload_errors() {
 
 #[test]
 fn constructor_from_bytes_short_payload_errors() {
-    // The raw-bytes constructor rejects a too-short payload as well, the
-    // counterpart of the .NET `FodId(byte[])` guard (a null buffer is not
-    // representable in Rust).
+    // The raw-bytes constructor rejects a too-short payload as well (a null
+    // buffer is not representable in Rust).
     let fixture = Fixture::new();
     let bytes = fixture
         .signed_owid(vec![0u8; fodid::PAYLOAD_LENGTH - 1])

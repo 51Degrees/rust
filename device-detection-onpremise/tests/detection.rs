@@ -252,27 +252,13 @@ fn metadata_is_published() {
     );
 }
 
-/// Resolve the paid Enterprise/TAC Hash data file (~96 MB) from one of the
-/// known sibling checkout locations. This is the on-premise
+/// Resolve the paid Enterprise/TAC Hash data file. This is the on-premise
 /// paid-tier file, carrying hardware properties the free Lite file leaves
-/// unresolved.
+/// unresolved. It is large (~96 MB) and so is supplied out of band via the
+/// `51DEGREES_TAC_PATH` environment variable rather than checked in.
 fn tac_data_file() -> Option<PathBuf> {
-    for relative in [
-        "device-detection-dotnet/device-detection-data/TAC-HashV41.hash",
-        "cloud-dotnet/data/TAC-HashV41.hash",
-    ] {
-        let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        loop {
-            let candidate = dir.join(relative);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-            if !dir.pop() {
-                break;
-            }
-        }
-    }
-    None
+    let path = PathBuf::from(std::env::var_os("51DEGREES_TAC_PATH")?);
+    path.is_file().then_some(path)
 }
 
 #[test]

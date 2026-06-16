@@ -406,7 +406,7 @@ fn emits_delayexecution_and_evidenceproperties() {
     // property `screenpixelswidthjavascript`, which is delayed-execution. The
     // builder flags the JS property with a delayexecution sibling and lists it as
     // the value property's evidenceproperties. Only delayed-execution evidence is
-    // listed, matching the .NET JsonBuilderElement.
+    // listed, as required by the specification.
     let device = TestElement::new("device")
         .with_property(
             PropertyMetaData::new("screenpixelswidth", "device", PropertyValueType::Integer)

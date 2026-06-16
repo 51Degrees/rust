@@ -135,11 +135,16 @@ pub fn validate_response(
             warnings,
         })
     } else {
-        Err(cloud_error(
-            response.status,
-            retry_after,
-            messages.join("; "),
-        ))
+        let mut message = messages.join("; ");
+        // An invalid or missing resource key is the most common cause of a cloud
+        // error, so point the reader at the configurator to create a valid one.
+        if message.to_lowercase().contains("resource key") {
+            message.push_str(
+                ". Create a resource key at \
+                 https://configure.51degrees.com?utm_source=code&utm_medium=comment&utm_campaign=rust&utm_content=cloud-request-engine-src-response.rs&utm_term=resource-key-invalid",
+            );
+        }
+        Err(cloud_error(response.status, retry_after, message))
     }
 }
 

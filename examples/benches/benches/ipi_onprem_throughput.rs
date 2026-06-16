@@ -52,7 +52,7 @@ const CLIENT_IP_KEY: &str = "query.client-ip";
 /// so no background work perturbs the timing. No `ShareUsageElement` is added.
 fn build_pipeline(data_file: &Path) -> Arc<Pipeline> {
     IpIntelligencePipelineBuilder::on_premise(data_file)
-        .performance_profile(PerformanceProfile::HighPerformance)
+        .performance_profile(PerformanceProfile::InMemory)
         .properties(["Asn"])
         .auto_update(false)
         .file_system_watcher(false)

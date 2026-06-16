@@ -88,14 +88,14 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     // Build the benchmark pipeline. Requesting a single property keeps detection
     // as fast as possible, which is what a throughput benchmark wants to measure.
-    // No ShareUsageElement is added (usage sharing is forbidden for console
-    // examples). For the trade-offs between the performance profiles see the
-    // commented block below and the documentation referenced at the bottom.
-    let pipeline =
-        build_benchmark_pipeline(&options.data_file, PerformanceProfile::HighPerformance)?;
+    // No ShareUsageElement is added (usage sharing is off for console examples).
+    // The InMemory profile loads the whole data set into memory for the fastest
+    // detections. See the performance options documentation at the bottom for the
+    // trade-offs between the profiles.
+    let pipeline = build_benchmark_pipeline(&options.data_file, PerformanceProfile::InMemory)?;
     device_detection_examples::print_data_file_warnings(
         &options.data_file,
-        PerformanceProfile::HighPerformance,
+        PerformanceProfile::InMemory,
     )?;
 
     // A warm-up pass primes the data set and the caches so the first detections
@@ -118,20 +118,14 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     report(&result, options.thread_count);
 
-    // The alternative performance profiles, shown for reference. Swap the profile
-    // passed to `build_benchmark_pipeline` above to compare them. Each trades
-    // memory, load time and detection speed differently:
-    //
-    //   PerformanceProfile::HighPerformance - favours the fastest detections,
-    //       holding the data in memory, at the cost of the most memory.
-    //   PerformanceProfile::InMemory - loads the whole file into memory.
-    //   PerformanceProfile::Balanced - the balance of speed and memory.
-    //   PerformanceProfile::Default - the engine's default balance.
-    //   PerformanceProfile::LowMemory - streams data from disk on demand, using
-    //       the least memory at the cost of slower detections.
+    // This benchmark uses PerformanceProfile::InMemory. The other profiles
+    // (HighPerformance, Balanced, Default, LowMemory) trade memory, load time and
+    // detection speed differently. The performance options documentation explains
+    // each one:
+    // https://51degrees.com/documentation/_device_detection__features__performance_options.html?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-device-detection-examples-src-bin-dd-onprem-performance.rs&utm_term=performance-options
     //
     // Requesting fewer properties (ideally from one component) also speeds
-    // detection; this benchmark already requests only IsMobile. See the
+    // detection. This benchmark already requests only IsMobile. See the
     // match-metrics example for that effect in isolation.
 
     Ok(())

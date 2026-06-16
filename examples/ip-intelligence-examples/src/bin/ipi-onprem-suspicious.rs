@@ -202,7 +202,7 @@ fn assess_ip(pipeline: &Arc<Pipeline>, ip: &str, out: &mut dyn Write) -> anyhow:
     Ok(())
 }
 
-/// The three-branch heuristic from the .NET Suspicious example.
+/// The three-branch heuristic for deciding whether an IP looks suspicious.
 ///
 /// This is a basic illustration that should not be used in production without
 /// further testing and tuning. Many other properties can contribute to a real
@@ -245,8 +245,7 @@ fn top_string(ip_data: &IpIntelligenceDataBase, name: &str) -> Option<String> {
 ///
 /// The on-premise engine surfaces these counts as weighted strings, so the top
 /// candidate is parsed to an `i64`, tolerating a trailing fractional part.
-/// Returns `0` when the property had no value or did not parse, matching the
-/// .NET example's defaults.
+/// Returns `0` when the property had no value or did not parse.
 fn top_integer(ip_data: &IpIntelligenceDataBase, name: &str) -> i64 {
     match top_string(ip_data, name) {
         Some(value) => {
@@ -264,8 +263,7 @@ fn top_integer(ip_data: &IpIntelligenceDataBase, name: &str) -> i64 {
 /// Read the most probable candidate of a weighted property as a boolean.
 ///
 /// The native side renders booleans as `True`/`False` (or `1`/`0`), so both
-/// spellings are accepted. Returns `false` when the property had no value,
-/// matching the .NET example's defaults.
+/// spellings are accepted. Returns `false` when the property had no value.
 fn top_bool(ip_data: &IpIntelligenceDataBase, name: &str) -> bool {
     match top_string(ip_data, name) {
         Some(value) => {

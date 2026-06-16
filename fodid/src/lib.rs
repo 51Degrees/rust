@@ -23,8 +23,8 @@
 //! # 51Did (51Degrees Identifier) reader
 //!
 //! A strongly typed reader for the 51Did value returned by the 51Degrees
-//! cloud service. This is the Rust counterpart of the .NET `FiftyOne.Did`
-//! package and parses the same byte layout.
+//! cloud service. It parses the 51Did byte layout carried inside an OWID
+//! envelope.
 //!
 //! ## What a 51Did is
 //!

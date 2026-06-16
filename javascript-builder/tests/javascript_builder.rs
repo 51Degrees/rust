@@ -23,11 +23,9 @@
 //! Integration tests for the JavaScript builder element.
 //!
 //! These build small pipelines, process a flow data and assert on the generated
-//! JavaScript, plus a CI-style guard asserting the embedded Mustache template is
-//! byte-identical to its reference copy.
+//! JavaScript.
 
 use std::any::Any;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use fiftyone_javascript_builder::{JavaScriptBuilderElement, JAVASCRIPT_BUILDER_DATA_KEY};
@@ -160,37 +158,6 @@ fn run(
         .expect("javascript builder data present")
         .javascript()
         .to_owned()
-}
-
-// ---------------------------------------------------------------------------
-// CI-style byte-identity guard.
-// ---------------------------------------------------------------------------
-
-/// The path to the reference copy of the template, relative to this crate.
-fn dotnet_template_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../pipeline-dotnet/FiftyOne.Pipeline.Elements")
-        .join("FiftyOne.Pipeline.JavaScriptBuilderElement/Templates/JavaScriptResource.mustache")
-}
-
-#[test]
-fn embedded_template_is_byte_identical_to_dotnet() {
-    // The embedded copy bundled into the crate.
-    let embedded = include_str!("../assets/JavaScriptResource.mustache");
-
-    let path = dotnet_template_path();
-    let dotnet = std::fs::read_to_string(&path).unwrap_or_else(|err| {
-        panic!(
-            "could not read the .NET template at {}: {err}",
-            path.display()
-        )
-    });
-
-    assert_eq!(
-        embedded.as_bytes(),
-        dotnet.as_bytes(),
-        "the embedded JavaScriptResource.mustache must be byte-identical to the .NET copy"
-    );
 }
 
 // ---------------------------------------------------------------------------

@@ -111,16 +111,14 @@ impl BenchmarkResult {
 ///
 /// Usage sharing is not enabled, as this is a console example.
 pub fn run(options: &ExampleOptions, out: &mut dyn Write) -> anyhow::Result<()> {
-    // HighPerformance favours lookup speed at the cost of memory, which is what
-    // a throughput benchmark wants. The other profiles trade differently:
-    //   - PerformanceProfile::InMemory       loads the whole file into memory.
-    //   - PerformanceProfile::LowMemory      keeps the file on disk (least RAM).
-    //   - PerformanceProfile::Balanced       a middle ground.
-    //   - PerformanceProfile::Default        the engine's recommended default.
-    // Swap the profile below to compare them (the compare example does this
-    // side by side).
+    // InMemory loads the whole data set into memory for the fastest lookups,
+    // which is what a throughput benchmark wants. The other profiles
+    // (HighPerformance, LowMemory, Balanced, Default) trade memory, load time and
+    // lookup speed differently. The performance options documentation explains
+    // each one (the compare example shows them side by side):
+    // https://51degrees.com/documentation/_device_detection__features__performance_options.html?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-ip-intelligence-examples-src-bin-ipi-onprem-performance.rs&utm_term=performance-options
     let pipeline: Arc<Pipeline> = IpIntelligencePipelineBuilder::on_premise(&options.data_file)
-        .performance_profile(PerformanceProfile::HighPerformance)
+        .performance_profile(PerformanceProfile::InMemory)
         .properties(["Asn"])
         .auto_update(false)
         .file_system_watcher(false)

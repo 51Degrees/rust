@@ -1,12 +1,21 @@
 # 51Degrees Rust
 
-Rust implementations of the 51Degrees libraries, organised as a Cargo workspace.
-Built to the 51Degrees specification, it lets a customer run cloud or on-premise
-Device Detection and IP Intelligence, in console or axum web applications, with
-full example coverage, docs and tests.
+![51Degrees](https://raw.githubusercontent.com/51Degrees/common-ci/main/images/logo/360x67.png "Data rewards the curious")
+**Pipeline API**
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the layering, the native co-link
-symbol-namespacing, the IP Intelligence three-tier data strategy and the
+[Developer Documentation](https://51degrees.com/documentation/index.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=readme.md&utm_term=documentation)
+
+## Introduction
+
+Rust implementations of the 51Degrees libraries, organised as a Cargo workspace.
+It lets a customer run cloud or on-premise Device Detection and IP Intelligence,
+in console or axum web applications, with full example coverage, docs and tests.
+
+The
+[specification](https://github.com/51Degrees/specifications)
+is the source of truth for the concepts and design of this API and is recommended
+reading. See [ARCHITECTURE.md](ARCHITECTURE.md) for the layering, the native
+co-link symbol-namespacing, the IP Intelligence three-tier data strategy and the
 minification opt-in.
 
 ## Crates
@@ -27,7 +36,7 @@ pure-Rust core up to the runnable examples.
 |-------|----------------|
 | [`fiftyone-pipeline-engines`](pipeline-engines) | AspectEngine/AspectData, AspectPropertyValue, missing-property and data-update services, and cache wiring. |
 | [`fiftyone-pipeline-engines-fiftyone`](pipeline-engines-fiftyone) | ShareUsage, SetHeaders and Sequence elements plus the FiftyOne metadata model. |
-| [`fiftyone-cloud-request-engine`](cloud-request-engine) | Cloud HTTP engine with lazy evidence-keys and accessible-properties discovery, and recovery mode. |
+| [`fiftyone-cloud-request-engine`](cloud-request-engine) | Cloud HTTP engine that resolves the accepted evidence keys and accessible properties at build time (with a persistable state for short-lived hosts) and recovery mode. |
 | [`fiftyone-json-builder`](json-builder) | JSON serialisation element. |
 | [`fiftyone-javascript-builder`](javascript-builder) | JavaScript snippet builder element with the bundled Mustache asset. Minification is an opt-in feature (see below). |
 
@@ -85,8 +94,12 @@ path, so cloud-only users and most of CI build without a C compiler.
   `["cloud", "on-premise"]`. A cloud-only application can disable the
   `on-premise` feature to drop the native FFI crates and build without a C
   toolchain.
-- Web examples enable usage sharing (`.share_usage(true)`), which is required
-  for a web integration. Console examples must not add the ShareUsageElement.
+- Usage sharing is optional. It sends a sample of evidence back to 51Degrees to
+  improve the data, and a deployment can turn it on or leave it off. The web
+  examples switch it on with `.share_usage(true)` to demonstrate the feature, and
+  the console examples leave it off. See the
+  [usage sharing](https://51degrees.com/documentation/_pipeline_api__features__usage_sharing.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=readme.md&utm_term=usage-sharing)
+  documentation for what is shared and how to configure it.
 - JavaScript minification in `fiftyone-javascript-builder` is opt-in behind the
   `minify` feature and off by default. See ARCHITECTURE.md for why.
 
@@ -95,6 +108,11 @@ path, so cloud-only users and most of CI build without a C compiler.
 The two facades share one shape: a builder picks the deployment, you create a
 flow data, add evidence, process, then read the strongly-typed result back
 through a shared key.
+
+A cloud build needs a resource key. Create one for free with the
+[configurator](https://configure.51degrees.com?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=readme.md&utm_term=resource-key), and see the
+[resource keys](https://51degrees.com/documentation/_services__cloud__resource_keys.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=readme.md&utm_term=resource-keys)
+documentation for what a key grants.
 
 ### Cloud Device Detection
 
@@ -188,7 +206,8 @@ use fiftyone_pipeline_web_axum::{register, FiftyOneResult, FiftyOneState};
 use std::sync::Arc;
 
 # async fn run() -> anyhow::Result<()> {
-// Web integrations enable usage sharing.
+// Usage sharing is optional. This example switches it on to help improve
+// 51Degrees data; a deployment can leave it off.
 let pipeline = DeviceDetectionPipelineBuilder::cloud("YOUR_RESOURCE_KEY")
     .share_usage(true)
     .build()?;

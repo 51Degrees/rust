@@ -60,9 +60,9 @@ struct Sample {
     client_ip: &'static str,
 }
 
-/// The five device-and-IP pairings this example processes, matching the .NET
-/// Mixed example: a UK desktop, a Chinese iPhone, a Chilean desktop, an iPad on
-/// an IPv6 address and a US Android device.
+/// The five device-and-IP pairings this example processes: a UK desktop, a
+/// Chinese iPhone, a Chilean desktop, an iPad on an IPv6 address and a US
+/// Android device.
 const SAMPLES: &[Sample] = &[
     Sample {
         label: "Desktop from the UK",

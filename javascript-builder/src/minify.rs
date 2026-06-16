@@ -26,8 +26,8 @@
 //! minified and printed by the pure-Rust oxc parser, minifier and code
 //! generator. A failure at any stage (a parse error, or a panic from an edge
 //! case in the minifier) falls back to the original, unminified content and
-//! flags it through [`MinifyOutcome::had_error`], matching the .NET builder's
-//! revert-on-error behaviour, so valid JavaScript is always served.
+//! flags it through [`MinifyOutcome::had_error`], reverting to the unminified
+//! content on any error so valid JavaScript is always served.
 //!
 //! The oxc call is wrapped in [`std::panic::catch_unwind`] as defence in depth.
 //! The previously used `minify-js` crate could perform a memory-unsafe

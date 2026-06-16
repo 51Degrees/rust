@@ -53,7 +53,7 @@
   ],
   "configurations": [
     {
-      "type": "lldb",
+      "type": "node",
       "request": "launch",
       "name": "Example: (pick)",
       "cargo": {
