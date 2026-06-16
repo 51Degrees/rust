@@ -1,0 +1,88 @@
+/* *********************************************************************
+ * This Original Work is copyright of 51 Degrees Mobile Experts Limited.
+ * Copyright 2026 51 Degrees Mobile Experts Limited, Davidson House,
+ * Forbury Square, Reading, Berkshire, United Kingdom RG1 3EU.
+ *
+ * This Original Work is licensed under the European Union Public Licence
+ * (EUPL) v.1.2 and is subject to its terms as set out below.
+ *
+ * If a copy of the EUPL was not distributed with this file, You can obtain
+ * one at https://opensource.org/licenses/EUPL-1.2.
+ *
+ * The 'Compatible Licences' set out in the Appendix to the EUPL (as may be
+ * amended by the European Commission) shall be deemed incompatible for
+ * the purposes of the Work and the provisions of the compatibility
+ * clause in Article 5 of the EUPL shall not apply.
+ *
+ * If using the Work as, or as part of, a network application, by
+ * including the attribution notice(s) required under Article 5 of the EUPL
+ * in the end user terms of the application under an appropriate heading,
+ * such notice(s) shall fulfill the requirements of that article.
+ * ********************************************************************* */
+
+
+#ifndef FIFTYONE_DEGREES_SYNONYM_DEVICE_DETECTION_INCLUDED
+#define FIFTYONE_DEGREES_SYNONYM_DEVICE_DETECTION_INCLUDED
+
+/**
+ * @defgroup FiftyOneDegreesDeviceDetection Device Detection
+ *
+ * Device detection specific methods, types and macros.
+ */
+
+/**
+ * @ingroup FiftyOneDegreesDeviceDetection
+ * @defgroup FiftyOneDegreesDeviceDetectionSynonyms Device Detection Synonyms
+ *
+ * Quick shortenings of device detection specific methods and types.
+ *
+ * @copydetails FiftyOneDegreesSynonyms
+ *
+ * @{
+ */
+
+#include "common-cxx/fiftyone.h"
+#include "dataset-dd.h"
+#include "config-dd.h"
+#include "results-dd.h"
+#include "transform.h"
+#include "gethighentropyvalues.h"
+
+MAP_TYPE(ConfigDeviceDetection)
+MAP_TYPE(ResultsDeviceDetection)
+MAP_TYPE(DataSetDeviceDetection)
+MAP_TYPE(ResultUserAgent)
+MAP_TYPE(ConfigDeviceDetection)
+MAP_TYPE(TransformIterateResult)
+
+#define OverrideValuesCreate fiftyoneDegreesOverrideValuesCreate /**< Synonym for #fiftyoneDegreesOverrideValuesCreate function. */
+#define OverrideValuesFree fiftyoneDegreesOverrideValuesFree /**< Synonym for #fiftyoneDegreesOverrideValuesFree function. */
+#define ResultsInit fiftyoneDegreesResultsInit /**< Synonym for #fiftyoneDegreesResultsInit function. */
+#define ResultsUserAgentFree fiftyoneDegreesResultsUserAgentFree /**< Synonym for #fiftyoneDegreesResultsUserAgentFree function. */
+#define ResultsUserAgentInit fiftyoneDegreesResultsUserAgentInit /**< Synonym for #fiftyoneDegreesResultsUserAgentInit function. */
+#define ResultsUserAgentReset fiftyoneDegreesResultsUserAgentReset /**< Synonym for #fiftyoneDegreesResultsUserAgentReset function. */
+#define ResultsDeviceDetectionInit fiftyoneDegreesResultsDeviceDetectionInit /**< Synonym for #fiftyoneDegreesResultsDeviceDetectionInit function. */
+#define ResultsDeviceDetectionFree fiftyoneDegreesResultsDeviceDetectionFree /**< Synonym for #fiftyoneDegreesResultsDeviceDetectionFree function. */
+#define DataSetDeviceDetectionReset fiftyoneDegreesDataSetDeviceDetectionReset /**< Synonym for #fiftyoneDegreesDataSetDeviceDetectionReset function. */
+#define DataSetDeviceDetectionFree fiftyoneDegreesDataSetDeviceDetectionFree /**< Synonym for #fiftyoneDegreesDataSetDeviceDetectionFree function. */
+#define DataSetDeviceDetectionRelease fiftyoneDegreesDataSetDeviceDetectionRelease /**< Synonym for #fiftyoneDegreesDataSetDeviceDetectionRelease function. */
+#define DataSetDeviceDetectionGet fiftyoneDegreesDataSetDeviceDetectionGet /**< Synonym for #fiftyoneDegreesDataSetDeviceDetectionGet function. */
+#define DataSetDeviceDetectionInitPropertiesAndHeaders fiftyoneDegreesDataSetDeviceDetectionInitPropertiesAndHeaders /**< Synonym for #fiftyoneDegreesDataSetDeviceDetectionInitPropertiesAndHeaders function. */
+
+#define TransformGhevFromJson fiftyoneDegreesTransformGhevFromJson /**< Synonym for fiftyoneDegreesTransformGhevFromJson */
+#define TransformGhevFromBase64 fiftyoneDegreesTransformGhevFromBase64 /**< Synonym for fiftyoneDegreesTransformGhevFromBase64 */
+#define TransformSua fiftyoneDegreesTransformSua /**< Synonym for fiftyoneDegreesTransformSua */
+#define TransformIterateSua fiftyoneDegreesTransformIterateSua /**< Synonym for fiftyoneDegreesTransformIterateSua */
+#define TransformIterateGhevFromBase64 fiftyoneDegreesTransformIterateGhevFromBase64 /**< Synonym for fiftyoneDegreesTransformIterateGhevFromBase64 */
+#define TransformIterateGhevFromJson fiftyoneDegreesTransformIterateGhevFromJson /**< Synonym for fiftyoneDegreesTransformIterateGhevFromJson */
+#define TransformCallback fiftyoneDegreesTransformCallback /**< Synonym for fiftyoneDegreesTransformCallback */
+
+#define GhevDeviceDetectionInit fiftyoneDegreesGhevDeviceDetectionInit /**< Synonym for fiftyoneDegreesGhevDeviceDetectionInit */
+#define GhevDeviceDetectionAllPresent fiftyoneDegreesGhevDeviceDetectionAllPresent /**< Synonym for fiftyoneDegreesGhevDeviceDetectionAllPresent */
+#define GhevDeviceDetectionOverride fiftyoneDegreesGhevDeviceDetectionOverride /**< Synonym for fiftyoneDegreesGhevDeviceDetectionOverride */
+
+/**
+ * @}
+ */
+
+#endif

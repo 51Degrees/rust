@@ -1,0 +1,27 @@
+[package]
+name = "fiftyone-ip-intelligence-cloud"
+version = "4.5.1"
+description = "Cloud IP-intelligence engine that maps the cloud JSON response to IpIntelligenceData."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
+# default-features = false drops the data-update service (reqwest/notify), which
+# the cloud path never uses, so this crate builds for wasm32-wasip1.
+fiftyone-pipeline-engines = { version = "4.5.1", path = "../pipeline-engines", default-features = false }
+fiftyone-ip-intelligence-shared = { version = "4.5.1", path = "../ip-intelligence-shared" }
+fiftyone-cloud-request-engine = { version = "4.5.1", path = "../cloud-request-engine", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+once_cell.workspace = true
+
+[features]
+# Forward the cloud request engine's built-in reqwest client. Off by default so
+# this crate builds without reqwest (and so for wasm32-wasip1). A native consumer
+# enables it; a wasm consumer leaves it off and supplies its own CloudHttpClient.
+reqwest-client = ["fiftyone-cloud-request-engine/reqwest-client"]

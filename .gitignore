@@ -1,0 +1,6 @@
+/target
+# Performance results written by the nightly performance workflow.
+/test-results
+*.log
+.DS_Store
+Thumbs.db

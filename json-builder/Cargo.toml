@@ -1,0 +1,27 @@
+[package]
+name = "fiftyone-json-builder"
+version = "4.5.1"
+description = "JSON serialization element for the 51Degrees pipeline."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+# Re-export the engines data-update service (reqwest + notify) for native and
+# on-premise consumers that refresh data files. Off by default so the crate
+# carries no reqwest/notify and compiles for wasm32-wasip1.
+data-update = ["fiftyone-pipeline-engines/data-update"]
+
+[dependencies]
+fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
+# default-features = false drops the engines data-update service (reqwest/notify),
+# which this crate never uses, so it compiles for wasm32-wasip1. Enable the
+# `data-update` feature to re-export it.
+fiftyone-pipeline-engines = { version = "4.5.1", path = "../pipeline-engines", default-features = false }
+# serde_json with preserve_order keeps the serialized key order deterministic so
+# the JSON (and any ETag computed from it downstream) is stable across runs. The
+# indexmap-backed Map this enables preserves insertion order rather than sorting.
+serde_json = { version = "1", features = ["preserve_order"] }
