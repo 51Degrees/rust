@@ -1,0 +1,19 @@
+[package]
+name = "fiftyone-pipeline-core"
+version = "0.1.0"
+description = "FlowData, FlowElement/Pipeline traits, Evidence, ElementData, TypedKey, errors and constants for the 51Degrees pipeline."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# Error model. The `thiserror` derive gives us idiomatic std::error::Error
+# implementations with source chaining, matching the C# exception hierarchy.
+thiserror.workspace = true
+# Case-insensitive, fast hashing for the evidence and element-data maps. The
+# pipeline is used in high-traffic web servers, so a faster hasher than the
+# default SipHash is worthwhile.
+ahash.workspace = true

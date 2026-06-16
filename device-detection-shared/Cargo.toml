@@ -1,0 +1,20 @@
+[package]
+name = "fiftyone-device-detection-shared"
+version = "0.1.0"
+description = "DeviceData trait with typed accessors, the device-detection property model and the UACH high-entropy decoder element."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+fiftyone-pipeline-core = { path = "../pipeline-core" }
+# default-features = false drops the data-update service (reqwest/notify) from
+# the shared data model, which never uses it, so the cloud crates that build on
+# this one can reach wasm32-wasip1. On-premise builds re-enable it through the
+# on-premise engine's own dependency.
+fiftyone-pipeline-engines = { path = "../pipeline-engines", default-features = false }
+base64.workspace = true
+serde_json.workspace = true

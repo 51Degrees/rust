@@ -1,0 +1,38 @@
+[package]
+name = "fiftyone-ip-intelligence"
+version = "0.1.0"
+description = "IP-intelligence facade re-exporting the engines plus a builder that selects the cloud or on-premise deployment."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = ["cloud", "on-premise"]
+# Pull in the cloud IP-intelligence engine and the cloud request engine, so the
+# facade can assemble a cloud pipeline from a resource key.
+cloud = ["dep:fiftyone-ip-intelligence-cloud", "dep:fiftyone-cloud-request-engine"]
+# Opt into the built-in reqwest HTTP client for the cloud path. Implies `cloud`
+# and forwards the feature to the cloud request engine. Off by default so a
+# cloud build compiles without reqwest (and so for wasm32-wasip1); a wasm
+# consumer leaves it off and supplies its own CloudHttpClient.
+reqwest-client = ["cloud", "fiftyone-ip-intelligence-cloud/reqwest-client"]
+# Pull in the on-premise IP-intelligence engine (and the native wrapper its
+# performance profile type comes from), so the facade can assemble an on-premise
+# pipeline from a local `.ipi` data file.
+on-premise = ["dep:fiftyone-ip-intelligence-onpremise", "dep:fiftyone-native"]
+
+[dependencies]
+fiftyone-pipeline-core = { path = "../pipeline-core" }
+fiftyone-pipeline-engines = { path = "../pipeline-engines" }
+fiftyone-ip-intelligence-shared = { path = "../ip-intelligence-shared" }
+fiftyone-ip-intelligence-onpremise = { path = "../ip-intelligence-onpremise", optional = true }
+fiftyone-ip-intelligence-cloud = { path = "../ip-intelligence-cloud", optional = true }
+fiftyone-cloud-request-engine = { path = "../cloud-request-engine", optional = true, default-features = false }
+# The on-premise builder names PerformanceProfile from the native wrapper in its
+# public surface. Link only IP Intelligence's copy of common-cxx (the `ipi`
+# feature), matching the on-premise engine crate, so the two ABI incompatible
+# common-cxx builds never collide.
+fiftyone-native = { path = "../native", default-features = false, features = ["ipi"], optional = true }

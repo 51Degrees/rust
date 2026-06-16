@@ -1,0 +1,9 @@
+{
+  "exclude": [
+    "^fodid/"
+  ],
+  "allowUntagged": [
+    "^Cargo\\.toml$",
+    "^pipeline-engines-fiftyone/src/metadata\\.rs$"
+  ]
+}

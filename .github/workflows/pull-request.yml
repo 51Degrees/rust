@@ -1,0 +1,319 @@
+name: Pull Request
+
+# Native build, test, lint, format and doc check for the Rust workspace, run on
+# Windows, Linux and macOS (Intel and Apple Silicon). This is the primary gate
+# for every pull request and every push to main. It replaces the earlier ci.yml.
+#
+# The workspace links the 51Degrees C/C++ sources through three -sys crates
+# (common-sys, device-detection-sys, ip-intelligence-sys). Their build.rs scripts
+# compile the sibling *-cxx checkouts directly with the cc crate, resolving the
+# directory from an override environment variable when set, otherwise from a
+# sibling ../../<repo>-cxx directory next to the workspace.
+#
+# The *-cxx repositories are NOT submodules of this repository, so CI checks them
+# out separately and points each -sys build at its checkout:
+#   FIFTYONE_COMMON_CXX_DIR           -> common-cxx           (needs fiftyone.h)
+#   FIFTYONE_DEVICE_DETECTION_CXX_DIR -> device-detection-cxx (needs src/hash/hash.h)
+#   FIFTYONE_IP_INTELLIGENCE_CXX_DIR  -> ip-intelligence-cxx  (needs src/ipi.h)
+# The device-detection-cxx and ip-intelligence-cxx checkouts are recursive so
+# their own src/common-cxx, src/ip-graph-cxx and the *-data submodules come down
+# with them. The data submodules supply the on-premise data files and the
+# offline/performance evidence the examples read.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same ref cancels an in-flight run so the queue stays short.
+concurrency:
+  group: pull-request-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Fail the build on any compiler or rustdoc warning.
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Run every platform to completion even if one fails, so a platform-specific
+      # break is visible in the same run. OS versions follow our LTS policy: the
+      # lowest LTS that supports our requirements, plus every greater LTS. Ubuntu
+      # has a clear LTS cadence, so both current LTS releases are covered:
+      # ubuntu-22.04 (the lowest LTS the toolchain supports; 20.04 runners are
+      # retired) and ubuntu-24.04. Windows Server runners are all LTSC, so
+      # windows-latest (Server 2022) is used. macOS has no LTS, so both
+      # architectures are covered: macos-13 (Intel, x86_64) and macos-latest
+      # (Apple Silicon, arm64).
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, ubuntu-24.04, macos-13, macos-latest]
+
+    steps:
+      # 1. The Rust workspace itself.
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # 2. The sibling C/C++ source repositories the -sys crates compile. Each is
+      #    placed beside the workspace and pointed at through an override env var
+      #    (set in the Configure step), so the build does not rely on the local
+      #    ../../<repo>-cxx sibling layout used on developer machines.
+      - name: Checkout common-cxx
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/common-cxx
+          path: cxx/common-cxx
+          submodules: recursive
+
+      - name: Checkout device-detection-cxx
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/device-detection-cxx
+          path: cxx/device-detection-cxx
+          # Recursive brings down src/common-cxx and the device-detection-data
+          # submodule (the Lite .hash file plus the evidence records used by the
+          # offline and performance examples).
+          submodules: recursive
+
+      - name: Checkout ip-intelligence-cxx
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/ip-intelligence-cxx
+          path: cxx/ip-intelligence-cxx
+          # Recursive brings down src/common-cxx, src/ip-graph-cxx and the
+          # ip-intelligence-data submodule (the .ipi data files and evidence.yml).
+          submodules: recursive
+
+      # 2a. The on-premise data files (.hash, .ipi) and evidence records are
+      #     stored in Git LFS inside the *-data submodules of the cxx checkouts.
+      #     actions/checkout brings the submodule pointers down but not their LFS
+      #     content, so fetch it explicitly, recursing into the submodules. Without
+      #     the real files the native loader reads a pointer and reports
+      #     CorruptData (the -sys smoke tests then skip a real detection rather
+      #     than fail, but the on-premise tests need the real data to run).
+      - name: Fetch LFS data for the cxx checkouts
+        shell: bash
+        run: |
+          for d in cxx/common-cxx cxx/device-detection-cxx cxx/ip-intelligence-cxx; do
+            git -C "$d" lfs install --local
+            git -C "$d" lfs pull
+            git -C "$d" submodule foreach --recursive 'git lfs install --local && git lfs pull'
+          done
+
+      # 3. Point each -sys build script at its checkout. GITHUB_WORKSPACE is the
+      #    absolute path the actions/checkout paths above are relative to, so the
+      #    build never depends on the working directory. Setting these in
+      #    GITHUB_ENV makes them available to every later step in this job.
+      - name: Configure native source directories
+        shell: bash
+        run: |
+          echo "FIFTYONE_COMMON_CXX_DIR=${GITHUB_WORKSPACE}/cxx/common-cxx" >> "$GITHUB_ENV"
+          echo "FIFTYONE_DEVICE_DETECTION_CXX_DIR=${GITHUB_WORKSPACE}/cxx/device-detection-cxx" >> "$GITHUB_ENV"
+          echo "FIFTYONE_IP_INTELLIGENCE_CXX_DIR=${GITHUB_WORKSPACE}/cxx/ip-intelligence-cxx" >> "$GITHUB_ENV"
+
+      # 4. The native build toolchain. ubuntu-latest and windows-latest both ship
+      #    a C/C++ compiler and CMake preinstalled, but install CMake explicitly so
+      #    the workflow does not silently depend on the runner image keeping it.
+      #    The cc crate finds the MSVC toolchain through vswhere on Windows, so no
+      #    extra compiler setup is needed there.
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+
+      # 5. The Rust toolchain with the components the lint and format steps need.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # 6. Cache the registry, git deps and target dir keyed on the lockfile and OS
+      #    so unchanged native objects and crate builds are reused between runs.
+      #    The key is the specific matrix OS, not just runner.os. rust-cache
+      #    otherwise keys Linux runners as "Linux" alone, so ubuntu-22.04 and
+      #    ubuntu-24.04 would share a cache. They have different glibc versions
+      #    (2.35 vs 2.39), and the cached native C objects are not interchangeable:
+      #    objects compiled on 24.04 reference glibc 2.38+ symbols such as
+      #    __isoc23_sscanf that do not exist on 22.04, so a shared cache breaks the
+      #    link. A per-OS key keeps each version's compiled objects separate.
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      # 7. The verification gate. fmt is checked first because it is the cheapest
+      #    and most common failure. clippy and doc inherit RUSTFLAGS/RUSTDOCFLAGS
+      #    so any warning fails the build.
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps
+
+      # 8. Live cloud tests. These are #[ignore]d so the steps above stay green
+      #    offline; here they run with a real resource key when one is available.
+      #    The key is sourced from the organization secrets through the common-ci
+      #    central script when present, with a direct fallback to the well-known
+      #    secret names so the tests still run if the script is unavailable. The
+      #    examples-shared resolver reads 51DEGREES_RESOURCE_KEY first, then the
+      #    paid tiered key then the free tiered key.
+      - name: Checkout common-ci
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/common-ci
+          path: common-ci
+
+      - name: Cloud tests (with resource key when available)
+        shell: pwsh
+        env:
+          SECRETS: ${{ toJSON(secrets) }}
+        run: |
+          # Map every organization secret into the process environment so the
+          # central script (when present) and the direct fallback both see them.
+          $all = ConvertFrom-Json -AsHashtable $env:SECRETS
+          $script = './common-ci/steps/set-resource-keys.ps1'
+          if (Test-Path $script) {
+            Write-Host 'Exporting resource keys via common-ci set-resource-keys.ps1'
+            & $script -Keys $all
+          } else {
+            Write-Host 'common-ci set-resource-keys.ps1 not found; using direct secret names'
+            foreach ($name in '_51DEGREES_RESOURCE_KEY_PAID','_51DEGREES_RESOURCE_KEY_FREE') {
+              if ($all.ContainsKey($name) -and $all[$name]) {
+                [System.Environment]::SetEnvironmentVariable($name, $all[$name])
+              }
+            }
+          }
+          # Resolve a single key in the examples-shared resolver order. The
+          # leading-digit name must use the ${env:NAME} brace form to read.
+          $key = ${env:51DEGREES_RESOURCE_KEY}
+          if (-not $key) { $key = ${env:_51DEGREES_RESOURCE_KEY_PAID} }
+          if (-not $key) { $key = ${env:_51DEGREES_RESOURCE_KEY_FREE} }
+          if (-not $key) {
+            Write-Host 'No resource key secret available; skipping live cloud tests.'
+            exit 0
+          }
+          ${env:51DEGREES_RESOURCE_KEY} = $key
+          # Run the ignored cloud tests across the workspace. They make live calls
+          # to the 51Degrees cloud, so a failure here is a real regression.
+          cargo test --workspace -- --include-ignored --nocapture
+
+  # The cloud crates must keep compiling for WebAssembly (wasm32-wasip1) so a
+  # wasm consumer (for example a trusted-server deployment) can link them and
+  # supply its own synchronous CloudHttpClient. They build with reqwest and the
+  # data-update service disabled (default-features = false), so this job needs
+  # neither the C/C++ sources the -sys crates compile nor the data submodules,
+  # and it runs on Linux alone because a cross-compile to wasm is host-neutral.
+  #
+  # Beyond compiling, the wasm-safe test suites are executed on the target under
+  # wasmtime, so the pure-Rust logic is exercised on wasm rather than only built.
+  # Two groups are deliberately not run here, for structural reasons rather than
+  # convenience: the -sys / native / on-premise crates compile C and cannot
+  # target wasm at all; and the live-cloud tests need outbound network and a real
+  # resource key, which wasip1 sandboxes and which the reqwest-disabled build has
+  # no transport for. fiftyone-caching's concurrency tests are also skipped, but
+  # only those: they spawn threads and so live in a native-only test file, while
+  # the crate's single-threaded behavioural suite does run here on wasm.
+  wasm:
+    name: wasm (wasm32-wasip1)
+    # Cross-compile to wasm is host-neutral; pin to a current LTS for consistency.
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with wasm target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # A separate cache key from the native build job, which compiles a
+          # different target triple and feature set.
+          key: wasm32-wasip1
+
+      # Each crate is built standalone rather than in one cargo invocation so
+      # feature unification across the set cannot pull reqwest in through a
+      # sibling and hide a per-crate wasm break. --all-targets is deliberately
+      # omitted: it would compile the test targets, which pull the tiny_http
+      # dev-dependency that does not build for wasm. The library is what must
+      # compile for the target, and RUSTFLAGS=-D warnings still fails on warnings.
+      - name: cargo build (wasm32-wasip1, reqwest disabled)
+        run: |
+          for crate in \
+            fiftyone-cloud-request-engine \
+            fiftyone-device-detection-cloud \
+            fiftyone-ip-intelligence-cloud \
+            fiftyone-fodid-cloud; do
+            echo "::group::build ${crate}"
+            cargo build -p "${crate}" --no-default-features --target wasm32-wasip1
+            echo "::endgroup::"
+          done
+
+      # clippy over the same no-default-features wasm configuration lints the
+      # reqwest-disabled code paths, which the native clippy job never sees
+      # because the workspace build unifies reqwest-client on.
+      - name: cargo clippy (wasm32-wasip1, reqwest disabled)
+        run: |
+          for crate in \
+            fiftyone-cloud-request-engine \
+            fiftyone-device-detection-cloud \
+            fiftyone-ip-intelligence-cloud \
+            fiftyone-fodid-cloud; do
+            echo "::group::clippy ${crate}"
+            cargo clippy -p "${crate}" --no-default-features --target wasm32-wasip1 -- -D warnings
+            echo "::endgroup::"
+          done
+
+      # wasmtime is the runner that actually executes the wasm test binaries the
+      # next step builds. The install script drops it in ~/.wasmtime/bin, which is
+      # added to PATH so cargo's configured runner can find it.
+      - name: Install wasmtime (the wasm test runner)
+        run: |
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "${HOME}/.wasmtime/bin" >> "${GITHUB_PATH}"
+
+      # Run the wasm-safe test suites on the target under wasmtime, so the
+      # pure-Rust logic is exercised on wasm and not merely compiled. cargo runs
+      # each test binary through wasmtime via CARGO_TARGET_WASM32_WASIP1_RUNNER.
+      # --no-default-features keeps reqwest out (the consumer supplies its own
+      # client on wasm), which also gates out the live-cloud tests. The crate list
+      # is the wasm-runnable set: the -sys / native / on-premise crates are
+      # excluded for the structural reasons in the job comment above. Doctests run
+      # here too and are exercised under wasmtime.
+      - name: cargo test (wasm32-wasip1, executed under wasmtime)
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+        run: |
+          for crate in \
+            fiftyone-caching \
+            fiftyone-pipeline-core \
+            fiftyone-json-builder \
+            fiftyone-javascript-builder \
+            fiftyone-device-detection-shared \
+            fiftyone-ip-intelligence-shared \
+            fiftyone-device-detection-cloud \
+            fiftyone-ip-intelligence-cloud \
+            fiftyone-fodid-cloud; do
+            echo "::group::test ${crate}"
+            cargo test -p "${crate}" --no-default-features --target wasm32-wasip1
+            echo "::endgroup::"
+          done

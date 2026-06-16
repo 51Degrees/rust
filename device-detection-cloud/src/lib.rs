@@ -1,0 +1,134 @@
+/* *********************************************************************
+ * This Original Work is copyright of 51 Degrees Mobile Experts Limited.
+ * Copyright 2026 51 Degrees Mobile Experts Limited, Davidson House,
+ * Forbury Square, Reading, Berkshire, United Kingdom RG1 3EU.
+ *
+ * This Original Work is licensed under the European Union Public Licence
+ * (EUPL) v.1.2 and is subject to its terms as set out below.
+ *
+ * If a copy of the EUPL was not distributed with this file, You can obtain
+ * one at https://opensource.org/licenses/EUPL-1.2.
+ *
+ * The 'Compatible Licences' set out in the Appendix to the EUPL (as may be
+ * amended by the European Commission) shall be deemed incompatible for
+ * the purposes of the Work and the provisions of the compatibility
+ * clause in Article 5 of the EUPL shall not apply.
+ *
+ * If using the Work as, or as part of, a network application, by
+ * including the attribution notice(s) required under Article 5 of the EUPL
+ * in the end user terms of the application under an appropriate heading,
+ * such notice(s) shall fulfill the requirements of that article.
+ * ********************************************************************* */
+
+//! # 51Degrees cloud device detection
+//!
+//! The cloud variant of device detection. It implements the
+//! [device-detection-cloud specification](https://github.com/51Degrees/specifications/blob/main/device-detection-specification/pipeline-elements/device-detection-cloud.md).
+//!
+//! ## What it does
+//!
+//! A [`fiftyone_cloud_request_engine::CloudRequestEngine`] makes a single HTTP
+//! call to the 51Degrees cloud per flow data and stores the raw JSON response
+//! under the `cloud` data key. [`DeviceDetectionCloudEngine`] then reads that
+//! JSON, slices out the `device` member, and turns it into a
+//! [`DeviceDataBase`], which it stores under [`DEVICE_DATA_KEY`].
+//! It consumes no evidence of its own, so it must sit *after* a cloud request
+//! engine in the pipeline.
+//!
+//! ## Hardware-profile lookup (TAC and native model)
+//!
+//! [`HardwareProfileCloudEngine`] is the second cloud engine in this crate. It
+//! covers the lookups where one input parameter matches *several* device
+//! profiles: a Type Allocation Code (`query.tac`) or a native model name
+//! (`query.nativemodel`). It slices the response's `hardware.profiles` array and
+//! turns each entry into a [`DeviceDataBase`], collecting them into a
+//! [`MultiDeviceData`] stored under [`HARDWARE_DATA_KEY`]. Each profile is read
+//! through the same [`DeviceData`] accessors as a single-device result. It
+//! needs a resource key with the
+//! hardware-profile-lookup product.
+//!
+//! ## Interface compatibility with the on-premise engine
+//!
+//! The engine produces the same concrete element-data type, under the same
+//! [`TypedKey`](fiftyone_pipeline_core::TypedKey), as the on-premise Hash engine:
+//! a [`DeviceDataBase`] under [`DEVICE_DATA_KEY`] (data
+//! key string `"device"`). A consuming application reads the result through that
+//! key, or through the shared [`DeviceData`] typed accessors,
+//! and can swap a cloud engine for an on-premise one (or the reverse) without
+//! touching its result-reading code. The shared model lives in the
+//! `fiftyone-device-detection-shared` crate precisely so both engines depend on
+//! one definition.
+//!
+//! ## No-value handling
+//!
+//! When the cloud determines no value for a property it sends JSON `null` with a
+//! sibling `<property>nullreason` entry explaining why. The mapping (in the
+//! private `dto` module) leaves the property absent so a typed accessor returns
+//! [`AspectPropertyValue::NoValue`](fiftyone_pipeline_engines::AspectPropertyValue::NoValue),
+//! while preserving the `nullreason` message in the data bag so the explanation
+//! is not lost. This realises the
+//! [null-values specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/features/properties.md#null-values).
+//!
+//! ## Property metadata
+//!
+//! The set of device properties a resource key grants is known only after the
+//! cloud request engine fetches its accessible properties, which it does lazily.
+//! The engine therefore derives its property metadata from the request engine's
+//! [`public_properties`](fiftyone_cloud_request_engine::CloudRequestEngine::public_properties)
+//! on first use (or eagerly through
+//! [`DeviceDetectionCloudEngineBuilder::eager_properties`]), rather than
+//! hard-caching it at construction.
+//!
+//! ## Example
+//!
+//! ```no_run
+//! use std::sync::Arc;
+//! use fiftyone_pipeline_core::{Evidence, Pipeline};
+//! use fiftyone_cloud_request_engine::CloudRequestEngine;
+//! use fiftyone_device_detection_cloud::DeviceDetectionCloudEngine;
+//! use fiftyone_device_detection_shared::{DeviceData, DEVICE_DATA_KEY};
+//!
+//! let request_engine = Arc::new(
+//!     CloudRequestEngine::builder()
+//!         .resource_key("my-resource-key")
+//!         .build()
+//!         .unwrap(),
+//! );
+//! let device_engine = DeviceDetectionCloudEngine::builder()
+//!     .cloud_request_engine(request_engine.clone())
+//!     .build();
+//!
+//! let pipeline = Pipeline::builder()
+//!     .add_element(request_engine)
+//!     .add_element(Arc::new(device_engine))
+//!     .build()
+//!     .unwrap();
+//!
+//! let mut data = pipeline.create_flow_data_with(
+//!     Evidence::builder().add("header.user-agent", "Mozilla/5.0").build(),
+//! );
+//! data.process().unwrap();
+//! if let Some(device) = data.get(DEVICE_DATA_KEY) {
+//!     if let Ok(mobile) = device.is_mobile().value() {
+//!         println!("IsMobile: {mobile}");
+//!     }
+//! }
+//! ```
+
+#![warn(missing_docs)]
+
+mod dto;
+mod engine;
+mod hardware_engine;
+mod meta;
+mod multi_device;
+
+pub use engine::{DeviceDetectionCloudEngine, DeviceDetectionCloudEngineBuilder};
+pub use hardware_engine::{HardwareProfileCloudEngine, HardwareProfileCloudEngineBuilder};
+pub use multi_device::{MultiDeviceData, HARDWARE_DATA_KEY, HARDWARE_ELEMENT_DATA_KEY};
+
+// Re-export the shared device data model so consumers of the cloud engine have
+// the result types and key to hand without a separate dependency line. These are
+// the same items the on-premise engine surfaces, which is what makes the engines
+// swappable.
+pub use fiftyone_device_detection_shared::{DeviceData, DeviceDataBase, DEVICE_DATA_KEY};

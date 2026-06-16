@@ -1,0 +1,84 @@
+/* *********************************************************************
+ * This Original Work is copyright of 51 Degrees Mobile Experts Limited.
+ * Copyright 2026 51 Degrees Mobile Experts Limited, Davidson House,
+ * Forbury Square, Reading, Berkshire, United Kingdom RG1 3EU.
+ *
+ * This Original Work is licensed under the European Union Public Licence
+ * (EUPL) v.1.2 and is subject to its terms as set out below.
+ *
+ * If a copy of the EUPL was not distributed with this file, You can obtain
+ * one at https://opensource.org/licenses/EUPL-1.2.
+ *
+ * The 'Compatible Licences' set out in the Appendix to the EUPL (as may be
+ * amended by the European Commission) shall be deemed incompatible for
+ * the purposes of the Work and the provisions of the compatibility
+ * clause in Article 5 of the EUPL shall not apply.
+ *
+ * If using the Work as, or as part of, a network application, by
+ * including the attribution notice(s) required under Article 5 of the EUPL
+ * in the end user terms of the application under an appropriate heading,
+ * such notice(s) shall fulfill the requirements of that article.
+ * ********************************************************************* */
+
+//! Cloud engine that unpacks the 51Degrees identifier (51Did / FODid) block from
+//! the cloud JSON response into typed data.
+//!
+//! # What this crate does
+//!
+//! A 51Degrees cloud response carries each requested product in its own
+//! top-level JSON member: `device` for device detection, `ip` for IP
+//! intelligence, and `fodid` for the 51Degrees identifier. This crate provides
+//! the pipeline element that owns the `fodid` member.
+//!
+//! [`FodIdCloudEngine`] sits after a
+//! [`CloudRequestEngine`](fiftyone_cloud_request_engine::CloudRequestEngine) in a
+//! pipeline. The request engine makes the single HTTP call and stores the raw
+//! JSON; this engine slices out the `fodid` member and maps it into a
+//! [`FodIdDataBase`], stored under [`FODID_DATA_KEY`].
+//!
+//! # The identifier values
+//!
+//! The block holds two probabilistic identifiers, each a base64-encoded
+//! [OWID](https://github.com/SWAN-community/owid) envelope:
+//!
+//! - [`IdProbGlobal`](ID_PROB_GLOBAL_PROPERTY), unique across all callers
+//!   observing the same device and network, and
+//! - [`IdProbLic`](ID_PROB_LIC_PROPERTY), unique only across the caller's own
+//!   license key.
+//!
+//! Both are exposed in two forms: the raw base64 string
+//! ([`FodIdData::id_prob_global`]), and the parsed
+//! [`FodId`] ([`FodIdData::id_prob_global_fod_id`]) which unpacks
+//! the envelope's payload (flags, license id, the 32-byte hash) and the OWID
+//! domain, date and signature. The parsing reuses the [`fodid`] reader, so the
+//! envelope handling is identical whether a 51Did arrives from the cloud or is
+//! read from a stored cookie.
+//!
+//! # Cloud only
+//!
+//! A 51Did is issued by the cloud, which alone holds the signing key, so there
+//! is no on-premise engine that produces the same data (unlike device detection
+//! and IP intelligence, which have interchangeable cloud and on-premise
+//! engines). [`FodIdCloudEngine`] is the only producer of [`FODID_DATA_KEY`].
+
+#![warn(missing_docs)]
+
+mod data;
+mod dto;
+mod engine;
+
+pub use data::{
+    default_aspect_property_metadata, default_property_metadata, FodIdData, FodIdDataBase,
+    FODID_DATA_KEY, FODID_ELEMENT_DATA_KEY, IDENTIFIER_PROPERTIES, ID_HEM_GLOBAL_PROPERTY,
+    ID_HEM_LIC_PROPERTY, ID_PROB_GLOBAL_PROPERTY, ID_PROB_LIC_PROPERTY, ID_RAND_GLOBAL_PROPERTY,
+    ID_RAND_LIC_PROPERTY,
+};
+pub use engine::{FodIdCloudEngine, FodIdCloudEngineBuilder};
+
+// Re-export the parsed-identifier type so a consumer can work with the decoded
+// envelope without adding a direct dependency on the `fodid` reader crate.
+pub use fodid::FodId;
+
+// Re-export the aspect-value wrapper used across this engine's public surface,
+// for the same reason.
+pub use fiftyone_pipeline_engines::AspectPropertyValue;

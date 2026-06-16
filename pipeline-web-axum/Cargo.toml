@@ -1,0 +1,34 @@
+[package]
+name = "fiftyone-pipeline-web-axum"
+version = "0.1.0"
+description = "axum extractor and tower middleware adapter that wires the 51Degrees web pipeline into an axum application."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+fiftyone-pipeline-web = { path = "../pipeline-web" }
+fiftyone-pipeline-core = { path = "../pipeline-core" }
+# axum 0.8 is the current line. It rides on hyper 1.x and tower 0.5, which the
+# workspace already resolves through the cloud and fiftyone engines, so adding it
+# does not pull a second major version of either.
+axum.workspace = true
+tower.workspace = true
+# Only the runtime is needed at build time. spawn_blocking lives in the default
+# feature set, so no extra features are required for the library itself.
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+# The integration test drives the router in process, so it needs a real
+# multi-threaded runtime (spawn_blocking pulls a blocking thread) and the
+# #[tokio::test] macro. tower::ServiceExt::oneshot dispatches a single request
+# without binding a TCP socket.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tower = { workspace = true, features = ["util"] }
+serde_json.workspace = true
+fiftyone-pipeline-engines-fiftyone = { path = "../pipeline-engines-fiftyone" }
+fiftyone-json-builder = { path = "../json-builder" }
+fiftyone-javascript-builder = { path = "../javascript-builder" }
