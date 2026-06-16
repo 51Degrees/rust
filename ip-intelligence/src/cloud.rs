@@ -31,7 +31,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use fiftyone_cloud_request_engine::CloudRequestEngine;
+use fiftyone_cloud_request_engine::{CloudEngineState, CloudRequestEngine};
 use fiftyone_ip_intelligence_cloud::IpIntelligenceCloudEngine;
 use fiftyone_pipeline_core::{Pipeline, Result};
 
@@ -51,6 +51,7 @@ pub struct CloudIpIntelligencePipelineBuilder {
     cloud_request_origin: Option<String>,
     timeout: Option<Duration>,
     suppress_process_exceptions: bool,
+    cloud_state: Option<CloudEngineState>,
 }
 
 impl CloudIpIntelligencePipelineBuilder {
@@ -63,6 +64,7 @@ impl CloudIpIntelligencePipelineBuilder {
             cloud_request_origin: None,
             timeout: None,
             suppress_process_exceptions: false,
+            cloud_state: None,
         }
     }
 
@@ -95,13 +97,39 @@ impl CloudIpIntelligencePipelineBuilder {
         self
     }
 
+    /// Supply a previously exported [`CloudEngineState`], so the request engine
+    /// uses it instead of fetching the accepted evidence keys and accessible
+    /// properties from the cloud as it builds.
+    ///
+    /// This lets the pipeline be constructed offline, and avoids the build-time
+    /// cloud round-trip on a short-lived or frequently-restarted host. Obtain the
+    /// state from a built engine with [`CloudRequestEngine::export_state`].
+    pub fn set_state(mut self, state: CloudEngineState) -> Self {
+        self.cloud_state = Some(state);
+        self
+    }
+
+    /// Supply a [`CloudEngineState`] when one is available, otherwise let the
+    /// request engine fetch it from the cloud at build time.
+    pub fn set_state_opt(mut self, state: Option<CloudEngineState>) -> Self {
+        self.cloud_state = state;
+        self
+    }
+
     /// Build the cloud request engine, the IP-intelligence cloud engine, and the
     /// pipeline that runs them in order.
     ///
-    /// Returns an error if the resource key is empty or the cloud request engine
-    /// cannot be constructed (for example its HTTP client fails to build).
+    /// Unless a [`CloudEngineState`] was supplied with
+    /// [`set_state`](Self::set_state), the request engine fetches its accepted
+    /// evidence keys and accessible properties from the cloud as it builds, so
+    /// this makes a network call and returns an error if the cloud is
+    /// unavailable. Returns an error if the resource key is empty or the cloud
+    /// request engine cannot be constructed (for example its HTTP client fails to
+    /// build).
     pub fn build(self) -> Result<Arc<Pipeline>> {
-        let mut request_builder = CloudRequestEngine::builder().resource_key(self.resource_key);
+        let mut request_builder = CloudRequestEngine::builder()
+            .resource_key(self.resource_key)
+            .set_state_opt(self.cloud_state);
         if let Some(endpoint) = self.endpoint {
             request_builder = request_builder.endpoint(endpoint);
         }
@@ -173,9 +201,11 @@ mod tests {
                 // The evidence-keys body is a flat JSON array of accepted keys.
                 ok(r#"["query.client-ip-51d","server.client-ip"]"#)
             } else {
-                // The accessible-properties discovery is allowed to fail, so the
-                // engine infers value kinds from the JSON instead.
-                Err("no network in tests".to_owned())
+                // The accessible-properties discovery returns no products, so the
+                // engine has no metadata and infers value kinds from the JSON
+                // instead. (Returning an empty body rather than an error lets the
+                // builder's build-time discovery succeed.)
+                ok(r#"{"Products":{}}"#)
             }
         }
     }
@@ -238,11 +268,12 @@ mod tests {
     #[test]
     fn cloud_builder_keeps_configuration() {
         // The fluent setters return the builder, so a configured chain still
-        // builds (against the public defaults, no network is touched until
-        // processing).
+        // builds. An injected state keeps the build offline (no discovery fetch),
+        // so the test does not touch the network.
         let pipeline = IpIntelligencePipelineBuilder::cloud("test-key")
             .cloud_request_origin("https://example.51degrees.com")
             .timeout(std::time::Duration::from_secs(5))
+            .set_state(fiftyone_cloud_request_engine::CloudEngineState::default())
             .build();
         assert!(pipeline.is_ok(), "a configured cloud builder should build");
     }

@@ -33,7 +33,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 
-use fiftyone_cloud_request_engine::CloudRequestEngine;
+use fiftyone_cloud_request_engine::{CloudEngineState, CloudRequestEngine};
 use fiftyone_pipeline_core::{Evidence, Pipeline};
 
 /// What the test server captured from the data POST.
@@ -42,11 +42,14 @@ struct Captured {
     origin: Option<String>,
 }
 
-/// Start a local server that answers `evidencekeys` and the data endpoint, and
-/// reports back what it received on the data POST. Returns the base URL and a
-/// receiver for the captured request.
+/// Start a local server that answers the three cloud endpoints and reports back
+/// what it received on the data POST. The builder fetches `evidencekeys` and
+/// `accessibleproperties` as it builds the engine, so both are answered here;
+/// only the data POST is captured. Returns the base URL and a receiver for the
+/// captured request.
 fn start_server(
     evidence_keys_json: &'static str,
+    accessible_properties_json: &'static str,
     data_json: &'static str,
 ) -> (String, mpsc::Receiver<Captured>) {
     let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
@@ -58,6 +61,9 @@ fn start_server(
             let url = request.url().to_owned();
             if url.contains("evidencekeys") {
                 let response = tiny_http::Response::from_string(evidence_keys_json);
+                let _ = request.respond(response);
+            } else if url.contains("accessibleproperties") {
+                let response = tiny_http::Response::from_string(accessible_properties_json);
                 let _ = request.respond(response);
             } else {
                 // The data endpoint: capture the body and the Origin header.
@@ -82,6 +88,7 @@ fn start_server(
 fn posts_url_encoded_form_with_stripped_prefixes_and_origin() {
     let (base, rx) = start_server(
         r#"["header.user-agent","query.user-agent"]"#,
+        r#"{"Products":{}}"#,
         r#"{"device":{"ismobile":true}}"#,
     );
 
@@ -141,31 +148,151 @@ fn posts_url_encoded_form_with_stripped_prefixes_and_origin() {
 }
 
 #[test]
-fn transport_failure_to_dead_endpoint_is_a_cloud_error() {
-    // Point at a port nothing is listening on. The discovery request fails at
-    // the transport level, which under suppression becomes a recorded error.
-    let engine = CloudRequestEngine::builder()
+fn transport_failure_to_dead_endpoint_fails_the_build() {
+    // Point at a port nothing is listening on. The builder's discovery fetch
+    // fails at the transport level, so the build itself returns a cloud error
+    // rather than producing a half-initialised engine.
+    let result = CloudRequestEngine::builder()
         .resource_key("rk")
         .endpoint("http://127.0.0.1:1/") // port 1: refused
         .timeout_seconds(2)
-        .build()
-        .unwrap();
-
-    let pipeline = Pipeline::builder()
-        .add_element(Arc::new(engine))
-        .suppress_process_exceptions(true)
-        .build()
-        .unwrap();
-
-    let mut data =
-        pipeline.create_flow_data_with(Evidence::builder().add("header.user-agent", "UA").build());
-    data.process().unwrap();
+        .build();
     assert!(
-        !data.errors().is_empty(),
-        "a transport failure should be recorded"
+        matches!(
+            result,
+            Err(fiftyone_pipeline_core::Error::CloudRequest { status_code: 0, .. })
+        ),
+        "a transport failure during discovery should fail the build"
     );
-    assert!(matches!(
-        data.errors()[0].source,
-        fiftyone_pipeline_core::Error::CloudRequest { status_code: 0, .. }
-    ));
+}
+
+#[test]
+fn state_round_trips_over_the_real_transport() {
+    // A representative accessible-properties body so the exported state carries a
+    // product and properties, the way a real resource key would.
+    const ACCESSIBLE_PROPERTIES: &str = r#"{"Products":{"device":{"DataTier":"CloudV4","Properties":[{"Name":"IsMobile","Type":"Bool"},{"Name":"PlatformName","Type":"String"}]}}}"#;
+    const EVIDENCE_KEYS: &str = r#"["header.user-agent","query.user-agent"]"#;
+
+    let (base, _rx) = start_server(
+        EVIDENCE_KEYS,
+        ACCESSIBLE_PROPERTIES,
+        r#"{"device":{"ismobile":true}}"#,
+    );
+
+    // Builder 1: it fetches discovery from the (local) cloud at build time over
+    // the real reqwest transport, and retains the state for export.
+    let mut builder1 = CloudRequestEngine::builder()
+        .resource_key("live-resource-key")
+        .endpoint(base)
+        .timeout_seconds(5);
+    let _engine1 = builder1
+        .build()
+        .expect("the first engine builds, fetching discovery from the cloud");
+    let state1 = builder1
+        .export_state()
+        .expect("the builder holds the fetched state");
+    // The state genuinely came from the cloud: it carries the advertised product.
+    assert!(
+        state1.accessible_properties.products.contains_key("device"),
+        "the builder should have fetched accessible properties from the cloud"
+    );
+    assert!(!state1.evidence_keys.is_empty());
+
+    // Persist and restore the state, as a host store would.
+    let json = serde_json::to_string(&state1).unwrap();
+    let restored: CloudEngineState = serde_json::from_str(&json).unwrap();
+
+    // Builder 2: the state is injected and the endpoint points at a dead port. If
+    // the builder tried to fetch discovery it would fail; that the build succeeds
+    // proves it used the injected state and did not call the cloud.
+    let mut builder2 = CloudRequestEngine::builder()
+        .resource_key("live-resource-key")
+        .endpoint("http://127.0.0.1:1/")
+        .timeout_seconds(2)
+        .set_state(restored);
+    let _engine2 = builder2
+        .build()
+        .expect("the second engine builds from the injected state without any network call");
+    let state2 = builder2
+        .export_state()
+        .expect("the builder holds the state");
+
+    // The two snapshots are identical.
+    assert_eq!(state1.evidence_keys, state2.evidence_keys);
+    assert_eq!(
+        serde_json::to_string(&state1.accessible_properties).unwrap(),
+        serde_json::to_string(&state2.accessible_properties).unwrap(),
+        "the re-injected engine exports the same accessible properties"
+    );
+}
+
+/// Resolve a cloud resource key from the environment for the live round-trip
+/// test, checking the aligned name first and then the CI-exported tiered names.
+fn live_resource_key() -> Option<String> {
+    [
+        "51DEGREES_RESOURCE_KEY",
+        "_51DEGREES_RESOURCE_KEY_PAID",
+        "_51DEGREES_RESOURCE_KEY_FREE",
+    ]
+    .into_iter()
+    .find_map(|name| match std::env::var(name) {
+        Ok(value) if !value.trim().is_empty() => Some(value.trim().to_owned()),
+        _ => None,
+    })
+}
+
+/// The end-to-end feature against the real 51Degrees cloud: build with a resource
+/// key so the builder fetches the state from the cloud, persist it, build a
+/// second engine with that state injected, and confirm the two states match and
+/// the second build makes no cloud call. Ignored by default; runs only when a
+/// resource key is present in the environment.
+#[test]
+#[ignore = "requires a network and a real resource key (51DEGREES_RESOURCE_KEY or the _51DEGREES_RESOURCE_KEY_PAID/_FREE tiered names)"]
+fn live_cloud_state_round_trips() {
+    let Some(resource_key) = live_resource_key() else {
+        eprintln!("no resource key in the environment; skipping live cloud state round-trip");
+        return;
+    };
+
+    // First build hits the real cloud and the builder retains the resolved state.
+    let mut builder1 = CloudRequestEngine::builder()
+        .resource_key(resource_key.clone())
+        .timeout_seconds(10);
+    let _engine1 = builder1
+        .build()
+        .expect("the first engine builds, fetching discovery from the real cloud");
+    let state1 = builder1
+        .export_state()
+        .expect("the builder holds the fetched state");
+    assert!(
+        !state1.evidence_keys.is_empty(),
+        "the cloud should advertise at least one accepted evidence key"
+    );
+    assert!(
+        !state1.accessible_properties.products.is_empty(),
+        "the cloud should advertise at least one accessible product"
+    );
+
+    // Persist and restore, then build a second engine from the cached state with
+    // the endpoint pointed at a dead port, so a build that succeeds proves no
+    // cloud call was made.
+    let json = serde_json::to_string(&state1).unwrap();
+    let restored: CloudEngineState = serde_json::from_str(&json).unwrap();
+    let mut builder2 = CloudRequestEngine::builder()
+        .resource_key(resource_key)
+        .endpoint("http://127.0.0.1:1/")
+        .timeout_seconds(2)
+        .set_state(restored);
+    let _engine2 = builder2
+        .build()
+        .expect("the second engine builds from the cached state without any cloud call");
+    let state2 = builder2
+        .export_state()
+        .expect("the builder holds the state");
+
+    assert_eq!(state1.evidence_keys, state2.evidence_keys);
+    assert_eq!(
+        serde_json::to_string(&state1.accessible_properties).unwrap(),
+        serde_json::to_string(&state2.accessible_properties).unwrap(),
+    );
 }

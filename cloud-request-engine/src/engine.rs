@@ -25,8 +25,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use once_cell::sync::OnceCell;
-
 use fiftyone_pipeline_core::{
     compare_keys, Error, EvidenceKeyFilter, EvidenceKeyFilterWhitelist, EvidencePrefix, FlowData,
     FlowElement, PropertyMetaData, PropertyValueType, Result, TypedKey,
@@ -41,6 +39,7 @@ use crate::http::{CloudHttpClient, CloudHttpRequest, HttpMethod};
 use crate::properties::LicencedProducts;
 use crate::recovery::{RecoveryConfig, RecoveryGate};
 use crate::response::{cloud_error, validate_response};
+use crate::state::CloudEngineState;
 
 /// The set of resolved endpoint URLs the engine talks to.
 #[derive(Debug, Clone)]
@@ -62,17 +61,28 @@ struct Endpoints {
 /// endpoint, and stores the raw JSON response body in its element data under the
 /// `cloud` data key. Downstream cloud aspect engines read that JSON.
 ///
-/// # Lazy discovery
+/// # Discovery at build time
 ///
 /// The accepted evidence keys (`evidencekeys`) and accessible properties
 /// (`accessibleproperties`) depend on the resource key, so they are fetched from
-/// the cloud. To keep a temporarily unavailable cloud from breaking pipeline
-/// construction, this fetch is deferred to the first
-/// [`FlowElement::process`] call rather than done in the constructor, and the
-/// result is cached. Under `suppress_process_exceptions` a discovery failure is
-/// then recorded on the flow data and the pipeline keeps running, exactly as the
-/// [updated start-up design](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/pipeline-elements/cloud-request-engine.md#updated-design)
-/// requires.
+/// the cloud. The builder fetches both when it builds the engine, so a built
+/// engine is fully resolved and immutable: there is no lazy first-use discovery.
+/// If either fetch fails (for example the cloud is unavailable),
+/// [`CloudRequestEngineBuilder::build`] returns an error rather than producing a
+/// half-initialised engine.
+///
+/// # Persisting discovered state
+///
+/// Both discovery results depend only on the resource key, so they can be lifted
+/// out of one engine and injected into another to skip the build-time fetch
+/// entirely. This matters on a short-lived host such as a `wasm32-wasip1` edge
+/// instance, which would otherwise repeat the two round-trips on every cold
+/// start. Build an engine, call [`CloudRequestEngineBuilder::export_state`] on the
+/// builder to obtain a serializable [`CloudEngineState`], persist it in the host's
+/// store, and pass it to the next builder's
+/// [`CloudRequestEngineBuilder::set_state`]. When a state is supplied the builder
+/// uses it and makes no discovery call. The engine itself holds only the working
+/// values it needs and knows nothing about the snapshot.
 ///
 /// # Recovery mode
 ///
@@ -122,12 +132,14 @@ pub struct CloudRequestEngine {
     /// The aspect view of the same metadata.
     aspect_properties: Vec<AspectPropertyMetaData>,
 
-    /// Lazily fetched accepted evidence keys, cached after the first successful
-    /// fetch. The filter the cloud advertises for this resource key.
-    evidence_filter: OnceCell<EvidenceKeyFilterWhitelist>,
-    /// Lazily fetched accessible properties, cached after the first successful
-    /// fetch.
-    public_properties: OnceCell<LicencedProducts>,
+    /// The accepted evidence keys the cloud advertises for this resource key.
+    /// Resolved once at build time, either fetched from the `evidencekeys`
+    /// endpoint or supplied via [`CloudRequestEngineBuilder::set_state`].
+    evidence_filter: EvidenceKeyFilterWhitelist,
+    /// The accessible properties for this resource key. Resolved once at build
+    /// time, either fetched from the `accessibleproperties` endpoint or supplied
+    /// via [`CloudRequestEngineBuilder::set_state`].
+    public_properties: LicencedProducts,
 }
 
 impl CloudRequestEngine {
@@ -155,134 +167,29 @@ impl CloudRequestEngine {
         &self.endpoints.data
     }
 
-    /// The accessible properties for the configured resource key, fetching them
-    /// from the cloud on first use and caching the result.
+    /// The accessible properties for the configured resource key.
     ///
-    /// Returns the cached value on subsequent calls. Returns an
-    /// [`Error::CloudRequest`] if the fetch fails and no value has been cached.
-    /// Downstream cloud aspect engines call this to discover which properties
-    /// the resource key grants.
+    /// The builder resolved these at build time (fetched from the cloud, or
+    /// supplied via [`CloudRequestEngineBuilder::set_state`]), so this is a cheap
+    /// accessor and never performs I/O. Downstream cloud aspect engines call it to
+    /// discover which properties the resource key grants. The [`Result`] is
+    /// retained for API stability and is always [`Ok`].
     pub fn public_properties(&self) -> Result<&LicencedProducts> {
-        Self::get_or_fetch(&self.public_properties, || self.fetch_public_properties())
+        Ok(&self.public_properties)
     }
 
-    /// The accepted evidence keys for the configured resource key, fetching them
-    /// from the cloud on first use and caching the result.
+    /// The accepted evidence keys for the configured resource key.
     ///
-    /// Returns an [`Error::CloudRequest`] if the fetch fails and no value has
-    /// been cached.
+    /// Resolved at build time, so this is a cheap accessor and never performs
+    /// I/O. The [`Result`] is retained for API stability and is always [`Ok`].
     pub fn accepted_evidence_keys(&self) -> Result<&EvidenceKeyFilterWhitelist> {
-        Self::get_or_fetch(&self.evidence_filter, || self.fetch_evidence_keys())
+        Ok(&self.evidence_filter)
     }
 
-    /// Return the cached value of a lazily fetched [`OnceCell`], running `fetch`
-    /// to populate it on first use.
-    ///
-    /// Returns the cached value on subsequent calls and propagates the fetch
-    /// error otherwise.
-    fn get_or_fetch<T>(cell: &OnceCell<T>, fetch: impl FnOnce() -> Result<T>) -> Result<&T> {
-        if let Some(value) = cell.get() {
-            return Ok(value);
-        }
-        let fetched = fetch()?;
-        // OnceCell::set fails only if another thread won the race; in that case
-        // we discard ours and return the stored value.
-        let _ = cell.set(fetched);
-        Ok(cell.get().expect("cell just set"))
-    }
-
-    /// True if both lazy discovery results have already been fetched and cached.
+    /// True once the discovery metadata is available. The builder resolves it at
+    /// build time, so this is always true for a successfully built engine.
     pub fn has_loaded_metadata(&self) -> bool {
-        self.evidence_filter.get().is_some() && self.public_properties.get().is_some()
-    }
-
-    /// Fetch the accessible properties from the cloud, mapping any failure to an
-    /// [`Error::CloudRequest`].
-    fn fetch_public_properties(&self) -> Result<LicencedProducts> {
-        // The recovery gate is re-checked inside `send_and_validate`, so it is
-        // not checked again here.
-        let url = format!(
-            "{}?{}={}",
-            self.endpoints.properties,
-            constants::RESOURCE_PARAMETER,
-            self.resource_key
-        );
-        let request = CloudHttpRequest {
-            method: HttpMethod::Get,
-            url: url.clone(),
-            form: Vec::new(),
-            origin: self.cloud_request_origin.clone(),
-        };
-        let parsed = self.send_and_validate(&request, true)?;
-        LicencedProducts::parse(&parsed.json).map_err(|e| {
-            cloud_error(
-                0,
-                None,
-                format!("failed to parse accessible properties from '{url}': {e}"),
-            )
-        })
-    }
-
-    /// Fetch the accepted evidence keys from the cloud, mapping any failure to an
-    /// [`Error::CloudRequest`]. The evidence-keys body is a flat JSON array, so
-    /// error-message checking is disabled for it.
-    fn fetch_evidence_keys(&self) -> Result<EvidenceKeyFilterWhitelist> {
-        // The recovery gate is re-checked inside `send_and_validate`, so it is
-        // not checked again here.
-        let request = CloudHttpRequest {
-            method: HttpMethod::Get,
-            url: self.endpoints.evidence_keys.clone(),
-            form: Vec::new(),
-            origin: self.cloud_request_origin.clone(),
-        };
-        let parsed = self.send_and_validate(&request, false)?;
-        let keys: Vec<String> = serde_json::from_str(&parsed.json).map_err(|e| {
-            cloud_error(
-                0,
-                None,
-                format!(
-                    "failed to parse evidence keys from '{}': {e}",
-                    self.endpoints.evidence_keys
-                ),
-            )
-        })?;
-        Ok(EvidenceKeyFilterWhitelist::new(keys))
-    }
-
-    /// Send a request through the transport, record success/failure with the
-    /// recovery gate, and validate the response.
-    fn send_and_validate(
-        &self,
-        request: &CloudHttpRequest,
-        check_for_error_messages: bool,
-    ) -> Result<crate::response::ParsedResponse> {
-        // The gate is checked once more immediately before the call to catch a
-        // recovery period that opened since the outer check.
-        let now = Instant::now();
-        if let Err(message) = self.recovery.check_at(now) {
-            return Err(cloud_error(0, None, message));
-        }
-
-        let response = match self.http.send(request) {
-            Ok(response) => response,
-            Err(message) => {
-                // The request did not complete: a transport failure. Record it
-                // and surface it as a zero-status cloud error.
-                self.recovery.record_failure();
-                return Err(cloud_error(0, None, message));
-            }
-        };
-
-        match validate_response(&response, &request.url, check_for_error_messages) {
-            Ok(parsed) => {
-                self.recovery.record_success();
-                Ok(parsed)
-            }
-            Err(error) => {
-                self.recovery.record_failure();
-                Err(error)
-            }
-        }
+        true
     }
 
     /// Build the url-encoded form body for a flow data.
@@ -305,14 +212,13 @@ impl CloudRequestEngine {
             }
         }
 
-        // Collect the evidence the server accepts. If discovery has populated an
-        // evidence filter, only keys it includes are sent; otherwise every
-        // evidence value is forwarded (the server ignores keys it does not use).
-        let accepted = self.evidence_filter.get();
+        // Collect the evidence the server accepts. The accepted-evidence filter
+        // was resolved at build time, so only the keys it includes are sent.
+        let accepted = &self.evidence_filter;
         let mut entries: Vec<(&str, &str)> = data
             .evidence()
             .iter()
-            .filter(|(key, _)| accepted.map(|f| f.include(key)).unwrap_or(true))
+            .filter(|(key, _)| accepted.include(key))
             .collect();
 
         // Sort so that lower-precedence evidence is written first and
@@ -350,10 +256,8 @@ fn strip_prefix(key: &str) -> String {
 
 impl FlowElement for CloudRequestEngine {
     fn process(&self, data: &mut FlowData) -> Result<()> {
-        // Lazily discover the accepted evidence keys on first use. A failure
-        // here propagates as a process error, which `suppress_process_exceptions`
-        // can absorb so the pipeline keeps running with a degraded result.
-        self.accepted_evidence_keys()?;
+        // Discovery already happened at build time, so processing goes straight
+        // to the data request.
 
         // Record that the engine started before making the request, so a
         // consumer can tell the engine ran even if the request then fails.
@@ -368,7 +272,7 @@ impl FlowElement for CloudRequestEngine {
             form,
             origin: self.cloud_request_origin.clone(),
         };
-        let parsed = self.send_and_validate(&request, true)?;
+        let parsed = send_and_validate(self.http.as_ref(), &self.recovery, &request, true)?;
 
         if let Some(cloud) = data.get_mut_cloud() {
             cloud.set_json_response(parsed.json);
@@ -387,13 +291,8 @@ impl FlowElement for CloudRequestEngine {
     }
 
     fn evidence_key_filter(&self) -> &dyn EvidenceKeyFilter {
-        // Before discovery completes, advertise an empty filter. The filter is
-        // populated lazily, so this reflects the engine's pre-discovery state
-        // without forcing a network call from the pipeline-wide filter build.
-        match self.evidence_filter.get() {
-            Some(filter) => filter,
-            None => &*EMPTY_FILTER,
-        }
+        // The accepted-evidence filter was resolved at build time.
+        &self.evidence_filter
     }
 
     fn properties(&self) -> &[PropertyMetaData] {
@@ -416,7 +315,8 @@ impl AspectEngine for CloudRequestEngine {
     }
 
     fn has_loaded_properties(&self) -> bool {
-        self.public_properties.get().is_some()
+        // Properties are resolved at build time, so they are always loaded.
+        true
     }
 
     fn missing_property_reason(&self, property_name: &str) -> MissingPropertyResult {
@@ -435,10 +335,6 @@ impl AspectEngine for CloudRequestEngine {
         missing_property_reason(property_name, &ctx)
     }
 }
-
-/// A shared empty whitelist used as the pre-discovery evidence filter.
-static EMPTY_FILTER: once_cell::sync::Lazy<EvidenceKeyFilterWhitelist> =
-    once_cell::sync::Lazy::new(|| EvidenceKeyFilterWhitelist::new(Vec::<String>::new()));
 
 /// Helper extension on [`FlowData`] for fetching this engine's mutable data.
 ///
@@ -480,6 +376,7 @@ pub struct CloudRequestEngineBuilder {
     failures_window: Duration,
     recovery: Duration,
     http: Option<Arc<dyn CloudHttpClient>>,
+    cloud_state: Option<CloudEngineState>,
 }
 
 impl CloudRequestEngineBuilder {
@@ -498,6 +395,7 @@ impl CloudRequestEngineBuilder {
             failures_window: Duration::from_secs(constants::FAILURES_WINDOW_SECONDS_DEFAULT),
             recovery: Duration::from_secs_f64(constants::RECOVERY_SECONDS_DEFAULT),
             http: None,
+            cloud_state: None,
         }
     }
 
@@ -600,14 +498,53 @@ impl CloudRequestEngineBuilder {
         self
     }
 
-    /// Build the engine.
+    /// Provide a previously exported [`CloudEngineState`], so the builder uses
+    /// those accepted evidence keys and accessible properties instead of fetching
+    /// them from the cloud.
+    ///
+    /// This is the inject side of the round-trip with
+    /// [`CloudRequestEngine::export_state`]. When a state is supplied the builder
+    /// makes no `evidencekeys` or `accessibleproperties` request, which lets a
+    /// short-lived host (for example a `wasm32-wasip1` edge instance) skip
+    /// discovery on every cold start. When no state is supplied the builder
+    /// fetches both documents from the cloud as it builds the engine.
+    pub fn set_state(mut self, state: CloudEngineState) -> Self {
+        self.cloud_state = Some(state);
+        self
+    }
+
+    /// Provide a [`CloudEngineState`] when one is available, otherwise let the
+    /// builder fetch it from the cloud.
+    ///
+    /// A convenience over [`CloudRequestEngineBuilder::set_state`] for the common
+    /// pattern of reading a cached state that may be absent: passing [`None`]
+    /// leaves the builder to discover the values itself, so the same build code
+    /// works whether or not a cached snapshot exists.
+    pub fn set_state_opt(mut self, state: Option<CloudEngineState>) -> Self {
+        self.cloud_state = state;
+        self
+    }
+
+    /// Build the engine, resolving its discovery state.
+    ///
+    /// Unless a [`CloudEngineState`] was supplied with
+    /// [`CloudRequestEngineBuilder::set_state`], the builder fetches the
+    /// `evidencekeys` and `accessibleproperties` documents from the cloud here, so
+    /// the returned engine is fully resolved with no lazy first-use discovery.
+    ///
+    /// The builder takes `&mut self` and retains the resolved state, so after a
+    /// successful build [`CloudRequestEngineBuilder::export_state`] returns the
+    /// state for persistence. The engine itself holds only the working values it
+    /// needs to process flow data and knows nothing about the state snapshot.
     ///
     /// Returns an [`Error::PipelineConfiguration`] if the resource key is
     /// missing, or if no [`CloudHttpClient`] was supplied and the
     /// `reqwest-client` feature is not enabled (there is then no transport to
-    /// fall back to). With the feature enabled, an [`Error::CloudRequest`] is
-    /// returned instead if the built-in client cannot be constructed.
-    pub fn build(self) -> Result<CloudRequestEngine> {
+    /// fall back to). Returns an [`Error::CloudRequest`] if the built-in client
+    /// cannot be constructed, or if a discovery fetch fails (for example because
+    /// the cloud is unavailable). A consumer that must tolerate a temporarily
+    /// unavailable cloud at start-up supplies a cached state with `set_state`.
+    pub fn build(&mut self) -> Result<CloudRequestEngine> {
         let resource_key = match self.resource_key.clone() {
             Some(key) if !key.trim().is_empty() => key,
             _ => {
@@ -620,8 +557,8 @@ impl CloudRequestEngineBuilder {
 
         let endpoints = self.resolve_endpoints();
 
-        let http: Arc<dyn CloudHttpClient> = match self.http {
-            Some(client) => client,
+        let http: Arc<dyn CloudHttpClient> = match &self.http {
+            Some(client) => Arc::clone(client),
             None => default_http_client(self.timeout)?,
         };
 
@@ -633,18 +570,62 @@ impl CloudRequestEngineBuilder {
 
         let (properties, aspect_properties) = build_property_metadata();
 
+        // Resolve the discovery state and retain it on the builder. A supplied
+        // state is used verbatim and no request is made; otherwise the builder
+        // fetches both discovery documents from the cloud now and keeps the
+        // result, so the engine is fully resolved once built and the builder can
+        // export the state afterwards.
+        if self.cloud_state.is_none() {
+            let origin = self.cloud_request_origin.as_deref();
+            let evidence_filter =
+                fetch_evidence_keys(http.as_ref(), &recovery, &endpoints, origin)?;
+            let public_properties = fetch_public_properties(
+                http.as_ref(),
+                &recovery,
+                &endpoints,
+                &resource_key,
+                origin,
+            )?;
+            self.cloud_state = Some(CloudEngineState::from_parts(
+                &evidence_filter,
+                public_properties,
+            ));
+        }
+        // The state is now present (injected or just fetched). The engine receives
+        // its own working copy; the snapshot stays on the builder for export.
+        let state = self.cloud_state.as_ref().expect("state resolved above");
+        let evidence_filter = state.evidence_filter();
+        let public_properties = state.accessible_properties.clone();
+
         Ok(CloudRequestEngine {
             resource_key,
-            license_key: self.license_key,
-            cloud_request_origin: self.cloud_request_origin,
+            license_key: self.license_key.clone(),
+            cloud_request_origin: self.cloud_request_origin.clone(),
             endpoints,
             http,
             recovery,
             properties,
             aspect_properties,
-            evidence_filter: OnceCell::new(),
-            public_properties: OnceCell::new(),
+            evidence_filter,
+            public_properties,
         })
+    }
+
+    /// Export the discovery state the builder resolved during
+    /// [`build`](CloudRequestEngineBuilder::build).
+    ///
+    /// After a successful build the builder holds the accepted evidence keys and
+    /// accessible properties, whether it fetched them from the cloud or they were
+    /// supplied with [`set_state`](CloudRequestEngineBuilder::set_state). Persist
+    /// the returned [`CloudEngineState`] in a host store (a config or key-value
+    /// store, a baked-in const, and so on) and inject it into a later builder to
+    /// skip the build-time fetch.
+    ///
+    /// Returns [`None`] when no state has been resolved yet, that is when neither
+    /// [`set_state`](CloudRequestEngineBuilder::set_state) has been called nor a
+    /// build has run.
+    pub fn export_state(&self) -> Option<CloudEngineState> {
+        self.cloud_state.clone()
     }
 
     /// Resolve the three endpoint URLs from the explicit overrides, the base
@@ -708,6 +689,104 @@ fn default_http_client(_timeout: Duration) -> Result<Arc<dyn CloudHttpClient>> {
     ))
 }
 
+/// Send a request through the transport, record success or failure with the
+/// recovery gate, and validate the response. Shared by the build-time discovery
+/// fetches and the per-process data request.
+fn send_and_validate(
+    http: &dyn CloudHttpClient,
+    recovery: &RecoveryGate,
+    request: &CloudHttpRequest,
+    check_for_error_messages: bool,
+) -> Result<crate::response::ParsedResponse> {
+    // The gate is checked immediately before the call to catch a recovery period
+    // that opened since any outer check.
+    let now = Instant::now();
+    if let Err(message) = recovery.check_at(now) {
+        return Err(cloud_error(0, None, message));
+    }
+
+    let response = match http.send(request) {
+        Ok(response) => response,
+        Err(message) => {
+            // The request did not complete: a transport failure. Record it and
+            // surface it as a zero-status cloud error.
+            recovery.record_failure();
+            return Err(cloud_error(0, None, message));
+        }
+    };
+
+    match validate_response(&response, &request.url, check_for_error_messages) {
+        Ok(parsed) => {
+            recovery.record_success();
+            Ok(parsed)
+        }
+        Err(error) => {
+            recovery.record_failure();
+            Err(error)
+        }
+    }
+}
+
+/// Fetch the accepted evidence keys from the cloud, mapping any failure to an
+/// [`Error::CloudRequest`]. The evidence-keys body is a flat JSON array, so
+/// error-message checking is disabled for it.
+fn fetch_evidence_keys(
+    http: &dyn CloudHttpClient,
+    recovery: &RecoveryGate,
+    endpoints: &Endpoints,
+    origin: Option<&str>,
+) -> Result<EvidenceKeyFilterWhitelist> {
+    let request = CloudHttpRequest {
+        method: HttpMethod::Get,
+        url: endpoints.evidence_keys.clone(),
+        form: Vec::new(),
+        origin: origin.map(str::to_owned),
+    };
+    let parsed = send_and_validate(http, recovery, &request, false)?;
+    let keys: Vec<String> = serde_json::from_str(&parsed.json).map_err(|e| {
+        cloud_error(
+            0,
+            None,
+            format!(
+                "failed to parse evidence keys from '{}': {e}",
+                endpoints.evidence_keys
+            ),
+        )
+    })?;
+    Ok(EvidenceKeyFilterWhitelist::new(keys))
+}
+
+/// Fetch the accessible properties from the cloud, mapping any failure to an
+/// [`Error::CloudRequest`].
+fn fetch_public_properties(
+    http: &dyn CloudHttpClient,
+    recovery: &RecoveryGate,
+    endpoints: &Endpoints,
+    resource_key: &str,
+    origin: Option<&str>,
+) -> Result<LicencedProducts> {
+    let url = format!(
+        "{}?{}={}",
+        endpoints.properties,
+        constants::RESOURCE_PARAMETER,
+        resource_key
+    );
+    let request = CloudHttpRequest {
+        method: HttpMethod::Get,
+        url: url.clone(),
+        form: Vec::new(),
+        origin: origin.map(str::to_owned),
+    };
+    let parsed = send_and_validate(http, recovery, &request, true)?;
+    LicencedProducts::parse(&parsed.json).map_err(|e| {
+        cloud_error(
+            0,
+            None,
+            format!("failed to parse accessible properties from '{url}': {e}"),
+        )
+    })
+}
+
 /// Build the static property metadata the engine always exposes: the raw JSON
 /// under both field names, and the process-started flag.
 fn build_property_metadata() -> (Vec<PropertyMetaData>, Vec<AspectPropertyMetaData>) {
@@ -752,6 +831,23 @@ mod tests {
         assert_eq!(strip_prefix("bare"), "bare");
     }
 
+    use crate::state::EvidenceKeyEntry;
+
+    /// A resolved state with a few accepted evidence keys, so a built engine
+    /// needs no discovery fetch. The keys cover the ones the content test uses.
+    fn sample_state() -> CloudEngineState {
+        CloudEngineState {
+            evidence_keys: ["header.user-agent", "query.user-agent", "server.host"]
+                .into_iter()
+                .map(|key| EvidenceKeyEntry {
+                    key: key.to_owned(),
+                    order: 0,
+                })
+                .collect(),
+            accessible_properties: LicencedProducts::default(),
+        }
+    }
+
     fn engine_with_dummy_client() -> CloudRequestEngine {
         struct Dummy;
         impl CloudHttpClient for Dummy {
@@ -762,9 +858,12 @@ mod tests {
                 Err("not used".to_owned())
             }
         }
+        // A supplied state means the builder makes no discovery call, so the
+        // dummy client (which would error) is never used during build.
         CloudRequestEngine::builder()
             .resource_key("rk")
             .http_client(Arc::new(Dummy))
+            .set_state(sample_state())
             .build()
             .unwrap()
     }
@@ -795,10 +894,12 @@ mod tests {
     #[test]
     fn build_uses_builtin_client_when_reqwest_enabled() {
         // With the feature on and no client supplied, the built-in reqwest client
-        // is constructed and the engine builds.
+        // is constructed and the engine builds. A supplied state keeps the build
+        // offline (no discovery fetch), so the test does not touch the network.
         assert!(
             CloudRequestEngine::builder()
                 .resource_key("rk")
+                .set_state(sample_state())
                 .build()
                 .is_ok(),
             "the built-in reqwest client should be used when no client is supplied"
@@ -820,6 +921,7 @@ mod tests {
             .resource_key("rk")
             .endpoint("https://example.test/api")
             .http_client(Arc::new(NoopClient))
+            .set_state(sample_state())
             .build()
             .unwrap();
         assert_eq!(engine.data_endpoint(), "https://example.test/api/json");

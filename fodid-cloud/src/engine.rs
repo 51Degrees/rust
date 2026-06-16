@@ -358,9 +358,16 @@ impl Default for FodIdCloudEngineBuilder {
 mod tests {
     use super::*;
     use crate::data::FodIdData;
-    use fiftyone_cloud_request_engine::{CloudHttpClient, CloudHttpRequest, CloudHttpResponse};
+    use fiftyone_cloud_request_engine::{
+        CloudEngineState, CloudHttpClient, CloudHttpRequest, CloudHttpResponse,
+    };
 
     /// A request engine wired to a stub HTTP client, so no network is touched.
+    ///
+    /// An empty state is supplied so the builder resolves without a discovery
+    /// fetch (the stub would otherwise error). The FODid engine reports its six
+    /// fixed identifier properties regardless of the cloud metadata, so an empty
+    /// accessible-properties set is fine here.
     fn request_engine() -> Arc<CloudRequestEngine> {
         struct Stub;
         impl CloudHttpClient for Stub {
@@ -375,6 +382,7 @@ mod tests {
             CloudRequestEngine::builder()
                 .resource_key("test-key")
                 .http_client(Arc::new(Stub))
+                .set_state(CloudEngineState::default())
                 .build()
                 .unwrap(),
         )

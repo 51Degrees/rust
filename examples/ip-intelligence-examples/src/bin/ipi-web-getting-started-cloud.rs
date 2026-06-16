@@ -37,7 +37,9 @@ use axum::extract::Query;
 use axum::response::Html;
 use axum::routing::get;
 use axum::Router;
-use fiftyone_ip_intelligence::{CloudRequestEngine, IpIntelligenceCloudEngine, IP_DATA_KEY};
+use fiftyone_ip_intelligence::{
+    CloudEngineState, CloudRequestEngine, IpIntelligenceCloudEngine, IP_DATA_KEY,
+};
 use fiftyone_pipeline_core::FlowElement;
 use fiftyone_pipeline_engines_fiftyone::ShareUsageElement;
 use fiftyone_pipeline_web::{WebIntegrationOptions, WebPipeline};
@@ -77,7 +79,17 @@ pub struct Options {
 /// client-side endpoints and the home page all share one built pipeline. It is
 /// returned (rather than served) so the integration test can drive it in process
 /// with `tower::ServiceExt::oneshot` while [`run`] serves it over TCP.
-pub fn build_app(resource_key: &str, endpoint: Option<&str>) -> anyhow::Result<Router> {
+///
+/// The request engine resolves its discovery (the accepted evidence keys and the
+/// accessible properties) when it builds. Passing `Some(state)` supplies that
+/// discovery up front so the build does no cloud call, which the integration test
+/// uses to assemble the app offline. Passing `None` lets the builder fetch the
+/// discovery from the cloud, which is the live path the binary takes.
+pub fn build_app(
+    resource_key: &str,
+    endpoint: Option<&str>,
+    state: Option<CloudEngineState>,
+) -> anyhow::Result<Router> {
     // Assemble the cloud IP-intelligence elements by hand rather than through the
     // facade's `build()`, because a web deployment must add the ShareUsageElement
     // (REQUIRED for web examples, forbidden for console examples) and the facade
@@ -89,6 +101,7 @@ pub fn build_app(resource_key: &str, endpoint: Option<&str>) -> anyhow::Result<R
     }
     let request_engine = Arc::new(
         request_builder
+            .set_state_opt(state)
             .build()
             .context("building the cloud request engine")?,
     );
@@ -132,7 +145,9 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     // constructed, and tokio forbids dropping a runtime from inside another
     // runtime's async context, so doing this work outside block_on avoids that
     // panic.
-    let app = build_app(&options.resource_key, options.endpoint.as_deref())?;
+    // No injected state on the live path: the builder fetches discovery from the
+    // cloud as it builds.
+    let app = build_app(&options.resource_key, options.endpoint.as_deref(), None)?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -296,22 +311,19 @@ mod tests {
 
     #[test]
     fn server_starts_and_serves_page_and_client_script() {
-        // The cloud pipeline needs a resource key. Without one, skip so a plain
-        // offline `cargo test` stays green; with one the full path is exercised.
-        let Some(resource_key) = examples_shared::resource_key_from_env() else {
-            eprintln!(
-                "skipping server_starts_and_serves_page_and_client_script: no resource key \
-                 (set 51DEGREES_RESOURCE_KEY to enable this test)"
-            );
-            return;
-        };
-        let endpoint = std::env::var("51D_CLOUD_ENDPOINT")
-            .ok()
-            .filter(|value| !value.is_empty());
-
-        // Build the app on this synchronous thread so the blocking HTTP clients it
-        // owns are created (and ultimately dropped) outside the async runtime.
-        let app = build_app(&resource_key, endpoint.as_deref()).expect("cloud app builds");
+        // This test only checks that the server serves its page, the client
+        // script and the CSS asset, none of which need real cloud data. So the
+        // app is built offline: a placeholder key plus an injected default state
+        // means the request engine resolves its discovery from that state and
+        // makes no cloud call as it builds. The per-request data POST then fails
+        // against the placeholder key, but the web integration suppresses that by
+        // default, so the page still renders with its static markup.
+        let app = build_app(
+            "resource-key-placeholder",
+            None,
+            Some(CloudEngineState::default()),
+        )
+        .expect("cloud app builds offline from an injected state");
 
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

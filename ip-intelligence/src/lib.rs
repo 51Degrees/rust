@@ -89,7 +89,9 @@ pub use fiftyone_native::PerformanceProfile;
 // own pipeline rather than use the convenience builder, or to add a 51Degrees
 // element (sequence, share-usage) around the engine.
 #[cfg(feature = "cloud")]
-pub use fiftyone_cloud_request_engine::{CloudRequestEngine, CloudRequestEngineBuilder};
+pub use fiftyone_cloud_request_engine::{
+    CloudEngineState, CloudRequestEngine, CloudRequestEngineBuilder,
+};
 #[cfg(feature = "cloud")]
 pub use fiftyone_ip_intelligence_cloud::{
     IpIntelligenceCloudEngine, IpIntelligenceCloudEngineBuilder,

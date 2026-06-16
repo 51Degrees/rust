@@ -35,7 +35,9 @@ use anyhow::Context;
 use axum::response::Html;
 use axum::routing::get;
 use axum::Router;
-use fiftyone_device_detection::{DeviceDetectionPipelineBuilder, DEVICE_DATA_KEY};
+use fiftyone_device_detection::{
+    CloudEngineState, DeviceDetectionPipelineBuilder, DEVICE_DATA_KEY,
+};
 use fiftyone_pipeline_core::FlowElement;
 use fiftyone_pipeline_web::{response_headers, WebIntegrationOptions, WebPipeline};
 use fiftyone_pipeline_web_axum::{register, FiftyOneResult, FiftyOneState};
@@ -67,11 +69,18 @@ pub struct Options {
 /// client-side endpoints and the home page all share one built pipeline. It is
 /// returned (rather than served) so the integration test can drive it in process
 /// with `tower::ServiceExt::oneshot` while [`run`] serves it over TCP.
-pub fn build_app(resource_key: &str) -> anyhow::Result<Router> {
+///
+/// The cloud request engine resolves its discovery (the accepted evidence keys
+/// and the accessible properties) when it builds. Passing `Some(state)` supplies
+/// that discovery up front so the build does no cloud call, which the integration
+/// test uses to assemble the app offline. Passing `None` lets the builder fetch
+/// the discovery from the cloud, which is the live path the binary takes.
+pub fn build_app(resource_key: &str, state: Option<CloudEngineState>) -> anyhow::Result<Router> {
     // Build the cloud device-detection pipeline. Usage sharing is REQUIRED for a
     // web example (it lets 51Degrees improve detection for everyone), so it is
     // turned on here, unlike the console examples where it must stay off.
     let pipeline = DeviceDetectionPipelineBuilder::cloud(resource_key)
+        .set_state_opt(state)
         .share_usage(true)
         .build()
         .context("building the cloud device-detection pipeline")?;
@@ -107,7 +116,9 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     // constructed, and tokio forbids dropping a runtime from inside another
     // runtime's async context, so doing this work outside block_on avoids that
     // panic.
-    let app = build_app(&options.resource_key)?;
+    // No injected state on the live path: the builder fetches discovery from the
+    // cloud as it builds.
+    let app = build_app(&options.resource_key, None)?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -277,20 +288,21 @@ mod tests {
 
     #[test]
     fn server_starts_and_serves_page_and_client_script() {
-        // The cloud pipeline needs a resource key. Without one, skip so a plain
-        // offline `cargo test` stays green; with one the full path is exercised.
-        let Some(resource_key) = examples_shared::resource_key_from_env() else {
-            eprintln!(
-                "skipping server_starts_and_serves_page_and_client_script: no resource key \
-                 (set 51DEGREES_RESOURCE_KEY to enable this test)"
-            );
-            return;
-        };
-
+        // This test only checks that the server serves its page and the client
+        // script, neither of which needs real cloud data. So the app is built
+        // offline: a placeholder key plus an injected default state means the
+        // cloud request engine resolves its discovery from that state and makes
+        // no cloud call as it builds. The per-request data POST then fails against
+        // the placeholder key, but the web integration suppresses that by default,
+        // so the page still renders with its static markup and generated script.
         let runtime = runtime();
         // Build the app outside the request futures so it (and its blocking HTTP
         // client) is owned and dropped here on the plain test thread.
-        let app = build_app(&resource_key).unwrap();
+        let app = build_app(
+            "resource-key-placeholder",
+            Some(CloudEngineState::default()),
+        )
+        .unwrap();
 
         let (page, script) = runtime.block_on(async {
             // The page renders (200, HTML) even before the client round trip.
@@ -316,14 +328,15 @@ mod tests {
 
     #[test]
     fn static_assets_are_served() {
-        // The static assets are embedded in the binary, so they serve without a
-        // resource key or any detection happening.
-        let Some(resource_key) = examples_shared::resource_key_from_env() else {
-            eprintln!("skipping static_assets_are_served: no resource key");
-            return;
-        };
+        // The static assets are embedded in the binary, so they serve without any
+        // detection happening. The app is built offline with a placeholder key and
+        // an injected default state, so the build makes no cloud call.
         let runtime = runtime();
-        let app = build_app(&resource_key).unwrap();
+        let app = build_app(
+            "resource-key-placeholder",
+            Some(CloudEngineState::default()),
+        )
+        .unwrap();
         let css = runtime.block_on(async { dispatch(&app, ASSETS_CSS_ROUTE).await });
         assert_eq!(css.status, StatusCode::OK);
         assert_eq!(
@@ -335,20 +348,23 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a live cloud resource key and reachable cloud; the request engine now fetches discovery at build time"]
     fn accept_ch_is_emitted_for_a_client_hints_browser() {
         // End-to-end check of the cloud Accept-CH path. With a resource key, a
         // request from a Client-Hints-capable browser (Chrome) must come back
-        // with an Accept-CH response header: the cloud engine discovers its
-        // SetHeader* properties on its first process, the set-headers element
-        // turns them into Accept-CH and the middleware applies it to the
-        // response. Skips without a key so an offline `cargo test` stays green.
+        // with an Accept-CH response header. The cloud engine learns its
+        // SetHeader* properties from the discovery the request engine resolves as
+        // it builds, the set-headers element turns them into Accept-CH and the
+        // middleware applies it to the response. This needs a live key and a
+        // reachable cloud, so it is ignored by default and run explicitly.
         let Some(resource_key) = examples_shared::resource_key_from_env() else {
             eprintln!("skipping accept_ch_is_emitted_for_a_client_hints_browser: no resource key");
             return;
         };
 
         let runtime = runtime();
-        let app = build_app(&resource_key).unwrap();
+        // None on the live path: the builder fetches discovery from the cloud.
+        let app = build_app(&resource_key, None).unwrap();
         let (status, has_accept_ch) = runtime.block_on(async {
             let response = app
                 .clone()

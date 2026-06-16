@@ -159,11 +159,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pipeline_builds_offline_with_origin() {
-        // Building the pipeline must not require a network round trip; the
-        // request engine fetches its metadata lazily on first use.
-        let options = ExampleOptions::with_resource_key("resource-key-placeholder".to_owned());
-        let pipeline = build_pipeline(&options).expect("the cloud pipeline should build offline");
+    fn pipeline_builds_offline_with_injected_state() {
+        // The request engine fetches its discovery state from the cloud as it
+        // builds, so an offline build needs a previously exported state. With one
+        // injected, the same two-element pipeline assembles without a network call.
+        use fiftyone_device_detection::CloudEngineState;
+
+        let request_engine = Arc::new(
+            CloudRequestEngine::builder()
+                .resource_key("resource-key-placeholder")
+                .cloud_request_origin("https://example.com")
+                .set_state(CloudEngineState::default())
+                .build()
+                .expect("the request engine should build offline from an injected state"),
+        );
+        let device_engine = DeviceDetectionCloudEngine::builder()
+            .cloud_request_engine(request_engine.clone())
+            .try_build()
+            .expect("the device engine should build");
+        let pipeline = Pipeline::builder()
+            .add_element(request_engine as Arc<dyn FlowElement>)
+            .add_element(Arc::new(device_engine))
+            .build()
+            .expect("the cloud pipeline should build");
         // Two elements: the request engine and the device engine.
         assert_eq!(pipeline.flow_elements().len(), 2);
     }

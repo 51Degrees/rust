@@ -38,27 +38,41 @@
 //!
 //! On [`fiftyone_pipeline_core::FlowElement::process`] the engine:
 //!
-//! 1. Lazily fetches the accepted evidence keys for the resource key on first
-//!    use (see [lazy discovery](#lazy-discovery)).
-//! 2. Filters the flow data's evidence down to the keys the server accepts and
-//!    strips each key's prefix following the evidence precedence rules, so
-//!    `query.user-agent` becomes `user-agent` and a query value beats a header
-//!    value of the same name.
-//! 3. POSTs the result as url-encoded form data (with the `resource` field) to
+//! 1. Filters the flow data's evidence down to the keys the server accepts (the
+//!    accepted-evidence filter was resolved at build time, see
+//!    [discovery](#discovery)) and strips each key's prefix following the evidence
+//!    precedence rules, so `query.user-agent` becomes `user-agent` and a query
+//!    value beats a header value of the same name.
+//! 2. POSTs the result as url-encoded form data (with the `resource` field) to
 //!    the `json` endpoint.
-//! 4. Stores the raw JSON response body in its [`CloudRequestData`] under the
+//! 3. Stores the raw JSON response body in its [`CloudRequestData`] under the
 //!    `cloud` data key.
 //!
-//! ## Lazy discovery
+//! ## Discovery
 //!
 //! The accepted evidence keys (`evidencekeys`) and accessible properties
 //! (`accessibleproperties`) both depend on the resource key, so they are fetched
-//! from the cloud. To stop a temporarily unavailable cloud breaking pipeline
-//! construction, that fetch is deferred to the first
-//! [`fiftyone_pipeline_core::FlowElement::process`] call and cached behind a
-//! thread-safe [`once_cell::sync::OnceCell`]. Under
-//! `suppress_process_exceptions`, a discovery failure is recorded on the flow
-//! data and the pipeline keeps running with a degraded result.
+//! from the cloud. The builder fetches both as it builds the engine, so a built
+//! engine is fully resolved and immutable with no lazy first-use discovery. If
+//! either fetch fails, [`CloudRequestEngineBuilder::build`] returns an error
+//! rather than producing a half-initialised engine.
+//!
+//! Because both results depend only on the resource key, a consumer can persist
+//! them and skip the build-time fetch on the next start. The builder retains the
+//! state it resolves, so [`CloudRequestEngineBuilder::export_state`] returns a
+//! serializable [`CloudEngineState`] snapshot after a build, and
+//! [`CloudRequestEngineBuilder::set_state`] injects one back in. The engine holds
+//! only the working values it needs and knows nothing about the snapshot. This is
+//! aimed at short-lived hosts such as `wasm32-wasip1` edge runtimes, where
+//! repeating the two round-trips on every cold start would be wasteful.
+//!
+//! This build-time resolution is a deliberate deviation from the specification's
+//! [updated start-up design](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/pipeline-elements/cloud-request-engine.md#updated-design),
+//! which makes discovery lazy (deferred to the first `Process`) so a
+//! `SuppressProcessExceptions` pipeline can absorb a cloud outage at start-up.
+//! Here the builder returns a `Result`, which a caller can always handle, and the
+//! `set_state` path lets a host that must tolerate an unavailable cloud build from
+//! a cached snapshot instead.
 //!
 //! ## Recovery mode
 //!
@@ -93,6 +107,7 @@ mod http;
 mod properties;
 mod recovery;
 mod response;
+mod state;
 
 pub use constants::{
     CLOUD_URI_DEFAULT, ELEMENT_DATA_KEY, EVIDENCE_KEYS_FILENAME,
@@ -108,3 +123,4 @@ pub use http::{CloudHttpClient, CloudHttpRequest, CloudHttpResponse, HttpMethod}
 pub use properties::{CloudPropertyMetaData, LicencedProducts, ProductMetaData};
 pub use recovery::{RecoveryConfig, RecoveryGate};
 pub use response::{cloud_error, parse_retry_after, validate_response, ParsedResponse};
+pub use state::{CloudEngineState, EvidenceKeyEntry};

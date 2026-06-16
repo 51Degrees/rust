@@ -27,7 +27,8 @@
 use std::sync::{Arc, Mutex};
 
 use fiftyone_cloud_request_engine::{
-    CloudHttpClient, CloudHttpRequest, CloudHttpResponse, CloudRequestEngine, HttpMethod,
+    CloudEngineState, CloudHttpClient, CloudHttpRequest, CloudHttpResponse, CloudRequestEngine,
+    EvidenceKeyEntry, HttpMethod, LicencedProducts,
 };
 use fiftyone_pipeline_core::{Error, Evidence, Pipeline};
 
@@ -80,17 +81,29 @@ impl FakeClient {
 impl CloudHttpClient for FakeClient {
     fn send(&self, request: &CloudHttpRequest) -> Result<CloudHttpResponse, String> {
         self.requests.lock().unwrap().push(request.clone());
-        let slot = if request.url.contains("evidencekeys") {
-            &self.evidence_keys
+        // The builder fetches evidencekeys and accessibleproperties as it builds
+        // the engine. A test that does not care about discovery leaves those slots
+        // unset and gets a sensible default, so the build still succeeds; a test
+        // exercising discovery sets them explicitly (including to an error).
+        if request.url.contains("evidencekeys") {
+            self.evidence_keys
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| FakeClient::ok(r#"["header.user-agent","query.user-agent"]"#))
         } else if request.url.contains("accessibleproperties") {
-            &self.properties
+            self.properties
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| FakeClient::ok(r#"{"Products":{}}"#))
         } else {
-            &self.data
-        };
-        slot.lock()
-            .unwrap()
-            .clone()
-            .unwrap_or_else(|| Err("no scripted response".to_owned()))
+            self.data
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| Err("no scripted response".to_owned()))
+        }
     }
 }
 
@@ -131,8 +144,9 @@ fn happy_path_stores_raw_json_under_cloud_key() {
     );
     assert!(cloud.process_started());
 
-    // Two requests: the lazy evidencekeys discovery, then the data POST.
-    assert_eq!(client.request_count(), 2);
+    // Three requests: evidencekeys and accessibleproperties discovery at build
+    // time, then the data POST on process.
+    assert_eq!(client.request_count(), 3);
 }
 
 #[test]
@@ -288,30 +302,23 @@ fn cloud_error_response_raises_cloud_request_error_when_not_suppressed() {
 }
 
 #[test]
-fn discovery_failure_is_suppressed_and_pipeline_continues() {
+fn discovery_failure_fails_the_build() {
     let client = Arc::new(FakeClient::default());
-    // The evidencekeys discovery fails: the cloud is unavailable.
+    // The evidencekeys discovery fails: the cloud is unavailable. Because the
+    // builder fetches discovery as it builds the engine, the build itself fails
+    // rather than deferring the error to process time.
     client.set_evidence_keys(Err("connection refused".to_owned()));
 
-    let engine = engine_with(client);
-    let pipeline = Pipeline::builder()
-        .add_element(Arc::new(engine))
-        .suppress_process_exceptions(true)
-        .build()
-        .unwrap();
-
-    let mut data =
-        pipeline.create_flow_data_with(Evidence::builder().add("header.user-agent", "UA").build());
-    // Processing does not abort: the error is recorded, not thrown.
-    data.process().unwrap();
-    assert!(
-        !data.errors().is_empty(),
-        "the discovery failure should be recorded"
-    );
-    assert!(matches!(
-        data.errors()[0].source,
-        Error::CloudRequest { .. }
-    ));
+    let result = CloudRequestEngine::builder()
+        .resource_key("test-resource-key")
+        .endpoint("https://cloud.example.test/api/v4/")
+        .http_client(client)
+        .build();
+    match result {
+        Err(Error::CloudRequest { .. }) => {}
+        Ok(_) => panic!("expected the build to fail when discovery cannot reach the cloud"),
+        Err(other) => panic!("unexpected error {other:?}"),
+    }
 }
 
 #[test]
@@ -340,20 +347,29 @@ fn warnings_are_stored_not_raised() {
 }
 
 #[test]
-fn accessible_properties_are_fetched_and_cached() {
+fn accessible_properties_are_resolved_at_build() {
     let client = Arc::new(FakeClient::default());
     client.set_properties(FakeClient::ok(
         r#"{"Products":{"device":{"DataTier":"CloudV4","Properties":[{"Name":"IsMobile","Type":"Bool"}]}}}"#,
     ));
 
     let engine = engine_with(client.clone());
+    // Discovery ran at build (evidencekeys + accessibleproperties), so the
+    // accessor returns the resolved value and makes no further request.
+    let after_build = client.request_count();
+    assert_eq!(
+        after_build, 2,
+        "build fetched evidencekeys and accessibleproperties"
+    );
     let products = engine.public_properties().unwrap();
     let device = products.products.get("device").unwrap();
     assert_eq!(device.properties[0].name, "IsMobile");
-
-    // A second call uses the cache, so no further request is made.
     let _ = engine.public_properties().unwrap();
-    assert_eq!(client.request_count(), 1);
+    assert_eq!(
+        client.request_count(),
+        after_build,
+        "the accessor performs no I/O"
+    );
 }
 
 #[test]
@@ -392,10 +408,12 @@ fn retry_after_is_propagated_on_429() {
 }
 
 #[test]
-fn recovery_mode_blocks_after_repeated_failures() {
+fn recovery_mode_blocks_after_repeated_data_failures() {
     let client = Arc::new(FakeClient::default());
-    // Every request fails at the transport level.
-    client.set_evidence_keys(Err("connection refused".to_owned()));
+    // Discovery succeeds so the engine builds; every data POST then fails at the
+    // transport level, so the recovery gate trips and later POSTs are blocked.
+    client.set_evidence_keys(FakeClient::ok(r#"["header.user-agent"]"#));
+    client.set_properties(FakeClient::ok(r#"{"Products":{}}"#));
     client.set_data(Err("connection refused".to_owned()));
 
     let engine = CloudRequestEngine::builder()
@@ -407,14 +425,19 @@ fn recovery_mode_blocks_after_repeated_failures() {
         .recovery_seconds(60.0)
         .build()
         .unwrap();
+
+    // The two successful discovery fetches happened at build time.
+    let after_build = client.request_count();
+    assert_eq!(after_build, 2);
+
     let pipeline = Pipeline::builder()
         .add_element(Arc::new(engine))
         .suppress_process_exceptions(true)
         .build()
         .unwrap();
 
-    // Drive several requests; each discovery attempt fails and records a
-    // failure, so the gate trips and later requests are short-circuited.
+    // Drive several requests; each data POST fails and records a failure, so the
+    // gate trips and later POSTs are short-circuited.
     for _ in 0..5 {
         let mut data = pipeline
             .create_flow_data_with(Evidence::builder().add("header.user-agent", "UA").build());
@@ -422,11 +445,189 @@ fn recovery_mode_blocks_after_repeated_failures() {
         assert!(!data.errors().is_empty());
     }
 
-    // Once recovery has tripped, the gate blocks before any HTTP call, so the
-    // recorded request count stays well below the five attempts.
+    // Once recovery has tripped, the gate blocks before the HTTP call, so fewer
+    // than five data POSTs were attempted.
+    let data_posts = client.request_count() - after_build;
     assert!(
-        client.request_count() < 5,
-        "recovery gate should suppress some requests, made {}",
-        client.request_count()
+        data_posts < 5,
+        "recovery gate should suppress some data POSTs, made {data_posts}"
+    );
+}
+
+/// Build a state snapshot with one accepted evidence key and one product
+/// property, the kind a consumer would persist and re-inject.
+fn sample_state() -> CloudEngineState {
+    CloudEngineState {
+        evidence_keys: vec![EvidenceKeyEntry {
+            key: "header.user-agent".to_owned(),
+            order: 0,
+        }],
+        accessible_properties: LicencedProducts::parse(
+            r#"{"Products":{"device":{"DataTier":"CloudV4","Properties":[{"Name":"IsMobile","Type":"Bool"}]}}}"#,
+        )
+        .unwrap(),
+    }
+}
+
+#[test]
+fn injected_state_skips_discovery_and_makes_no_discovery_request() {
+    let client = Arc::new(FakeClient::default());
+    // Only the data endpoint is scripted. Because a state is injected, the builder
+    // makes no evidencekeys or accessibleproperties request at all.
+    client.set_data(FakeClient::ok(r#"{"device":{"ismobile":true}}"#));
+
+    let engine = CloudRequestEngine::builder()
+        .resource_key("test-resource-key")
+        .endpoint("https://cloud.example.test/api/v4/")
+        .http_client(client.clone())
+        .set_state(sample_state())
+        .build()
+        .unwrap();
+
+    // The injected properties are available, and the build made no request.
+    let products = engine.public_properties().unwrap();
+    assert_eq!(
+        products.products.get("device").unwrap().properties[0].name,
+        "IsMobile"
+    );
+    assert_eq!(
+        client.request_count(),
+        0,
+        "no discovery request when state is injected"
+    );
+
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .build()
+        .unwrap();
+    let mut data = pipeline.create_flow_data_with(
+        Evidence::builder()
+            .add("header.user-agent", "UA")
+            .add("cookie.not-accepted", "should-be-dropped")
+            .build(),
+    );
+    data.process().unwrap();
+
+    // Exactly one request: the data POST. Discovery was skipped entirely.
+    assert_eq!(
+        client.request_count(),
+        1,
+        "only the data POST should be made when state is injected"
+    );
+    let requests = client.requests.lock().unwrap();
+    let data_request = requests
+        .iter()
+        .find(|r| r.method == HttpMethod::Post)
+        .expect("a POST to the data endpoint");
+    // The injected evidence filter was applied: the accepted header is present
+    // and stripped, the non-accepted cookie is dropped.
+    assert!(data_request
+        .form
+        .iter()
+        .any(|(k, v)| k == "user-agent" && v == "UA"));
+    assert!(!data_request.form.iter().any(|(k, _)| k == "not-accepted"));
+}
+
+#[test]
+fn injected_state_makes_no_discovery_request_at_build() {
+    // When a state is injected the builder makes no discovery request. A client
+    // that errors on every call proves the build never touches it for discovery.
+    // The builder is kept so its retained state can be exported after the build.
+    let client = Arc::new(FakeClient::default());
+    let mut builder = CloudRequestEngine::builder()
+        .resource_key("rk")
+        .http_client(client.clone())
+        .set_state(sample_state());
+    let engine = builder.build().unwrap();
+
+    // Both discovery results resolve from the injected state with no request.
+    assert!(engine.has_loaded_metadata());
+    let state = builder.export_state().expect("the builder holds the state");
+    assert_eq!(state.evidence_keys.len(), 1);
+    assert_eq!(client.request_count(), 0);
+}
+
+#[test]
+fn exported_state_round_trips_through_serde_and_back_into_a_builder() {
+    // Serialize an exported state and read it back, the way a host store would.
+    let original = sample_state();
+    let json = serde_json::to_string(&original).unwrap();
+    let restored: CloudEngineState = serde_json::from_str(&json).unwrap();
+
+    // Inject the restored state into a fresh builder. A client that errors on
+    // every call proves the build relies entirely on the injected values. The
+    // builder retains the state, so it exports the same snapshot it was given.
+    let client = Arc::new(FakeClient::default());
+    let mut builder = CloudRequestEngine::builder()
+        .resource_key("rk")
+        .http_client(client.clone())
+        .set_state(restored);
+    let _engine = builder.build().unwrap();
+
+    let exported = builder.export_state().expect("the builder holds the state");
+    assert_eq!(
+        client.request_count(),
+        0,
+        "round-tripped state needs no fetch"
+    );
+    assert_eq!(exported.evidence_keys, original.evidence_keys);
+    assert_eq!(
+        exported
+            .accessible_properties
+            .products
+            .get("device")
+            .unwrap()
+            .properties[0]
+            .name,
+        "IsMobile"
+    );
+}
+
+#[test]
+fn exported_state_returns_the_build_time_discovery_when_nothing_is_injected() {
+    // With no injected state, the builder fetches discovery as it builds: one
+    // evidencekeys fetch and one accessibleproperties fetch. The builder retains
+    // the result, so exporting returns those resolved values with no further
+    // request.
+    let client = Arc::new(FakeClient::default());
+    client.set_evidence_keys(FakeClient::ok(
+        r#"["header.user-agent","query.user-agent"]"#,
+    ));
+    client.set_properties(FakeClient::ok(
+        r#"{"Products":{"device":{"Properties":[{"Name":"IsMobile","Type":"Bool"}]}}}"#,
+    ));
+
+    let mut builder = CloudRequestEngine::builder()
+        .resource_key("test-resource-key")
+        .endpoint("https://cloud.example.test/api/v4/")
+        .http_client(client.clone());
+    let _engine = builder.build().unwrap();
+    assert_eq!(
+        client.request_count(),
+        2,
+        "the builder fetched evidencekeys and accessibleproperties"
+    );
+
+    let state = builder.export_state().expect("the builder holds the state");
+    // The evidence keys are lowercased and sorted in the snapshot.
+    let keys: Vec<&str> = state.evidence_keys.iter().map(|e| e.key.as_str()).collect();
+    assert_eq!(keys, vec!["header.user-agent", "query.user-agent"]);
+    assert_eq!(
+        state
+            .accessible_properties
+            .products
+            .get("device")
+            .unwrap()
+            .properties[0]
+            .name,
+        "IsMobile"
+    );
+
+    // Exporting performs no I/O, so the request count is unchanged.
+    let _ = builder.export_state();
+    assert_eq!(
+        client.request_count(),
+        2,
+        "export performs no further request"
     );
 }

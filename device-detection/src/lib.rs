@@ -126,7 +126,9 @@ pub use fiftyone_device_detection_cloud::{
 };
 
 #[cfg(feature = "cloud")]
-pub use fiftyone_cloud_request_engine::{CloudRequestEngine, CloudRequestEngineBuilder};
+pub use fiftyone_cloud_request_engine::{
+    CloudEngineState, CloudRequestEngine, CloudRequestEngineBuilder,
+};
 
 // ---------------------------------------------------------------------------
 // The convenience top-level pipeline builder.
@@ -361,6 +363,7 @@ pub struct DeviceDetectionCloudPipelineBuilder {
     endpoint: Option<String>,
     share_usage: bool,
     hardware_profile: bool,
+    cloud_state: Option<CloudEngineState>,
 }
 
 #[cfg(feature = "cloud")]
@@ -372,6 +375,7 @@ impl DeviceDetectionCloudPipelineBuilder {
             endpoint: None,
             share_usage: false,
             hardware_profile: false,
+            cloud_state: None,
         }
     }
 
@@ -400,18 +404,41 @@ impl DeviceDetectionCloudPipelineBuilder {
         self
     }
 
+    /// Supply a previously exported [`CloudEngineState`], so the request engine
+    /// uses it instead of fetching the accepted evidence keys and accessible
+    /// properties from the cloud as it builds.
+    ///
+    /// This lets the pipeline be constructed offline, and avoids the build-time
+    /// cloud round-trip on a short-lived or frequently-restarted host. Obtain the
+    /// state from a built engine with [`CloudRequestEngine::export_state`].
+    pub fn set_state(mut self, state: CloudEngineState) -> Self {
+        self.cloud_state = Some(state);
+        self
+    }
+
+    /// Supply a [`CloudEngineState`] when one is available, otherwise let the
+    /// request engine fetch it from the cloud at build time.
+    pub fn set_state_opt(mut self, state: Option<CloudEngineState>) -> Self {
+        self.cloud_state = state;
+        self
+    }
+
     /// Assemble the pipeline.
     ///
-    /// No network call is made here, because the request engine fetches its
-    /// accessible properties lazily on first use, so the pipeline can be
-    /// constructed offline. Element order is: optional share usage, the cloud
-    /// request engine, then the cloud device engine (or, in
-    /// [`hardware_profile`](Self::hardware_profile) mode, the hardware-profile
-    /// engine).
+    /// Unless a [`CloudEngineState`] was supplied with
+    /// [`set_state`](Self::set_state), the request engine fetches its accepted
+    /// evidence keys and accessible properties from the cloud as it builds, so
+    /// this makes a network call and returns an error if the cloud is
+    /// unavailable. Supply a cached state to construct the pipeline offline.
+    /// Element order is: optional share usage, the cloud request engine, then the
+    /// cloud device engine (or, in [`hardware_profile`](Self::hardware_profile)
+    /// mode, the hardware-profile engine).
     pub fn build(self) -> Result<std::sync::Arc<Pipeline>> {
         use std::sync::Arc;
 
-        let mut request_builder = CloudRequestEngine::builder().resource_key(self.resource_key);
+        let mut request_builder = CloudRequestEngine::builder()
+            .resource_key(self.resource_key)
+            .set_state_opt(self.cloud_state);
         if let Some(endpoint) = self.endpoint {
             request_builder = request_builder.endpoint(endpoint);
         }
@@ -446,12 +473,15 @@ impl DeviceDetectionCloudPipelineBuilder {
 mod tests {
     #[cfg(feature = "cloud")]
     #[test]
-    fn cloud_pipeline_builds_without_network() {
-        // Constructing a cloud pipeline must not require a network round trip:
-        // the request engine fetches accessible properties lazily on first use.
+    fn cloud_pipeline_builds_offline_with_injected_state() {
+        // The request engine fetches its discovery state from the cloud as it
+        // builds, so a cloud pipeline can only be constructed offline when a
+        // previously exported state is supplied. With one injected, construction
+        // makes no network call.
         let pipeline = super::DeviceDetectionPipelineBuilder::cloud("resource-key-placeholder")
+            .set_state(super::CloudEngineState::default())
             .build()
-            .expect("a cloud pipeline should construct offline");
+            .expect("a cloud pipeline should construct offline from an injected state");
 
         // Confirm we got a usable pipeline back and can create flow data from it.
         let _data = pipeline.create_flow_data();

@@ -31,19 +31,26 @@
 //! `Name`), so [`serde`] aliases accept both PascalCase and camelCase to be
 //! robust to either casing.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The top-level accessible-properties response.
 ///
 /// `products` is keyed on the product name (for example `device`, `location`),
 /// each value listing the properties the resource key grants for that product.
-#[derive(Debug, Clone, Default, Deserialize)]
+///
+/// The deserialize aliases accept the cloud's PascalCase or camelCase field
+/// names. Serialization writes the snake_case field names, which deserialize
+/// again unchanged, and the products are held in a [`BTreeMap`] so the serialized
+/// form is deterministic (sorted by product name). The type therefore round-trips
+/// through [`CloudEngineState`](crate::CloudEngineState) byte-for-byte, so a
+/// discovered snapshot can be persisted, content-addressed and re-injected.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LicencedProducts {
     /// The accessible products, keyed by product name.
     #[serde(alias = "Products", alias = "products", default)]
-    pub products: HashMap<String, ProductMetaData>,
+    pub products: BTreeMap<String, ProductMetaData>,
 
     /// Any error messages returned alongside the property metadata.
     #[serde(alias = "Errors", alias = "errors", default)]
@@ -51,7 +58,7 @@ pub struct LicencedProducts {
 }
 
 /// The metadata for a single product the resource key grants access to.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProductMetaData {
     /// The accessible data tier for this product, when supplied.
     #[serde(alias = "DataTier", alias = "dataTier", default)]
@@ -67,7 +74,7 @@ pub struct ProductMetaData {
 /// The `value_type` is the JSON type name the cloud reports (for example
 /// `String`, `Bool`, `Array`, `WeightedString`), not a native Rust type, so a
 /// downstream cloud aspect engine can reconstruct the original shape.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CloudPropertyMetaData {
     /// The property name.
     #[serde(alias = "Name", alias = "name", default)]

@@ -385,12 +385,18 @@ impl Default for IpIntelligenceCloudEngineBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fiftyone_cloud_request_engine::{CloudHttpClient, CloudHttpRequest, CloudHttpResponse};
+    use fiftyone_cloud_request_engine::{
+        CloudEngineState, CloudHttpClient, CloudHttpRequest, CloudHttpResponse,
+    };
     use fiftyone_ip_intelligence_shared::IpIntelligenceData;
 
     /// A request engine wired to a stub HTTP client, so no network is touched.
-    /// Public-properties discovery will fail against this client, which exercises
-    /// the graceful fall back to inferred value kinds.
+    ///
+    /// An empty state is supplied so the builder resolves without a discovery
+    /// fetch (the stub would otherwise error). The empty accessible-properties set
+    /// leaves the engine with no metadata, which exercises the graceful fall back
+    /// to inferred value kinds, the same scenario discovery being unavailable
+    /// produced before.
     fn request_engine() -> Arc<CloudRequestEngine> {
         struct Stub;
         impl CloudHttpClient for Stub {
@@ -405,6 +411,7 @@ mod tests {
             CloudRequestEngine::builder()
                 .resource_key("test-key")
                 .http_client(Arc::new(Stub))
+                .set_state(CloudEngineState::default())
                 .build()
                 .unwrap(),
         )
