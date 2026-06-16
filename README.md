@@ -287,6 +287,13 @@ Opening the folder prompts to install the recommended extensions. Then run a
 task with Terminal then Run Task (Ctrl+Shift+B for the default build), and pick a
 configuration in the Run and Debug view to run or debug any example or test.
 
+On first open, rust-analyzer indexes the whole workspace and runs the `-sys`
+crate build scripts before code intelligence becomes active. Because of the size
+of this repo this can take several minutes, during which the inline Run and Debug
+lenses, completion and diagnostics will not appear yet. Wait for the
+rust-analyzer status in the bottom status bar to finish (or check View then
+Output then rust-analyzer Language Server) before expecting the buttons.
+
 ## Licence
 
 EUPL-1.2. See [LICENSE](LICENSE).
