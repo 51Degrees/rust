@@ -1,0 +1,26 @@
+[package]
+name = "fiftyone-device-detection-cloud"
+version = "0.1.0"
+description = "Cloud device-detection engine that maps the cloud JSON response to DeviceData."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+fiftyone-pipeline-core = { path = "../pipeline-core" }
+# default-features = false drops the data-update service (reqwest/notify), which
+# the cloud path never uses, so this crate builds for wasm32-wasip1.
+fiftyone-pipeline-engines = { path = "../pipeline-engines", default-features = false }
+fiftyone-device-detection-shared = { path = "../device-detection-shared" }
+fiftyone-cloud-request-engine = { path = "../cloud-request-engine", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+# Forward the cloud request engine's built-in reqwest client. Off by default so
+# this crate builds without reqwest (and so for wasm32-wasip1). A native consumer
+# enables it; a wasm consumer leaves it off and supplies its own CloudHttpClient.
+reqwest-client = ["fiftyone-cloud-request-engine/reqwest-client"]

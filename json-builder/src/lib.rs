@@ -1,0 +1,69 @@
+/* *********************************************************************
+ * This Original Work is copyright of 51 Degrees Mobile Experts Limited.
+ * Copyright 2026 51 Degrees Mobile Experts Limited, Davidson House,
+ * Forbury Square, Reading, Berkshire, United Kingdom RG1 3EU.
+ *
+ * This Original Work is licensed under the European Union Public Licence
+ * (EUPL) v.1.2 and is subject to its terms as set out below.
+ *
+ * If a copy of the EUPL was not distributed with this file, You can obtain
+ * one at https://opensource.org/licenses/EUPL-1.2.
+ *
+ * The 'Compatible Licences' set out in the Appendix to the EUPL (as may be
+ * amended by the European Commission) shall be deemed incompatible for
+ * the purposes of the Work and the provisions of the compatibility
+ * clause in Article 5 of the EUPL shall not apply.
+ *
+ * If using the Work as, or as part of, a network application, by
+ * including the attribution notice(s) required under Article 5 of the EUPL
+ * in the end user terms of the application under an appropriate heading,
+ * such notice(s) shall fulfill the requirements of that article.
+ * ********************************************************************* */
+
+//! # 51Degrees JSON builder
+//!
+//! The JSON builder element serialises every piece of element data in a
+//! [`fiftyone_pipeline_core::FlowData`] into a single JSON object and stores it
+//! on the flow data under the [`JSON_PROPERTY_KEY`] property of its own element
+//! data. It implements the
+//! [json-builder specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/pipeline-elements/json-builder.md).
+//!
+//! The JSON it produces is what the client-side `51Degrees.core.js` and the
+//! callback endpoint consume, so the JavaScript builder and the web layers
+//! depend on its exact shape. See [`JsonBuilderElement`] for the field
+//! conventions and a worked example.
+//!
+//! ## What it emits
+//!
+//! Each remaining element's data becomes a nested object keyed by that element's
+//! lowercased data key. Within it, every property is emitted by its lowercased
+//! name, plus the sibling keys described on [`JsonBuilderElement`]
+//! (`nullreason`, `delayexecution`, `evidenceproperties`). The list of
+//! JavaScript-typed property paths is collected into a top-level
+//! [`JAVASCRIPT_PROPERTIES_KEY`] array, and any flow errors are appended under
+//! [`ERRORS_KEY`].
+//!
+//! ## Determinism
+//!
+//! The serialiser uses `serde_json` with the `preserve_order` feature so the
+//! key order is the insertion order rather than a hash order. Insertion order is
+//! itself made deterministic by sorting element keys and property names, so the
+//! same flow data always yields byte-identical JSON. That stability is what lets
+//! downstream code compute a reliable ETag from the JSON.
+
+#![warn(missing_docs)]
+
+mod builder;
+mod constants;
+mod data;
+mod element;
+
+pub use builder::JsonBuilderElementBuilder;
+pub use constants::{DEFAULT_ELEMENT_EXCLUSION_LIST, DEFAULT_PROPERTY_EXCLUSION_LIST};
+pub use constants::{
+    DELAY_EXECUTION_SUFFIX, ERRORS_KEY, EVIDENCE_PROPERTIES_SUFFIX, JAVASCRIPT_PROPERTIES_KEY,
+    JSON_BUILDER_ELEMENT_DATA_KEY, JSON_PROPERTY_KEY, MAX_JAVASCRIPT_ITERATIONS,
+    NULL_REASON_SUFFIX, SEQUENCE_EVIDENCE_KEY,
+};
+pub use data::{JsonBuilderData, JSON_BUILDER_DATA_KEY};
+pub use element::JsonBuilderElement;

@@ -1,0 +1,17 @@
+[package]
+name = "fiftyone-caching"
+version = "0.1.0"
+description = "Sharded-LRU cache trait and default implementation for the 51Degrees pipeline."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+fiftyone-pipeline-core = { path = "../pipeline-core" }
+ahash.workspace = true
+# A current insertion-ordered hash map. Moving an entry to the back on access
+# and popping from the front gives least-recently-used eviction per shard.
+hashlink = "0.10"

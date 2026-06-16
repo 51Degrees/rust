@@ -1,0 +1,21 @@
+[package]
+name = "fiftyone-ip-intelligence-onpremise"
+version = "0.1.0"
+description = "On-premise IP-intelligence engine built over the safe fiftyone-native wrapper."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+fiftyone-pipeline-core = { path = "../pipeline-core" }
+fiftyone-pipeline-engines = { path = "../pipeline-engines" }
+fiftyone-ip-intelligence-shared = { path = "../ip-intelligence-shared" }
+# Enable only the IP Intelligence product of the native wrapper. This links IP
+# Intelligence's copy of common-cxx alone and never pulls in the Device
+# Detection copy, so the two ABI incompatible common-cxx builds never collide in
+# an IP Intelligence binary.
+fiftyone-native = { path = "../native", default-features = false, features = ["ipi"] }
+arc-swap.workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "fiftyone-ip-intelligence-sys"
+version = "0.1.0"
+description = "Raw FFI bindings to the Ipi IP-intelligence ABI in ip-intelligence-cxx, including the weighted getters. Builds and statically links the fiftyone-ip-intelligence-c native library."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+links = "fiftyone-ip-intelligence-c"
+build = "build.rs"
+
+[dependencies]
+# No dependency on fiftyone-common-sys. The IP Intelligence engine is compiled
+# with 64 bit file offsets (FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT) and links
+# its own copy of common-cxx. Pulling in the common crate's native library,
+# which is built with 32 bit offsets, would duplicate the common-cxx symbols at
+# an incompatible ABI and corrupt the data set header read. The handful of
+# shared common types are declared locally in the `common` module instead.
+
+[build-dependencies]
+cc = "1.2"

@@ -1,0 +1,21 @@
+[package]
+name = "fodid"
+version = "0.1.0"
+description = "Reader for the 51Did (51Degrees Identifier) value returned by the 51Degrees cloud service. Parses the OWID envelope and unpacks the usage flags, License Id and 32-byte probabilistic hash."
+keywords = ["51degrees", "fodid", "51did", "identifier", "owid"]
+categories = ["parser-implementations", "cryptography"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+owid.workspace = true
+
+[dev-dependencies]
+# Used only by the live cloud integration test (tests/cloud_51did.rs) to call
+# the 51Degrees cloud JSON endpoint and read its response.
+ureq = "2"
+serde_json = "1"

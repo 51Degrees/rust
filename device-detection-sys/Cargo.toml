@@ -1,0 +1,18 @@
+[package]
+name = "fiftyone-device-detection-sys"
+version = "0.1.0"
+description = "Raw FFI bindings to the Hash device-detection ABI in device-detection-cxx, built on fiftyone-common-sys."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+links = "fiftyone-device-detection-c"
+build = "build.rs"
+
+[dependencies]
+fiftyone-common-sys = { path = "../common-sys" }
+
+[build-dependencies]
+cc = "1.2"

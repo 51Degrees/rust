@@ -1,0 +1,59 @@
+name: Mustache Drift Check
+
+# The javascript-builder crate bundles a copy of JavaScriptResource.mustache
+# (javascript-builder/assets/JavaScriptResource.mustache). This is the same
+# client-side bootstrap template every 51Degrees JavaScriptBuilder element ships,
+# and it must stay byte-for-byte identical to the canonical upstream so the Rust
+# pipeline emits the same 51Degrees.core.js the other languages do.
+#
+# The canonical copy lives in pipeline-dotnet:
+#   FiftyOne.Pipeline.Elements/FiftyOne.Pipeline.JavaScriptBuilderElement/Templates/JavaScriptResource.mustache
+# This job downloads that file and diffs it against the bundled copy. A drift
+# fails the build so the bundled template is refreshed deliberately rather than
+# silently going stale.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # 04:00 every Monday, so upstream changes are caught even with no PR activity.
+    - cron: '0 4 * * 1'
+
+jobs:
+  mustache-drift:
+    name: JavaScriptResource.mustache drift
+    runs-on: ubuntu-latest
+    env:
+      BUNDLED: javascript-builder/assets/JavaScriptResource.mustache
+      UPSTREAM_REPO: 51Degrees/pipeline-dotnet
+      UPSTREAM_REF: main
+      UPSTREAM_PATH: FiftyOne.Pipeline.Elements/FiftyOne.Pipeline.JavaScriptBuilderElement/Templates/JavaScriptResource.mustache
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      - name: Download canonical upstream template
+        run: |
+          set -euo pipefail
+          url="https://raw.githubusercontent.com/${UPSTREAM_REPO}/${UPSTREAM_REF}/${UPSTREAM_PATH}"
+          echo "Fetching $url"
+          # --fail makes curl exit non-zero on a 404, which surfaces a moved
+          # upstream path instead of diffing against an HTML error page.
+          curl --fail --silent --show-error --location "$url" --output upstream.mustache
+          if [ ! -s upstream.mustache ]; then
+            echo "::error::Downloaded upstream template is empty. The upstream path may have moved: ${UPSTREAM_PATH}"
+            exit 1
+          fi
+
+      - name: Diff bundled template against upstream
+        run: |
+          set -euo pipefail
+          if diff -u "$BUNDLED" upstream.mustache; then
+            echo "Bundled JavaScriptResource.mustache matches the canonical upstream."
+          else
+            echo "::error file=${BUNDLED}::Bundled JavaScriptResource.mustache differs from the canonical upstream (${UPSTREAM_REPO}@${UPSTREAM_REF}). Refresh the bundled copy or update UPSTREAM_REF if the change is intentional."
+            exit 1
+          fi

@@ -1,0 +1,22 @@
+[package]
+name = "fiftyone-device-detection-onpremise"
+version = "0.1.0"
+description = "On-premise Hash device-detection engine built over the safe fiftyone-native wrapper."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+fiftyone-pipeline-core = { path = "../pipeline-core" }
+fiftyone-pipeline-engines = { path = "../pipeline-engines" }
+fiftyone-device-detection-shared = { path = "../device-detection-shared" }
+# Enable only the Device Detection product of the native wrapper. This links
+# Device Detection's copy of common-cxx alone and never pulls in the IP
+# Intelligence copy, so the two ABI incompatible common-cxx builds never collide
+# in a Device Detection binary.
+fiftyone-native = { path = "../native", default-features = false, features = ["dd"] }
+arc-swap.workspace = true
+chrono.workspace = true

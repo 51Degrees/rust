@@ -1,0 +1,47 @@
+[package]
+name = "fiftyone-native"
+version = "0.1.0"
+description = "Safe RAII wrapper over the native manager, results, evidence and exception types shared by Device Detection and IP Intelligence."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+# Device Detection and IP Intelligence each compile their own copy of the shared
+# common-cxx layer. Device Detection binds its copy through fiftyone-common-sys
+# (32 bit file offsets) and IP Intelligence binds its own copy inside
+# fiftyone-ip-intelligence-sys (64 bit file offsets). The two copies used to
+# export the same fiftyoneDegrees* C symbols, so a binary that linked both let
+# the linker resolve those duplicate symbols from only one copy, leaving the
+# other product reading its data file through the wrong, ABI incompatible common
+# implementation (Device Detection then reported CorruptData).
+#
+# That collision is now resolved at the source. The IP Intelligence build
+# compiles its private copy of common-cxx into an ipi_ prefixed symbol namespace
+# (see fiftyone-ip-intelligence-sys/src/symbol_prefix.h, force included by its
+# build.rs), so its common-cxx symbols no longer clash with the Device Detection
+# copy. Both products can therefore be linked into one binary and load real data
+# files side by side, which the combined smoke tests in tests/smoke.rs prove.
+#
+# The features are kept as a slimming knob, not an isolation requirement. "dd"
+# links Device Detection's common-cxx (via fiftyone-common-sys) and the Hash
+# engine. "ipi" links IP Intelligence (with its prefixed common-cxx). A consumer
+# that needs only one product can disable the default features and enable just
+# that one to avoid compiling the other engine.
+dd = ["dep:fiftyone-common-sys", "dep:fiftyone-device-detection-sys"]
+ipi = ["dep:fiftyone-ip-intelligence-sys"]
+
+# Both products are enabled by default and genuinely coexist in one binary now
+# that IP Intelligence's common-cxx is namespaced. The combined smoke tests load
+# both a Device Detection Hash file and an IP Intelligence file in the same
+# process and assert real values from each.
+default = ["dd", "ipi"]
+
+[dependencies]
+fiftyone-pipeline-core = { path = "../pipeline-core" }
+fiftyone-common-sys = { path = "../common-sys", optional = true }
+fiftyone-device-detection-sys = { path = "../device-detection-sys", optional = true }
+fiftyone-ip-intelligence-sys = { path = "../ip-intelligence-sys", optional = true }

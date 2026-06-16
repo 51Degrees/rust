@@ -1,0 +1,110 @@
+/* *********************************************************************
+ * This Original Work is copyright of 51 Degrees Mobile Experts Limited.
+ * Copyright 2026 51 Degrees Mobile Experts Limited, Davidson House,
+ * Forbury Square, Reading, Berkshire, United Kingdom RG1 3EU.
+ *
+ * This Original Work is licensed under the European Union Public Licence
+ * (EUPL) v.1.2 and is subject to its terms as set out below.
+ *
+ * If a copy of the EUPL was not distributed with this file, You can obtain
+ * one at https://opensource.org/licenses/EUPL-1.2.
+ *
+ * The 'Compatible Licences' set out in the Appendix to the EUPL (as may be
+ * amended by the European Commission) shall be deemed incompatible for
+ * the purposes of the Work and the provisions of the compatibility
+ * clause in Article 5 of the EUPL shall not apply.
+ *
+ * If using the Work as, or as part of, a network application, by
+ * including the attribution notice(s) required under Article 5 of the EUPL
+ * in the end user terms of the application under an appropriate heading,
+ * such notice(s) shall fulfill the requirements of that article.
+ * ********************************************************************* */
+
+//! The on-premise IP-intelligence aspect engine.
+//!
+//! This crate wraps the safe native IP Intelligence resource manager from
+//! [`fiftyone_native::ipi`] in a pipeline `FlowElement` so a `.ipi` data file
+//! can be queried as part of a 51Degrees pipeline.
+//!
+//! # What it produces
+//!
+//! The engine populates an [`IpIntelligenceDataBase`] (from the shared
+//! [`fiftyone_ip_intelligence_shared`] crate) under the shared
+//! [`IP_DATA_KEY`], the same element-data type and key the cloud engine
+//! populates. A consuming application can therefore swap the on-premise engine
+//! for the cloud one (or run both) and read the result the same way, satisfying
+//! the engine-compatibility requirement from the workspace coordination notes.
+//!
+//! Because IP Intelligence values are probabilistic, each property is read
+//! through the native *weighted* getter
+//! [`fiftyone_native::ipi::Results::values_weighted`], which returns every
+//! candidate value paired with its raw `u16` weighting (highest first). The
+//! engine parses each candidate into the property's value type (string, double
+//! or integer) and stores the resulting `Vec<WeightedValue<T>>` through the
+//! matching `set_weighted_*` builder on the data, so the typed accessors on
+//! [`IpIntelligenceData`] return the full weighted distribution.
+//!
+//! # On-premise specifics
+//!
+//! - **No results cache.** Native results need explicit cleanup and are not
+//!   safe to cache, so this engine never attaches a results cache (per the
+//!   coordination notes, only the cloud path may cache). It still embeds an
+//!   `AspectEngineBase` with no cache so its `process` flow matches the rest of
+//!   the engine layer.
+//! - **Driven from the client IP.** IP Intelligence is looked up from the client
+//!   IP string rather than a native evidence array, using
+//!   [`fiftyone_native::evidence::client_ip_from_evidence`]. The accepted
+//!   evidence keys are the IP keys ([`fiftyone_pipeline_core::constants::EVIDENCE_CLIENT_IP_KEY`],
+//!   the `query`/`server` client-ip variants and the 51Degrees-prefixed forms).
+//! - **Refreshable.** The loaded [`fiftyone_native::ipi::Manager`] lives behind
+//!   an [`arc_swap::ArcSwap`] so `OnPremiseAspectEngine::refresh` can hot-swap
+//!   a freshly reloaded data set while concurrent `process` calls keep using the
+//!   old one until the swap completes, as the data-updates specification
+//!   requires.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use std::sync::Arc;
+//! use fiftyone_pipeline_core::{Evidence, Pipeline};
+//! use fiftyone_pipeline_engines::AspectData;
+//! use fiftyone_ip_intelligence_shared::{IpIntelligenceData, IP_DATA_KEY};
+//! use fiftyone_ip_intelligence_onpremise::IpIntelligenceOnPremiseEngine;
+//! use fiftyone_native::PerformanceProfile;
+//!
+//! # fn main() -> fiftyone_pipeline_core::Result<()> {
+//! let engine = IpIntelligenceOnPremiseEngine::builder("51Degrees-LiteV41.ipi")
+//!     .performance_profile(PerformanceProfile::HighPerformance)
+//!     .build()?;
+//!
+//! let pipeline = Pipeline::builder().add_element(Arc::new(engine)).build()?;
+//! let mut data = pipeline.create_flow_data_with(
+//!     Evidence::builder().add("server.client-ip", "185.28.167.77").build(),
+//! );
+//! data.process()?;
+//!
+//! if let Some(ip) = data.get(IP_DATA_KEY) {
+//!     if let Ok(countries) = ip.registered_country().value() {
+//!         if let Some(top) = countries.first() {
+//!             println!("registered country = {} (weighting {})", top.value, top.weighting());
+//!         }
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+
+#![warn(missing_docs)]
+
+mod builder;
+mod engine;
+
+pub use builder::IpIntelligenceOnPremiseEngineBuilder;
+pub use engine::{IpIntelligenceOnPremiseEngine, DEFAULT_DATA_SOURCE_TIER, IP_EVIDENCE_KEYS};
+
+// Re-export the shared data type and key so a downstream application can depend
+// only on this crate and still read the result without importing the shared
+// crate directly.
+pub use fiftyone_ip_intelligence_shared::{
+    IpIntelligenceData, IpIntelligenceDataBase, IP_DATA_KEY, IP_DATA_KEY_NAME,
+};

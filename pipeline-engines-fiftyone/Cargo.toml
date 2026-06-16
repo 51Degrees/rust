@@ -1,0 +1,53 @@
+[package]
+name = "fiftyone-pipeline-engines-fiftyone"
+version = "0.1.0"
+description = "ShareUsage, SetHeaders and Sequence elements plus the FiftyOne metadata model for the 51Degrees pipeline."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+fiftyone-pipeline-core = { path = "../pipeline-core" }
+# default-features = false drops the data-update service (reqwest/notify), which
+# the elements in this crate never use, so the web crates that build on it reach
+# wasm32-wasip1. A consumer that needs the service enables the `data-update`
+# feature below.
+fiftyone-pipeline-engines = { path = "../pipeline-engines", default-features = false }
+thiserror.workspace = true
+ahash.workspace = true
+# GUID generation for the session id created by the Sequence element. The v4
+# feature gives random GUIDs.
+uuid = { version = "1", features = ["v4"] }
+# GZip compression of the usage-sharing XML payload before it is posted.
+flate2.workspace = true
+# Streaming XML writer used to build the usage-sharing payload. The crate is
+# small and writer-only which is all this element needs.
+quick-xml = "0.37"
+# Blocking HTTP client used by the usage-sharing background thread. The blocking
+# client runs on its own std::thread and does not need an async runtime. rustls
+# avoids a system OpenSSL dependency, matching the sibling engines crate. Optional
+# and gated behind the `share-usage-transport` feature: reqwest does not build for
+# wasm32-wasip1, so without the feature the usage-sharing element collects evidence
+# but does not transmit (or a consumer supplies its own transport through
+# ShareUsageElement::with_sender).
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"], optional = true }
+
+[features]
+# Both features are off by default so a default build carries no reqwest, notify
+# or tokio and compiles for wasm32-wasip1.
+#
+# share-usage-transport compiles the built-in blocking reqwest transport the
+# usage-sharing element posts through. Without it the element still runs as a
+# pipeline element but its sender is a no-op.
+share-usage-transport = ["dep:reqwest"]
+# data-update re-exports the engines data-update service (reqwest + notify) for
+# native and on-premise consumers that refresh data files. Off by default.
+data-update = ["fiftyone-pipeline-engines/data-update"]
+
+[dev-dependencies]
+# A local HTTP server is spun up in tests to capture the usage-sharing POST
+# without reaching the real 51Degrees endpoint.
+tiny_http = "0.12"
