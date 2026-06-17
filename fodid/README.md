@@ -81,8 +81,8 @@ let round_trip = fod_id.as_base64()?;
 
 Two 51Dids issued for the same device + IP + usage differ at the byte level
 because the envelope embeds a fresh timestamp and signature on each call. The
-byte-level difference is in the **envelope** (the wrapper). The **value**
-carried inside is stable. To decide whether two 51Dids refer to the same
+byte-level difference is in the **envelope**. The **value** carried inside is
+stable. To decide whether two 51Dids refer to the same
 browser instance, compare the values, never the full base64 envelopes.
 
 ```rust
