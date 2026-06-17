@@ -28,22 +28,23 @@
 //!
 //! ## What a 51Did is
 //!
-//! A 51Did is a signed envelope, encoded as an
-//! [OWID](https://github.com/SWAN-community/owid) (the SWAN community schema
-//! that defines the binary layout, signature and verification rules),
-//! wrapping a probabilistic value that two recipients can compare to decide
-//! whether they observed the same browser instance under the same usage
-//! purpose.
+//! A 51Did is described at three levels, and this crate keeps them distinct.
 //!
-//! The two layers are distinct:
-//!
-//! - The **51Did** is the *identifier*: the whole OWID envelope (version,
-//!   domain, date, payload, signature). It changes byte for byte every time
-//!   the cloud issues one, even for the same inputs, because the date and
-//!   signature change with each call.
-//! - The **value** is the [`FodId::hash`] field *inside* the payload. It is
-//!   stable across reissues for the same inputs, so two 51Dids are compared by
-//!   comparing their values, never their envelopes.
+//! - The **51Did** (51Degrees Identifier) is the identifier as a whole,
+//!   meaning the concept together with the rules for how it is issued,
+//!   compared and licensed. "A 51Did" means the identifier in this complete
+//!   sense, not any single field.
+//! - The **envelope** (also called the **wrapper**) is the data model that
+//!   carries a 51Did. It is a signed
+//!   [OWID](https://github.com/SWAN-community/owid) (the SWAN community schema
+//!   that defines the binary layout, signature and verification rules),
+//!   holding the version, domain, date, payload and signature. It changes
+//!   byte for byte every time the cloud issues one, even for the same inputs,
+//!   because the date and signature change with each call.
+//! - The **value** is the part of the envelope that is stable and comparable.
+//!   It is the [`FodId::hash`] field inside the payload. Two 51Dids for the
+//!   same inputs share the same value even though their envelopes differ.
+//!   Compare values, never envelopes.
 //!
 //! ## Identifier types
 //!

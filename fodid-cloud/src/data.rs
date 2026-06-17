@@ -30,8 +30,8 @@
 //!
 //! The cloud returns each identifier as a base64-encoded
 //! [OWID](https://github.com/SWAN-community/owid) envelope: a signed wrapper
-//! around the probabilistic value two recipients compare to decide whether they
-//! observed the same browser instance under the same usage purpose. This model
+//! around the value two recipients compare to decide whether they observed the
+//! same browser instance under the same usage purpose. This model
 //! exposes both layers:
 //!
 //! - the raw base64 string (for example through [`FodIdData::id_prob_global`]),

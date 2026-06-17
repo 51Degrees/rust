@@ -7,7 +7,7 @@
 
 ## Introduction
 
-A Rust reader for the **51Did** (51Degrees Identifier) value returned by the
+A Rust reader for the **51Did** (51Degrees Identifier) returned by the
 51Degrees cloud service. The
 [identifiers documentation](https://51degrees.com/documentation/_identifiers__index.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=51did)
 describes what a 51Did is and how it is used. This crate parses the 51Did byte
@@ -18,34 +18,47 @@ concept see the
 
 ## What a 51Did is
 
-A 51Did is a signed envelope, encoded as an
-[OWID](https://github.com/SWAN-community/owid) (the SWAN community schema that
-defines the binary layout, signature and verification rules), wrapping a
-probabilistic value that two recipients can compare to decide whether they
-observed the same browser instance under the same usage purpose.
+A 51Did is described at three levels, and this crate keeps them distinct.
 
-The two layers are distinct:
+- The **51Did** (51Degrees Identifier) is the identifier as a whole, meaning
+  the concept together with the rules for how it is issued, compared and
+  licensed. "A 51Did" means the identifier in this complete sense, not any
+  single field.
+- The **envelope** (also called the **wrapper**) is the data model that
+  carries a 51Did. It is a signed
+  [OWID](https://github.com/SWAN-community/owid) (the SWAN community schema
+  that defines the binary layout, signature and verification rules), holding
+  the version, domain, date, payload and signature. It changes byte for byte
+  every time the cloud issues one, even for the same inputs, because the date
+  and signature change with each call.
+- The **value** is the part of the envelope that is stable and comparable. It
+  is the payload bytes after the flags and license fields, read through
+  [`FodId::hash`]. Two 51Dids for the same inputs share the same value even
+  though their envelopes differ. Compare values, never envelopes.
 
-- The **51Did** is the *identifier*: the whole OWID envelope (version, domain,
-  date, payload, signature). It changes byte for byte every time the cloud
-  issues one, even for the same inputs, because the date and signature change
-  with each call.
-- The **probabilistic value** is the 32-byte `hash` field *inside* the
-  payload. It is stable across reissues for the same device, IP and usage.
-  Compare two 51Dids by comparing their hashes, never the envelopes.
+## Identifier types
 
-## Payload layout (37 bytes)
+Bits 6-7 of the flags byte select the [`IdType`], which determines the length
+and meaning of the value:
 
-| Offset | Length | Field      | Type                              |
-|-------:|-------:|------------|-----------------------------------|
-|      0 |      1 | Flags      | `u8` usage-flags bit mask         |
-|      1 |      4 | LicenseId  | `u32` little endian               |
-|      5 |     32 | Hash       | SHA-256 probabilistic identifier  |
+- [`IdType::Probabilistic`] (the default; legacy identifiers decode as this)
+  and [`IdType::HashedEmail`] carry a 32-byte SHA-256.
+- [`IdType::Random`] carries a 16-byte server-generated GUID.
+- [`IdType::Reserved`] is not yet assigned and is parsed best effort.
+
+## Payload layout
+
+| Offset | Length | Field                                              |
+|-------:|-------:|----------------------------------------------------|
+|      0 |      1 | Flags (bits 0-2 usage, bits 6-7 type)              |
+|      1 |      4 | LicenseId (`u32` little endian)                    |
+|      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
+|      5 |     16 | Value: GUID (Random)                               |
 
 [`FodId`] derefs to the underlying [`owid::Owid`], so a `FodId` value can be
 used directly for all OWID level concerns (domain, date, payload bytes,
 signature, base64 round tripping and signature verification) and adds typed
-accessors for the three payload fields on top.
+accessors for the payload fields on top.
 
 ## Usage
 
@@ -56,7 +69,7 @@ let fod_id = FodId::from_base64(base64_from_cloud_service)?;
 
 let flags = fod_id.flags();          // u8
 let license_id = fod_id.license_id(); // u32
-let hash = fod_id.hash();            // &[u8; 32], the probabilistic value
+let hash = fod_id.hash();            // the value bytes (SHA-256 or GUID)
 
 // Inherited OWID level fields and operations, available through Deref.
 let domain = &fod_id.domain;
@@ -68,20 +81,21 @@ let round_trip = fod_id.as_base64()?;
 
 Two 51Dids issued for the same device + IP + usage differ at the byte level
 because the envelope embeds a fresh timestamp and signature on each call. The
-byte-level difference is in the *identifier* (the wrapper); the *probabilistic
-value* carried inside is stable. To decide whether two 51Dids refer to the
-same browser instance, compare the hashes, never the full base64 identifiers.
+byte-level difference is in the **envelope** (the wrapper). The **value**
+carried inside is stable. To decide whether two 51Dids refer to the same
+browser instance, compare the values, never the full base64 envelopes.
 
 ```rust
 let a = FodId::from_base64(idprobglobal_a)?;
 let b = FodId::from_base64(idprobglobal_b)?;
 
-assert_ne!(a.date, b.date);           // wrapper differs
-assert_ne!(a.signature, b.signature); // wrapper differs
-assert_eq!(a.hash(), b.hash());       // probabilistic value is stable
+assert_ne!(a.date, b.date);           // envelope differs
+assert_ne!(a.signature, b.signature); // envelope differs
+assert_eq!(a.hash(), b.hash());       // value is stable
 ```
 
-Use `hash()` (32 bytes, SHA-256) as the cache / dedup key.
+Use `hash()` (the value, a 32-byte SHA-256 or 16-byte GUID) as the cache /
+dedup key.
 
 ## Non goals
 
