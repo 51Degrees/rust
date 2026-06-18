@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! [![51Degrees](https://51degrees.com/img/logo.png?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-cloud-request-engine-lib.rs&utm_term=logo "Data rewards the curious")](https://51degrees.com/?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-cloud-request-engine-lib.rs&utm_term=logo)
+//!
 //! # 51Degrees cloud request engine
 //!
 //! The engine that offloads pipeline processing to the 51Degrees cloud service.

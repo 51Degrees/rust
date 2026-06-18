@@ -20,3 +20,8 @@ fiftyone-device-detection-shared = { version = "4.5.1", path = "../device-detect
 fiftyone-native = { version = "4.5.1", path = "../native", default-features = false, features = ["dd"] }
 arc-swap.workspace = true
 chrono.workspace = true
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

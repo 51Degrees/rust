@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! [![51Degrees](https://51degrees.com/img/logo.png?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-native-lib.rs&utm_term=logo "Data rewards the curious")](https://51degrees.com/?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-native-lib.rs&utm_term=logo)
+//!
 //! Safe RAII wrapper over the native on-premise engines.
 //!
 //! This crate is the single safe boundary over the three raw FFI crates

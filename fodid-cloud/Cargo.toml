@@ -29,3 +29,8 @@ reqwest-client = ["fiftyone-cloud-request-engine/reqwest-client"]
 # Used by the integration test to mint a real signed 51Did envelope, so the
 # parsed-identifier path is exercised end-to-end.
 owid.workspace = true
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

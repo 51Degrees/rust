@@ -19,3 +19,8 @@ owid.workspace = true
 # the 51Degrees cloud JSON endpoint and read its response.
 ureq = "2"
 serde_json = "1"
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

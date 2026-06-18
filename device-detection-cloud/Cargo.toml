@@ -24,3 +24,8 @@ serde_json.workspace = true
 # this crate builds without reqwest (and so for wasm32-wasip1). A native consumer
 # enables it; a wasm consumer leaves it off and supplies its own CloudHttpClient.
 reqwest-client = ["fiftyone-cloud-request-engine/reqwest-client"]
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

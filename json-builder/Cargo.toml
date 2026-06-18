@@ -25,3 +25,8 @@ fiftyone-pipeline-engines = { version = "4.5.1", path = "../pipeline-engines", d
 # the JSON (and any ETag computed from it downstream) is stable across runs. The
 # indexmap-backed Map this enables preserves insertion order rather than sorting.
 serde_json = { version = "1", features = ["preserve_order"] }
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

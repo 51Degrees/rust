@@ -16,3 +16,8 @@ fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
 # this one can reach wasm32-wasip1. On-premise builds re-enable it through the
 # on-premise engine's own dependency.
 fiftyone-pipeline-engines = { version = "4.5.1", path = "../pipeline-engines", default-features = false }
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true
