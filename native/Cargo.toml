@@ -45,3 +45,8 @@ fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
 fiftyone-common-sys = { version = "4.5.1", path = "../common-sys", optional = true }
 fiftyone-device-detection-sys = { version = "4.5.1", path = "../device-detection-sys", optional = true }
 fiftyone-ip-intelligence-sys = { version = "4.5.1", path = "../ip-intelligence-sys", optional = true }
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

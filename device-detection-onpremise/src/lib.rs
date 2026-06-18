@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! [![51Degrees](https://51degrees.com/img/logo.png?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-device-detection-onpremise-lib.rs&utm_term=logo "Data rewards the curious")](https://51degrees.com/?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-device-detection-onpremise-lib.rs&utm_term=logo)
+//!
 //! # 51Degrees on-premise Hash device-detection engine
 //!
 //! The on-premise device-detection engine, built over the safe

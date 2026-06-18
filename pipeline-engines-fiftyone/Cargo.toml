@@ -54,3 +54,8 @@ data-update = ["fiftyone-pipeline-engines/data-update"]
 # A local HTTP server is spun up in tests to capture the usage-sharing POST
 # without reaching the real 51Degrees endpoint.
 tiny_http = "0.12"
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

@@ -47,3 +47,8 @@ data-update = ["dep:reqwest", "dep:notify", "dep:md-5", "dep:flate2"]
 # A local HTTP server is spun up in tests to exercise the remote-poll path
 # without reaching the real 51Degrees distributor.
 tiny_http = "0.12"
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

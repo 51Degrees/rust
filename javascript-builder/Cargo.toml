@@ -60,3 +60,8 @@ oxc = { version = "0.136", features = ["minifier", "codegen"], optional = true }
 [dev-dependencies]
 # The byte-identity test reads the reference template at test time, so no extra
 # crate is needed for that. serde_json is reused for asserting the parameters JSON.
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

@@ -28,3 +28,8 @@ fiftyone-javascript-builder = { version = "4.5.1", path = "../javascript-builder
 # stable per-process digest for the web ETag. It is already a workspace
 # dependency so it resolves to a single shared version.
 ahash.workspace = true
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true
