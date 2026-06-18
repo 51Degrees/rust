@@ -37,6 +37,15 @@ fiftyone-cloud-request-engine = { version = "4.5.2", path = "../cloud-request-en
 # common-cxx builds never collide.
 fiftyone-native = { version = "4.5.2", path = "../native", default-features = false, features = ["ipi"], optional = true }
 
+[dev-dependencies]
+# Depend on this crate itself with reqwest-client enabled, so its own tests get
+# the built-in cloud HTTP transport. The library keeps reqwest-client off by
+# default (for wasm and lean cloud builds); the examples workspace used to unify
+# it on for the whole build, but now that the examples are a separate workspace
+# the tests opt in here. Dev-dependencies never reach the published graph, so
+# this does not change what a consumer resolves.
+fiftyone-ip-intelligence = { path = ".", features = ["reqwest-client"] }
+
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the
 # cloud, on-premise and optional paths are all documented.

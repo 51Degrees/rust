@@ -39,3 +39,22 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: bash ci/publish-crates.sh
+
+  # AFTER publish: prove the just-released packages work by building and testing
+  # the examples against crates.io (no source.toml patch). The pre-publish check
+  # against local source lives in examples.yml.
+  verify-published:
+    name: examples vs published crates
+    needs: publish
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Give the crates.io index a moment to serve the just-published versions,
+      # then resolve them and run the examples' tests against the real packages.
+      - run: sleep 90
+      - run: cargo update
+      - run: cargo test

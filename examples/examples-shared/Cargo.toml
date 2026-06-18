@@ -11,8 +11,8 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
-fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines" }
+fiftyone-pipeline-core = { version = "4.5.2" }
+fiftyone-pipeline-engines = { version = "4.5.2" }
 # Date arithmetic for the data-file publish-date age warning. The engine layer
 # already exposes publish dates as `chrono::DateTime<Utc>`, so the same crate
 # (with the same lean feature set) is used here.
