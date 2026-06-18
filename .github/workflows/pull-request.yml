@@ -49,12 +49,13 @@ jobs:
       # has a clear LTS cadence, so both current LTS releases are covered:
       # ubuntu-22.04 (the lowest LTS the toolchain supports; 20.04 runners are
       # retired) and ubuntu-24.04. Windows Server runners are all LTSC, so
-      # windows-latest (Server 2022) is used. macOS has no LTS, so both
-      # architectures are covered: macos-13 (Intel, x86_64) and macos-latest
-      # (Apple Silicon, arm64).
+      # windows-latest (Server 2022) is used. macOS has no LTS, so macos-latest
+      # (Apple Silicon, arm64) is covered. The Intel runner macos-13 is omitted
+      # for the moment because the hosted macos-13 queue has been unavailable and
+      # leaves runs hanging; restore it here once capacity returns.
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-22.04, ubuntu-24.04, macos-13, macos-latest]
+        os: [windows-latest, ubuntu-22.04, ubuntu-24.04, macos-latest]
 
     steps:
       # 1. The Rust workspace itself.
