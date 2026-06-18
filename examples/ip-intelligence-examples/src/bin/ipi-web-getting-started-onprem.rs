@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example ipi-web-getting-started-onprem.rs
+//!
 //! IP Intelligence web example: on-premise Getting Started (server side).
 //!
 //! It builds an on-premise IP-intelligence pipeline from a local `.ipi` data file

@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example dd-web-client-only-cloud.rs
+//!
 //! Device Detection web example: client-side-only cloud detection.
 //!
 //! There is no server-side detection and no 51Degrees pipeline on the server at

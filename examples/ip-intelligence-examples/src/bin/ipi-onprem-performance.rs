@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example ipi-onprem-performance.rs
+//!
 //! On-premise IP Intelligence performance (throughput) console example.
 //!
 //! Benchmarks how many IP lookups per second the on-premise engine sustains,

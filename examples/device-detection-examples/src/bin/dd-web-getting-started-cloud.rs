@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example dd-web-getting-started-cloud.rs
+//!
 //! Device Detection web example: cloud Getting Started (server plus client).
 //!
 //! It builds a cloud device-detection pipeline, wraps it in a [`WebPipeline`] so

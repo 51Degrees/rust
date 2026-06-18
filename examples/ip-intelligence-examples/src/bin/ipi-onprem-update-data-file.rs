@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example ipi-onprem-update-data-file.rs
+//!
 //! On-premise IP Intelligence data-file update console example.
 //!
 //! Demonstrates the data-file update mechanisms the on-premise engine exposes:

@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example ipi-cloud-mixed-getting-started.rs
+//!
 //! Mixed cloud example: Device Detection and IP Intelligence in one pipeline.
 //!
 //! Builds a single pipeline that runs both the cloud Device Detection engine and
