@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example dd-onprem-update-data-file.rs
+//!
 //! On-premise data-file-update console example. See the descriptive block at the
 //! bottom of this file for the full write-up.
 

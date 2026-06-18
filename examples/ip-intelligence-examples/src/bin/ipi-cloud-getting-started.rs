@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example ipi-cloud-getting-started.rs
+//!
 //! Cloud IP-intelligence getting-started console example.
 //!
 //! See the descriptive block at the bottom of this file for the full narrative.

@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example ipi-onprem-metadata.rs
+//!
 //! On-premise IP Intelligence metadata console example.
 //!
 //! Inspects an on-premise engine and prints its available properties (with

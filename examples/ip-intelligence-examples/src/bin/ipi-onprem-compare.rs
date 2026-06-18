@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example ipi-onprem-compare.rs
+//!
 //! On-premise IP Intelligence compare console example.
 //!
 //! Looks the same IP addresses up under several performance profiles and shows

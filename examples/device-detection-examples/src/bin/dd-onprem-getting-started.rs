@@ -20,8 +20,14 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! On-premise getting-started console example. See the descriptive block at the
-//! bottom of this file for the full write-up.
+//! @example dd-onprem-getting-started.rs
+//!
+//! # Getting Started: On-premise Device Detection (Rust)
+//!
+//! Builds an on-premise Device Detection pipeline and reads strongly-typed
+//! device properties (`IsMobile`, `PlatformName`, `BrowserName`, `DeviceId`)
+//! back from processed User-Agent evidence. The annotated walk-through is in the
+//! comment at the foot of this file; the complete source follows.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;

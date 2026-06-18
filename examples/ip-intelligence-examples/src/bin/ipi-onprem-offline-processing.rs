@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example ipi-onprem-offline-processing.rs
+//!
 //! On-premise IP Intelligence offline (batch) processing console example.
 //!
 //! Streams IP-address evidence records from a YAML file, looks each up against

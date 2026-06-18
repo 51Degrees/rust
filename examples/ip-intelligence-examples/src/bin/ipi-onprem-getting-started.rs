@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example ipi-onprem-getting-started.rs
+//!
 //! On-premise IP Intelligence "getting started" console example.
 //!
 //! Looks an IPv4 and an IPv6 address up against a local `.ipi` data file and
