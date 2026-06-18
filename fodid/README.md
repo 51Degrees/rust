@@ -1,6 +1,6 @@
 # 51Degrees fodid
 
-![51Degrees](https://raw.githubusercontent.com/51Degrees/common-ci/main/images/logo/360x67.png "Data rewards the curious")
+[![51Degrees](https://51degrees.com/img/logo.png?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=logo "Data rewards the curious")](https://51degrees.com/?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=logo)
 **Pipeline API**
 
 [Developer Documentation](https://51degrees.com/documentation/index.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=documentation)
@@ -95,7 +95,7 @@ Use `hash()` (32 bytes, SHA-256) as the cache / dedup key.
 
 - [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust) - the
   OWID envelope library this crate builds on.
-- The [51Did inspector](https://51degrees.com/developers/51did-inspector) for a
+- The [51Did inspector](https://51degrees.com/developers/51did-inspector?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=51did-inspector) for a
   visual breakdown of the same byte layout.
 
 ## License
