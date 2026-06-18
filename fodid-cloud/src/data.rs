@@ -29,8 +29,8 @@
 //! # Two layers: the raw envelope and the parsed identifier
 //!
 //! The cloud returns each identifier as a base64-encoded
-//! [OWID](https://github.com/SWAN-community/owid) envelope: a signed wrapper
-//! around the probabilistic value two recipients compare to decide whether they
+//! [OWID](https://github.com/SWAN-community/owid) envelope, the signed data
+//! model that carries the value two recipients compare to decide whether they
 //! observed the same browser instance under the same usage purpose. This model
 //! exposes both layers:
 //!

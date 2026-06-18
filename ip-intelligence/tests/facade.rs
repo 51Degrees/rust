@@ -35,7 +35,14 @@
 //! Run the full set, including the feature-gated and live tests, with:
 //! `cargo test -p fiftyone-ip-intelligence --all-features -- --include-ignored`.
 
-use fiftyone_ip_intelligence::{IpIntelligenceData, IpIntelligencePipelineBuilder, IP_DATA_KEY};
+// The typed `IpIntelligenceData` accessors (for example `country_code`) are
+// used only by the live cloud test below, which is gated on `reqwest-client`.
+// Gate the import to match, so the default (cloud + on-premise) build sees no
+// unused import. The on-premise test reads `string(..)`, an inherent method on
+// the data type, so it needs no trait import.
+#[cfg(feature = "reqwest-client")]
+use fiftyone_ip_intelligence::IpIntelligenceData;
+use fiftyone_ip_intelligence::{IpIntelligencePipelineBuilder, IP_DATA_KEY};
 use fiftyone_pipeline_core::Evidence;
 
 /// Cloudflare's public IPv4 resolver, autonomous system AS13335 in every tier.
@@ -106,8 +113,10 @@ fn on_premise_facade_resolves_asn() {
 
 /// Resolve a cloud resource key from the environment, honouring the aligned name
 /// first and then the CI-exported paid and free names, mirroring
-/// `examples-shared::keys::resource_key_from_env`.
-#[cfg(feature = "cloud")]
+/// `examples-shared::keys::resource_key_from_env`. Used only by the live cloud
+/// test, which is gated on `reqwest-client`, so gate the helper to match and
+/// avoid a dead-code warning in the default (no reqwest-client) build.
+#[cfg(feature = "reqwest-client")]
 fn live_resource_key() -> Option<String> {
     [
         "51DEGREES_RESOURCE_KEY",

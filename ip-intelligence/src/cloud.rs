@@ -275,6 +275,12 @@ mod tests {
         );
     }
 
+    // Gated on `reqwest-client`: a successful cloud build needs an HTTP
+    // transport, which the built-in reqwest client supplies. Without it the
+    // build deliberately errors for want of a transport (covered by
+    // `cloud_builder_requires_a_resource_key` and the engine's no-transport
+    // check), so this success case applies only when the client is available.
+    #[cfg(feature = "reqwest-client")]
     #[test]
     fn cloud_builder_keeps_configuration() {
         // The fluent setters return the builder, so a configured chain still
