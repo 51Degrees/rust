@@ -22,6 +22,10 @@ on:
 jobs:
   performance:
     runs-on: ubuntu-latest
+    # The publish step commits the rendered graphs to the gh-images branch, which
+    # needs write access to repository contents.
+    permissions:
+      contents: write
     steps:
       # 1. The Rust workspace, checked out into a subdirectory named after the
       #    repository so the common-ci script's -RepoName convention matches the
@@ -90,10 +94,14 @@ jobs:
           name: performance_results-publish-rust
           path: rust/test-results/performance-summary/results_*.json
 
-      # 6. Compare against historic figures and render the graphs. Best-effort:
-      #    on a repository without run history the comparison has too few points
-      #    and simply records the current figures, so a failure here must not fail
-      #    the job.
+      # 6. Compare against historic figures and render the graphs, then publish
+      #    them. `-Publish` makes the shared step render the PNG graphs and, on
+      #    `main`, commit them to the `gh-images` branch (other branches use a
+      #    `perf-images/<branch>` prefix). The documentation benchmarks page
+      #    embeds those images by raw URL, so without `-Publish` the Rust graphs
+      #    never appear. Best-effort: on a repository without run history the
+      #    comparison has too few points and simply records the current figures,
+      #    so a failure here must not fail the job.
       - name: Compare performance and render graphs
         continue-on-error: true
         shell: pwsh
@@ -112,7 +120,8 @@ jobs:
             -RepoName 'rust' `
             -OrgName '51Degrees' `
             -AllOptions $options `
-            -Branch '${{ github.ref_name }}'
+            -Branch '${{ github.ref_name }}' `
+            -Publish
 
       - name: Escape Branch Name
         id: escape_branch
