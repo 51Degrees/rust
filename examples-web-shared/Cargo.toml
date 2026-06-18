@@ -1,7 +1,7 @@
 [package]
 publish = false  # internal example/bench crate, not for crates.io
 name = "examples-web-shared"
-version = "4.5.1"
+version = "4.5.2"
 description = "Shared HTML and static-asset helpers for the 51Degrees Rust web examples: vendored design-system assets, asset-serving handlers, HTML escaping and the common table helpers."
 edition.workspace = true
 rust-version.workspace = true

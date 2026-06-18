@@ -1,6 +1,6 @@
 [package]
 name = "fiftyone-common-sys"
-version = "4.5.1"
+version = "4.5.2"
 description = "Raw FFI bindings to common-cxx: ResourceManager, Evidence, Exception, StatusCode and result buffers."
 edition.workspace = true
 rust-version.workspace = true

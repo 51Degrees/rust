@@ -1,6 +1,6 @@
 [package]
 name = "fiftyone-ip-intelligence"
-version = "4.5.1"
+version = "4.5.2"
 description = "IP-intelligence facade re-exporting the engines plus a builder that selects the cloud or on-premise deployment."
 edition.workspace = true
 rust-version.workspace = true
@@ -25,17 +25,17 @@ reqwest-client = ["cloud", "fiftyone-ip-intelligence-cloud/reqwest-client"]
 on-premise = ["dep:fiftyone-ip-intelligence-onpremise", "dep:fiftyone-native"]
 
 [dependencies]
-fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
-fiftyone-pipeline-engines = { version = "4.5.1", path = "../pipeline-engines" }
-fiftyone-ip-intelligence-shared = { version = "4.5.1", path = "../ip-intelligence-shared" }
-fiftyone-ip-intelligence-onpremise = { version = "4.5.1", path = "../ip-intelligence-onpremise", optional = true }
-fiftyone-ip-intelligence-cloud = { version = "4.5.1", path = "../ip-intelligence-cloud", optional = true }
-fiftyone-cloud-request-engine = { version = "4.5.1", path = "../cloud-request-engine", optional = true, default-features = false }
+fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
+fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines" }
+fiftyone-ip-intelligence-shared = { version = "4.5.2", path = "../ip-intelligence-shared" }
+fiftyone-ip-intelligence-onpremise = { version = "4.5.2", path = "../ip-intelligence-onpremise", optional = true }
+fiftyone-ip-intelligence-cloud = { version = "4.5.2", path = "../ip-intelligence-cloud", optional = true }
+fiftyone-cloud-request-engine = { version = "4.5.2", path = "../cloud-request-engine", optional = true, default-features = false }
 # The on-premise builder names PerformanceProfile from the native wrapper in its
 # public surface. Link only IP Intelligence's copy of common-cxx (the `ipi`
 # feature), matching the on-premise engine crate, so the two ABI incompatible
 # common-cxx builds never collide.
-fiftyone-native = { version = "4.5.1", path = "../native", default-features = false, features = ["ipi"], optional = true }
+fiftyone-native = { version = "4.5.2", path = "../native", default-features = false, features = ["ipi"], optional = true }
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the

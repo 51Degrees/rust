@@ -1,6 +1,6 @@
 [package]
 name = "fiftyone-native"
-version = "4.5.1"
+version = "4.5.2"
 description = "Safe RAII wrapper over the native manager, results, evidence and exception types shared by Device Detection and IP Intelligence."
 edition.workspace = true
 rust-version.workspace = true
@@ -41,10 +41,10 @@ ipi = ["dep:fiftyone-ip-intelligence-sys"]
 default = ["dd", "ipi"]
 
 [dependencies]
-fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
-fiftyone-common-sys = { version = "4.5.1", path = "../common-sys", optional = true }
-fiftyone-device-detection-sys = { version = "4.5.1", path = "../device-detection-sys", optional = true }
-fiftyone-ip-intelligence-sys = { version = "4.5.1", path = "../ip-intelligence-sys", optional = true }
+fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
+fiftyone-common-sys = { version = "4.5.2", path = "../common-sys", optional = true }
+fiftyone-device-detection-sys = { version = "4.5.2", path = "../device-detection-sys", optional = true }
+fiftyone-ip-intelligence-sys = { version = "4.5.2", path = "../ip-intelligence-sys", optional = true }
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the

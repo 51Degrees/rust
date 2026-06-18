@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "device-detection-examples"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -668,7 +668,7 @@ dependencies = [
 
 [[package]]
 name = "examples-benches"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "criterion",
  "examples-shared",
@@ -682,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "examples-shared"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "base64",
  "chrono",
@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "examples-web-shared"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "axum",
 ]
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-caching"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "ahash",
  "fiftyone-pipeline-core",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-cloud-request-engine"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "fiftyone-caching",
  "fiftyone-pipeline-core",
@@ -740,14 +740,14 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-common-sys"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "fiftyone-device-detection"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "fiftyone-cloud-request-engine",
  "fiftyone-device-detection-cloud",
@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-device-detection-cloud"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "fiftyone-cloud-request-engine",
  "fiftyone-device-detection-shared",
@@ -774,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-device-detection-onpremise"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -786,7 +786,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-device-detection-shared"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "base64",
  "fiftyone-pipeline-core",
@@ -796,7 +796,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-device-detection-sys"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "cc",
  "fiftyone-common-sys",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-fodid-cloud"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "fiftyone-cloud-request-engine",
  "fiftyone-pipeline-core",
@@ -817,7 +817,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-ip-intelligence"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "fiftyone-cloud-request-engine",
  "fiftyone-ip-intelligence-cloud",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-ip-intelligence-cloud"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "fiftyone-cloud-request-engine",
  "fiftyone-ip-intelligence-shared",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-ip-intelligence-onpremise"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "arc-swap",
  "chrono",
@@ -855,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-ip-intelligence-shared"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "fiftyone-pipeline-core",
  "fiftyone-pipeline-engines",
@@ -863,14 +863,14 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-ip-intelligence-sys"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "fiftyone-javascript-builder"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "fiftyone-json-builder",
  "fiftyone-pipeline-core",
@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-json-builder"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "fiftyone-pipeline-core",
  "fiftyone-pipeline-engines",
@@ -892,7 +892,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-native"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "fiftyone-common-sys",
  "fiftyone-device-detection-sys",
@@ -902,7 +902,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-pipeline-core"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "ahash",
  "thiserror",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-pipeline-engines"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "chrono",
  "fiftyone-caching",
@@ -925,7 +925,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-pipeline-engines-fiftyone"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "ahash",
  "fiftyone-pipeline-core",
@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-pipeline-web"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "ahash",
  "fiftyone-javascript-builder",
@@ -952,7 +952,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-pipeline-web-axum"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "axum",
  "fiftyone-javascript-builder",
@@ -993,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "fodid"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "owid",
  "serde_json",
@@ -1480,7 +1480,7 @@ dependencies = [
 
 [[package]]
 name = "ip-intelligence-examples"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -2286,7 +2286,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pipeline-examples"
-version = "4.5.1"
+version = "4.5.2"
 dependencies = [
  "anyhow",
  "axum",

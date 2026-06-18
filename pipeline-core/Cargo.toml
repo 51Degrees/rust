@@ -1,6 +1,6 @@
 [package]
 name = "fiftyone-pipeline-core"
-version = "4.5.1"
+version = "4.5.2"
 description = "FlowData, FlowElement/Pipeline traits, Evidence, ElementData, TypedKey, errors and constants for the 51Degrees pipeline."
 edition.workspace = true
 rust-version.workspace = true
