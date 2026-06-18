@@ -1,6 +1,6 @@
 [![51Degrees](https://51degrees.com/img/logo.png?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fiftyone-fodid-cloud-readme.md&utm_term=logo "Data rewards the curious")](https://51degrees.com/?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fiftyone-fodid-cloud-readme.md&utm_term=logo)
 
-# 51Degrees fodid Cloud
+# 51Degrees Identifier Cloud
 
 Cloud engine that unpacks the 51Degrees identifier (51Did / FODid) block from the cloud JSON response into typed data.
 

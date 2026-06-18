@@ -1,4 +1,4 @@
-# 51Degrees fodid
+# 51Degrees Identifier
 
 [![51Degrees](https://51degrees.com/img/logo.png?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=logo "Data rewards the curious")](https://51degrees.com/?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=logo)
 **Pipeline API**
@@ -7,7 +7,7 @@
 
 ## Introduction
 
-A Rust reader for the **51Did** (51Degrees Identifier) value returned by the
+A Rust reader for the **51Degrees identifier** (51Did) value returned by the
 51Degrees cloud service. The
 [identifiers documentation](https://51degrees.com/documentation/_identifiers__index.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=51did)
 describes what a 51Did is and how it is used. This crate parses the 51Did byte
