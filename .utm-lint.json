@@ -1,6 +1,7 @@
 {
   "exclude": [
-    "^fodid/"
+    "^fodid/",
+    "/vendor/"
   ],
   "allowUntagged": [
     "^Cargo\\.toml$",
