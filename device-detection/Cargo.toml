@@ -51,3 +51,8 @@ reqwest-client = ["cloud", "fiftyone-device-detection-cloud/reqwest-client"]
 # dev-dependency so it never touches the published dependency graph.
 fiftyone-ip-intelligence = { version = "4.5.1", path = "../ip-intelligence" }
 fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

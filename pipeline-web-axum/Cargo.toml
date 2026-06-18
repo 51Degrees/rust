@@ -32,3 +32,8 @@ serde_json.workspace = true
 fiftyone-pipeline-engines-fiftyone = { version = "4.5.1", path = "../pipeline-engines-fiftyone" }
 fiftyone-json-builder = { version = "4.5.1", path = "../json-builder" }
 fiftyone-javascript-builder = { version = "4.5.1", path = "../javascript-builder" }
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

@@ -17,3 +17,8 @@ thiserror.workspace = true
 # pipeline is used in high-traffic web servers, so a faster hasher than the
 # default SipHash is worthwhile.
 ahash.workspace = true
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

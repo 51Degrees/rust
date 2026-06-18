@@ -36,3 +36,8 @@ fiftyone-cloud-request-engine = { version = "4.5.1", path = "../cloud-request-en
 # feature), matching the on-premise engine crate, so the two ABI incompatible
 # common-cxx builds never collide.
 fiftyone-native = { version = "4.5.1", path = "../native", default-features = false, features = ["ipi"], optional = true }
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

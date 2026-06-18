@@ -18,3 +18,8 @@ fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
 fiftyone-pipeline-engines = { version = "4.5.1", path = "../pipeline-engines", default-features = false }
 base64.workspace = true
 serde_json.workspace = true
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true

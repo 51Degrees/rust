@@ -15,3 +15,8 @@ ahash.workspace = true
 # A current insertion-ordered hash map. Moving an entry to the back on access
 # and popping from the front gives least-recently-used eviction per shard.
 hashlink = "0.10"
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# cloud, on-premise and optional paths are all documented.
+all-features = true
