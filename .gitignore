@@ -1,6 +1,19 @@
-/target
+# Cargo build output for every workspace in the repo (root and examples/).
+target/
 # Performance results written by the nightly performance workflow.
 /test-results
 *.log
 .DS_Store
 Thumbs.db
+
+# Local working directories of AI coding agents. These hold per-developer
+# session state, handover notes and settings, none of which belong in the
+# repository. The shared, tool-neutral handover lives in AGENTS.md at the root.
+.claude/
+.cursor/
+.windsurf/
+.aider*
+.continue/
+.codeium/
+.gemini/
+.opencode/
