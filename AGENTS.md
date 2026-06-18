@@ -1,0 +1,131 @@
+# AGENTS.md
+
+A shared, tool-neutral handover for anyone (human or AI agent) working in this
+repository. Keep it short and current: record the things that are not obvious
+from the code or git history, and update it as the project changes. It is not
+tied to any one assistant.
+
+## What this is
+
+The 51Degrees Rust SDK: a single Cargo workspace of libraries plus a separate
+workspace of runnable examples.
+
+- **Library workspace** (repository root): the pipeline core and engines,
+  Device Detection and IP Intelligence (cloud and on-premise), the cloud
+  request engine, the JSON and JavaScript builders, the axum web integration,
+  and the `fodid` 51Did reader. Each concern is its own crate so a consumer
+  depends only on what it uses.
+- **Example workspace** (`examples/`): excluded from the root workspace
+  (`exclude = ["examples"]`). It depends on the **published** crates from
+  crates.io by default, so a fresh checkout of `examples/` builds the way a
+  real consumer's project would. See [examples/](examples/) below.
+
+The three `-sys` crates (`common-sys`, `device-detection-sys`,
+`ip-intelligence-sys`) link the 51Degrees C/C++ sources. They **vendor** those
+sources under `<crate>/vendor/`, so the published crates are self-contained and
+build without any submodule checkout.
+
+## Building and testing
+
+From the repository root:
+
+```
+cargo build --workspace --all-targets
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo doc --workspace --no-deps
+```
+
+CI builds with `RUSTFLAGS=-D warnings` and `RUSTDOCFLAGS=-D warnings`, so any
+warning fails the build. Match that locally before pushing.
+
+Each `-sys` `build.rs` resolves its C sources in this order: an override
+environment variable, then the vendored copy, then a sibling `*-cxx` checkout.
+The override variables are `FIFTYONE_COMMON_CXX_DIR`,
+`FIFTYONE_DEVICE_DETECTION_CXX_DIR` and `FIFTYONE_IP_INTELLIGENCE_CXX_DIR`. With
+no override set, the vendored sources are used, so a plain `cargo build` works
+out of the box.
+
+On-premise tests and examples need a data file. They skip cleanly when one is
+absent, so the offline build and tests stay green without data. To run them,
+point the relevant variable at a local file: `51DEGREES_DD_PATH` for a Device
+Detection `.hash` file, `51DEGREES_IPI_PATH` for an IP Intelligence `.ipi`
+file. Live cloud tests are `#[ignore]`d and read a resource key from
+`51DEGREES_RESOURCE_KEY` (or the CI tiered names `_51DEGREES_RESOURCE_KEY_PAID`
+then `_51DEGREES_RESOURCE_KEY_FREE`).
+
+## examples/
+
+The example crates form their own workspace so they can default to the
+published crates while the library workspace builds from source.
+
+- **Default (crates.io):** `cd examples && cargo run --bin <name>` resolves the
+  released `fiftyone-*` packages from crates.io.
+- **Local source:** `cd examples && cargo test --config source.toml` applies a
+  `[patch.crates-io]` mapping every `fiftyone-*` crate to its local path, so
+  the examples build against the working tree. The patch paths in
+  `examples/source.toml` are relative to the **repository root**, not to
+  `examples/`.
+
+Example binaries live in `<crate>/src/bin/*.rs` (run with `--bin`), not in an
+`examples/` directory.
+
+## Releasing to crates.io
+
+Releases are automated. To cut one: bump the shared version (the literal
+`version = "x.y.z"` in every member `[package]` and on every internal
+path-dependency requirement, so the path-dep versions match) and push to
+`main`. `.github/workflows/publish.yml` and `ci/publish-crates.sh` publish each
+crate to crates.io in dependency order, skipping any version already published.
+
+Authentication uses crates.io **Trusted Publishing**: the publish workflow
+exchanges the run's GitHub OIDC identity for a short-lived token, so no API
+token is stored. Each crate has this repository and `publish.yml` registered as
+a trusted publisher (one-time setup in `ci/setup-trusted-publishing.sh`).
+
+The `owid` dependency the `fodid` crates build on is consumed from crates.io
+(crates.io forbids git dependencies); its source lives in the SWAN community
+repository.
+
+## CI gates
+
+- `pull-request.yml` — fmt, build, test, clippy and doc on Windows, Linux
+  (two LTS) and macOS (Intel and Apple Silicon), plus a wasm32-wasip1 job for
+  the cloud crates. Runs on pushes to `main` and PRs targeting `main`.
+- `examples.yml` — builds and tests `examples/` against local source
+  (`source.toml`) before a release. Runs on every PR.
+- `publish.yml` — publishes on push to `main`, then a `verify-published` job
+  builds and tests `examples/` against the just-released crates.io packages.
+- `utm-link-lint.yml` — see UTM conventions below. Runs on every PR.
+- `mustache-drift.yml` — guards the generated JavaScript resource template.
+
+## Conventions and gotchas
+
+- **Generated accessors.** The strongly typed property accessors in
+  `device-detection-shared/src/device_data.rs` and
+  `ip-intelligence-shared/src/ip_intelligence_data.rs` are generated by the
+  `PropertyGenerator` tool in the 51Degrees `tools` repository. Do not edit
+  them by hand; change the generator.
+- **Feature unification with examples.** The library crates' default features
+  are cloud + on-premise; `reqwest-client` is off by default. Some tests are
+  gated on `reqwest-client` and rely on it being enabled to compile. Because
+  `examples/` is a separate workspace, the root `cargo build --workspace` no
+  longer unifies `reqwest-client` on, so gate test-only imports and helpers on
+  the exact feature whose test uses them, or `-D warnings` will fail on unused
+  code.
+- **UTM links.** Links to `51degrees.com` in source, docs and READMEs must
+  carry the five UTM parameters in order (`utm_source`, `utm_medium`,
+  `utm_campaign`, `utm_content`, `utm_term`), with `utm_campaign=rust`. The
+  lint config is `.utm-lint.json`; `Cargo.toml` `homepage`/`repository`
+  metadata URLs are allow-listed as untagged.
+- **Code style.** Wrap code and doc comments to about 80 columns (soft limit;
+  do not break URLs or string literals to hit it). This keeps diffs reviewable.
+- **MSRV.** The workspace pins `rust-version = "1.94"` (the JavaScript builder's
+  minifier toolchain needs a recent compiler).
+
+## 51Did terminology
+
+When working on `fodid`, keep the three levels distinct: the **51Did** is the
+identifier as a whole; the **envelope** (also called the wrapper) is the signed
+OWID that carries it and changes on every issue; the **value** is the stable,
+comparable payload read through `FodId::hash`. Compare values, never envelopes.

@@ -502,7 +502,14 @@ impl DeviceDetectionCloudPipelineBuilder {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "cloud")]
+    // Gated on `reqwest-client`, not just `cloud`: constructing the cloud
+    // request engine requires an HTTP transport even when an injected state
+    // means no network call is made, and the built-in transport is the
+    // reqwest client this feature enables. Without it the build deliberately
+    // errors (see the CloudRequestEngine no-transport check), so this success
+    // case only applies when the built-in client is available. Run it with
+    // `--features reqwest-client` or `--all-features`.
+    #[cfg(feature = "reqwest-client")]
     #[test]
     fn cloud_pipeline_builds_offline_with_injected_state() {
         // The request engine fetches its discovery state from the cloud as it
