@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example dd-cloud-native-model.rs
+//!
 //! Cloud native-model lookup console example. See the descriptive block at the
 //! bottom of this file for the full write-up.
 

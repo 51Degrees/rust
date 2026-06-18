@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example dd-web-uach.rs
+//!
 //! Device Detection web example: User-Agent Client Hints (UACH) flow.
 //!
 //! A focused, on-premise web example that drives the UA-CH high-entropy decoder

@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example dd-web-getting-started-onprem.rs
+//!
 //! Device Detection web example: on-premise Getting Started (server plus client).
 //!
 //! It builds an on-premise Hash device-detection pipeline, wraps it in a

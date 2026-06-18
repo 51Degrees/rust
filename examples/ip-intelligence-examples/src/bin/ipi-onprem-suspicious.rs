@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example ipi-onprem-suspicious.rs
+//!
 //! On-premise IP Intelligence "suspicious" console example.
 //!
 //! Combines the diversity and behavioral properties an Enterprise data file

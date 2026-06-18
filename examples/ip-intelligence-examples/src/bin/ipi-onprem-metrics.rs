@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! @example ipi-onprem-metrics.rs
+//!
 //! On-premise IP Intelligence metrics console example.
 //!
 //! Reports per-lookup insight for each IP address: the wall-clock time the
