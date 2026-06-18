@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! [![51Degrees](https://51degrees.com/img/logo.png?utm_source=github&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-pipeline-engines-lib.rs&utm_term=logo "Data rewards the curious")](https://51degrees.com/?utm_source=github&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-pipeline-engines-lib.rs&utm_term=logo)
+//!
 //! # 51Degrees pipeline engines
 //!
 //! The engine layer that sits between the reflection-free

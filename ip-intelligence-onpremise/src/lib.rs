@@ -20,6 +20,8 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
+//! [![51Degrees](https://51degrees.com/img/logo.png?utm_source=github&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-ip-intelligence-onpremise-lib.rs&utm_term=logo "Data rewards the curious")](https://51degrees.com/?utm_source=github&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-ip-intelligence-onpremise-lib.rs&utm_term=logo)
+//!
 //! The on-premise IP-intelligence aspect engine.
 //!
 //! This crate wraps the safe native IP Intelligence resource manager from
