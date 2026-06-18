@@ -1,4 +1,5 @@
-/target
+# Cargo build output for every workspace in the repo (root and examples/).
+target/
 # Performance results written by the nightly performance workflow.
 /test-results
 *.log
