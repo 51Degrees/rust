@@ -1,6 +1,6 @@
 [package]
 name = "fiftyone-pipeline-engines"
-version = "4.5.1"
+version = "4.5.2"
 description = "AspectEngine/AspectData, AspectPropertyValue, missing-property and data-update services, and cache wiring for the 51Degrees pipeline."
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,8 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
-fiftyone-caching = { version = "4.5.1", path = "../caching" }
+fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
+fiftyone-caching = { version = "4.5.2", path = "../caching" }
 thiserror.workspace = true
 # Date and time handling for data-file publish/expiry timestamps and the
 # If-Modified-Since header. `default-features = false` with `clock` keeps the

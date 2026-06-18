@@ -1,6 +1,6 @@
 [package]
 name = "fiftyone-fodid-cloud"
-version = "4.5.1"
+version = "4.5.2"
 description = "Cloud engine that unpacks the 51Degrees identifier (51Did / FODid) block from the cloud JSON response into typed data."
 edition.workspace = true
 rust-version.workspace = true
@@ -10,12 +10,12 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
+fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
 # default-features = false drops the data-update service (reqwest/notify), which
 # the cloud path never uses, so this crate builds for wasm32-wasip1.
-fiftyone-pipeline-engines = { version = "4.5.1", path = "../pipeline-engines", default-features = false }
-fiftyone-cloud-request-engine = { version = "4.5.1", path = "../cloud-request-engine", default-features = false }
-fodid = { version = "4.5.1", path = "../fodid" }
+fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines", default-features = false }
+fiftyone-cloud-request-engine = { version = "4.5.2", path = "../cloud-request-engine", default-features = false }
+fodid = { version = "4.5.2", path = "../fodid" }
 serde_json.workspace = true
 once_cell.workspace = true
 

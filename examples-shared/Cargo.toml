@@ -1,7 +1,7 @@
 [package]
 publish = false  # internal example/bench crate, not for crates.io
 name = "examples-shared"
-version = "4.5.1"
+version = "4.5.2"
 description = "Shared example helpers: file-finder, resource-key-from-env, data-file path resolvers, the data-file-age warning, property-as-string and sample evidence."
 edition.workspace = true
 rust-version.workspace = true
@@ -11,8 +11,8 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
-fiftyone-pipeline-engines = { version = "4.5.1", path = "../pipeline-engines" }
+fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
+fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines" }
 # Date arithmetic for the data-file publish-date age warning. The engine layer
 # already exposes publish dates as `chrono::DateTime<Utc>`, so the same crate
 # (with the same lean feature set) is used here.

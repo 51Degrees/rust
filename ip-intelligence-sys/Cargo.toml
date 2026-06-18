@@ -1,6 +1,6 @@
 [package]
 name = "fiftyone-ip-intelligence-sys"
-version = "4.5.1"
+version = "4.5.2"
 description = "Raw FFI bindings to the Ipi IP-intelligence ABI in ip-intelligence-cxx, including the weighted getters. Builds and statically links the fiftyone-ip-intelligence-c native library."
 edition.workspace = true
 rust-version.workspace = true

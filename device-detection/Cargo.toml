@@ -1,6 +1,6 @@
 [package]
 name = "fiftyone-device-detection"
-version = "4.5.1"
+version = "4.5.2"
 description = "Device-detection facade re-exporting the engines plus a builder that selects the cloud or on-premise deployment."
 edition.workspace = true
 rust-version.workspace = true
@@ -13,20 +13,20 @@ homepage.workspace = true
 # Always present: the core pipeline plumbing and the shared device-data model
 # (result types and key) every deployment surfaces, plus the engine traits the
 # facade re-exports for consumers who want to introspect aspect metadata.
-fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
-fiftyone-pipeline-engines = { version = "4.5.1", path = "../pipeline-engines" }
-fiftyone-pipeline-engines-fiftyone = { version = "4.5.1", path = "../pipeline-engines-fiftyone" }
-fiftyone-device-detection-shared = { version = "4.5.1", path = "../device-detection-shared" }
+fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
+fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines" }
+fiftyone-pipeline-engines-fiftyone = { version = "4.5.2", path = "../pipeline-engines-fiftyone" }
+fiftyone-device-detection-shared = { version = "4.5.2", path = "../device-detection-shared" }
 
 # The on-premise Hash engine. Pulled in only with the `on-premise` feature so a
 # cloud-only consumer never links the native common-cxx Hash library.
-fiftyone-device-detection-onpremise = { version = "4.5.1", path = "../device-detection-onpremise", optional = true }
-fiftyone-native = { version = "4.5.1", path = "../native", default-features = false, features = ["dd"], optional = true }
+fiftyone-device-detection-onpremise = { version = "4.5.2", path = "../device-detection-onpremise", optional = true }
+fiftyone-native = { version = "4.5.2", path = "../native", default-features = false, features = ["dd"], optional = true }
 
 # The cloud engine and the request engine it reads from. Pulled in only with the
 # `cloud` feature.
-fiftyone-device-detection-cloud = { version = "4.5.1", path = "../device-detection-cloud", optional = true }
-fiftyone-cloud-request-engine = { version = "4.5.1", path = "../cloud-request-engine", optional = true, default-features = false }
+fiftyone-device-detection-cloud = { version = "4.5.2", path = "../device-detection-cloud", optional = true }
+fiftyone-cloud-request-engine = { version = "4.5.2", path = "../cloud-request-engine", optional = true, default-features = false }
 
 [features]
 # The full SDK is built and tested here. A cloud-only consumer can opt out of
@@ -49,8 +49,8 @@ reqwest-client = ["cloud", "fiftyone-device-detection-cloud/reqwest-client"]
 # This proves the namespaced common-cxx symbols let both native engines coexist
 # at the facade level, not only at the fiftyone-native level. It is a
 # dev-dependency so it never touches the published dependency graph.
-fiftyone-ip-intelligence = { version = "4.5.1", path = "../ip-intelligence" }
-fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
+fiftyone-ip-intelligence = { version = "4.5.2", path = "../ip-intelligence" }
+fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the

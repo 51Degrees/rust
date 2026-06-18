@@ -1,6 +1,6 @@
 [package]
 name = "fiftyone-pipeline-engines-fiftyone"
-version = "4.5.1"
+version = "4.5.2"
 description = "ShareUsage, SetHeaders and Sequence elements plus the FiftyOne metadata model for the 51Degrees pipeline."
 edition.workspace = true
 rust-version.workspace = true
@@ -10,12 +10,12 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-fiftyone-pipeline-core = { version = "4.5.1", path = "../pipeline-core" }
+fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
 # default-features = false drops the data-update service (reqwest/notify), which
 # the elements in this crate never use, so the web crates that build on it reach
 # wasm32-wasip1. A consumer that needs the service enables the `data-update`
 # feature below.
-fiftyone-pipeline-engines = { version = "4.5.1", path = "../pipeline-engines", default-features = false }
+fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines", default-features = false }
 thiserror.workspace = true
 ahash.workspace = true
 # GUID generation for the session id created by the Sequence element. The v4

@@ -1,7 +1,7 @@
 [package]
 publish = false  # internal example/bench crate, not for crates.io
 name = "pipeline-examples"
-version = "4.5.1"
+version = "4.5.2"
 description = "Runnable pipeline examples for the 51Degrees Rust SDK."
 edition.workspace = true
 rust-version.workspace = true
@@ -14,28 +14,28 @@ homepage.workspace = true
 # Both facades: the pipeline examples build combined pipelines that surface both
 # Device Detection and IP Intelligence results. Default features (cloud +
 # on-premise) are kept.
-fiftyone-device-detection = { version = "4.5.1", path = "../../device-detection" }
-fiftyone-ip-intelligence = { version = "4.5.1", path = "../../ip-intelligence" }
+fiftyone-device-detection = { version = "4.5.2", path = "../../device-detection" }
+fiftyone-ip-intelligence = { version = "4.5.2", path = "../../ip-intelligence" }
 
 # Core pipeline plumbing and the engine traits the examples introspect.
-fiftyone-pipeline-core = { version = "4.5.1", path = "../../pipeline-core" }
-fiftyone-pipeline-engines = { version = "4.5.1", path = "../../pipeline-engines" }
+fiftyone-pipeline-core = { version = "4.5.2", path = "../../pipeline-core" }
+fiftyone-pipeline-engines = { version = "4.5.2", path = "../../pipeline-engines" }
 # The sharded-LRU cache the caching example wraps around an engine.
-fiftyone-caching = { version = "4.5.1", path = "../../caching" }
+fiftyone-caching = { version = "4.5.2", path = "../../caching" }
 # Brings in ShareUsageElement, which the web examples must add (usage sharing is
 # required for web examples, forbidden for console examples). share-usage-transport
 # compiles the built-in HTTP sender (off by default so the crate stays
 # wasm-buildable).
-fiftyone-pipeline-engines-fiftyone = { version = "4.5.1", path = "../../pipeline-engines-fiftyone", features = ["share-usage-transport"] }
+fiftyone-pipeline-engines-fiftyone = { version = "4.5.2", path = "../../pipeline-engines-fiftyone", features = ["share-usage-transport"] }
 
 # Shared example helpers: resource-key-from-env, data-file path resolvers, the
 # data-file-age warning, property-as-string and the sample evidence values.
-examples-shared = { version = "4.5.1", path = "../../examples-shared" }
+examples-shared = { version = "4.5.2", path = "../../examples-shared" }
 
 # Web plumbing for the web example: the framework-neutral pipeline plus the axum
 # adapter that mounts the two client-side endpoints and the result extractor.
-fiftyone-pipeline-web = { version = "4.5.1", path = "../../pipeline-web" }
-fiftyone-pipeline-web-axum = { version = "4.5.1", path = "../../pipeline-web-axum" }
+fiftyone-pipeline-web = { version = "4.5.2", path = "../../pipeline-web" }
+fiftyone-pipeline-web-axum = { version = "4.5.2", path = "../../pipeline-web-axum" }
 # axum 0.8 / tower 0.5 match the versions the web-axum crate already resolves, so
 # no second major version is pulled into the graph.
 axum.workspace = true
