@@ -20,11 +20,13 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-cloud-get-all-properties.rs
+//! @example ipi-cloud-get-all-properties
 //!
 //! Cloud IP-intelligence get-all-properties console example.
 //!
 //! See the descriptive block at the bottom of this file for the full narrative.
+//!
+//! @snippet ipi-cloud-get-all-properties.rs example
 
 use anyhow::{Context, Result};
 use fiftyone_ip_intelligence::{IpIntelligencePipelineBuilder, IP_DATA_KEY};
@@ -52,6 +54,7 @@ pub struct Options {
     pub endpoint: Option<String>,
 }
 
+// [example]
 /// The example logic: build a cloud IP-intelligence pipeline, process one IP
 /// address, then enumerate every property the result holds, printing each with
 /// its weighted values.
@@ -97,6 +100,7 @@ pub fn run(options: Options) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Render any property value for display.
 ///

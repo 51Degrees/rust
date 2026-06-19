@@ -20,11 +20,13 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-cloud-getting-started.rs
+//! @example ipi-cloud-getting-started
 //!
 //! Cloud IP-intelligence getting-started console example.
 //!
 //! See the descriptive block at the bottom of this file for the full narrative.
+//!
+//! @snippet ipi-cloud-getting-started.rs example
 
 use std::sync::Arc;
 
@@ -51,6 +53,7 @@ pub struct Options {
     pub endpoint: Option<String>,
 }
 
+// [example]
 /// The example logic: build a cloud IP-intelligence pipeline from a resource
 /// key, then analyse an IPv4 and an IPv6 address, printing the network and
 /// location properties for each.
@@ -75,6 +78,7 @@ pub fn run(options: Options) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Process a single IP address and print the IP-intelligence results.
 fn analyse_ip(pipeline: &Arc<Pipeline>, ip: &str) -> Result<()> {

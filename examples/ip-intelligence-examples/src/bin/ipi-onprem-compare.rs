@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-compare.rs
+//! @example ipi-onprem-compare
 //!
 //! On-premise IP Intelligence compare console example.
 //!
@@ -28,6 +28,8 @@
 //! the results side by side, then compares two IP addresses against each other.
 //! The descriptive block the documentation tooling renders lives at the bottom
 //! of the file.
+//!
+//! @snippet ipi-onprem-compare.rs example
 
 use std::io::Write;
 use std::sync::Arc;
@@ -71,6 +73,7 @@ impl ExampleOptions {
 /// autonomous system; an Enterprise file would populate the location set too.
 const COMPARE_PROPERTY: &str = "Asn";
 
+// [example]
 /// Run the compare example, writing all output to `out`.
 ///
 /// Usage sharing is not enabled, as this is a console example.
@@ -80,6 +83,7 @@ pub fn run(options: &ExampleOptions, out: &mut dyn Write) -> anyhow::Result<()> 
     compare_two_ips(options, out)?;
     Ok(())
 }
+// [example]
 
 /// Build a pipeline for one profile and look an IP up, returning the rendered
 /// value of the compared property.

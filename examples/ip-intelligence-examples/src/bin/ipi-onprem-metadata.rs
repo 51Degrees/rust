@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-metadata.rs
+//! @example ipi-onprem-metadata
 //!
 //! On-premise IP Intelligence metadata console example.
 //!
@@ -28,6 +28,8 @@
 //! value types and any descriptions/tiers), the evidence keys it accepts and a
 //! summary of the data file in use. The descriptive block the documentation
 //! tooling renders lives at the bottom of the file.
+//!
+//! @snippet ipi-onprem-metadata.rs example
 
 use std::io::Write;
 
@@ -72,6 +74,7 @@ const CANDIDATE_EVIDENCE_KEYS: &[&str] = &[
     "header.user-agent",
 ];
 
+// [example]
 /// Run the metadata example, writing all output to `out`.
 ///
 /// Usage sharing is not enabled, as this is a console example. A production
@@ -94,6 +97,7 @@ pub fn run(options: &ExampleOptions, out: &mut dyn Write) -> anyhow::Result<()> 
 
     Ok(())
 }
+// [example]
 
 /// Print the tier and publish date of the data file in use.
 fn output_data_file_details(

@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-web-uach.rs
+//! @example dd-web-uach
 //!
 //! Device Detection web example: User-Agent Client Hints (UACH) flow.
 //!
@@ -30,6 +30,8 @@
 //! into the `sec-ch-ua*` HTTP headers the Hash engine understands. The page
 //! shows the evidence the pipeline received (including any decoded client hints)
 //! and refreshes client-side after the high-entropy round trip.
+//!
+//! @snippet dd-web-uach.rs example
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -99,6 +101,7 @@ pub fn build_app(data_file: &std::path::Path) -> anyhow::Result<Router> {
     Ok(app)
 }
 
+// [example]
 /// Serve the example page over TCP until interrupted.
 pub fn run(options: Options) -> anyhow::Result<()> {
     // Build the pipeline (and so the share-usage element's blocking reqwest
@@ -130,6 +133,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         .context("serving the application")
     })
 }
+// [example]
 
 /// The home-page handler: show the evidence the pipeline received (the decoded
 /// `sec-ch-ua*` client hints become visible here after the client round trip),

@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-web-client-only-cloud.rs
+//! @example dd-web-client-only-cloud
 //!
 //! Device Detection web example: client-side-only cloud detection.
 //!
@@ -30,6 +30,8 @@
 //! (`<cloud-endpoint>/api/v4/<resource-key>.js`), which performs detection
 //! client-side and raises the `complete` event. The shared `examples.min.js`
 //! helper subscribes to it and renders the results into the page.
+//!
+//! @snippet dd-web-client-only-cloud.rs example
 
 use std::net::SocketAddr;
 
@@ -70,6 +72,7 @@ pub fn build_app(resource_key: &str) -> Router {
         .with_state(resource_key.to_owned())
 }
 
+// [example]
 /// Serve the page over TCP until interrupted.
 pub fn run(options: Options) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -89,6 +92,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             .context("serving the application")
     })
 }
+// [example]
 
 /// The home-page handler: a client-only page whose `#content` region is filled
 /// by the cloud resource script and the shared callback.

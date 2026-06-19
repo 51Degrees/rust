@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-performance.rs
+//! @example ipi-onprem-performance
 //!
 //! On-premise IP Intelligence performance (throughput) console example.
 //!
@@ -28,6 +28,8 @@
 //! single- and multi-threaded, reading the evidence from the data submodule.
 //! The descriptive block the documentation tooling renders lives at the bottom
 //! of the file.
+//!
+//! @snippet ipi-onprem-performance.rs example
 
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -109,6 +111,7 @@ impl BenchmarkResult {
     }
 }
 
+// [example]
 /// Run the performance example, writing all output to `out`.
 ///
 /// Usage sharing is not enabled, as this is a console example.
@@ -168,6 +171,7 @@ pub fn run(options: &ExampleOptions, out: &mut dyn Write) -> anyhow::Result<()> 
 
     Ok(())
 }
+// [example]
 
 /// Run a benchmark pass: `thread_count` threads, each looping `iterations`
 /// times over the shared IP set, looking each IP up through the pipeline.

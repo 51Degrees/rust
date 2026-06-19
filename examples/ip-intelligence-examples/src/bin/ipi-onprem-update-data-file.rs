@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-update-data-file.rs
+//! @example ipi-onprem-update-data-file
 //!
 //! On-premise IP Intelligence data-file update console example.
 //!
@@ -28,6 +28,8 @@
 //! a programmatic reload from disk, the file-system-watcher and automatic-update
 //! switches, and how the engine reports its data-file state. The descriptive
 //! block the documentation tooling renders lives at the bottom of the file.
+//!
+//! @snippet ipi-onprem-update-data-file.rs example
 
 use std::io::Write;
 use std::sync::Arc;
@@ -58,6 +60,7 @@ impl ExampleOptions {
     }
 }
 
+// [example]
 /// Run the update-data-file example, writing all output to `out`.
 ///
 /// Usage sharing is not enabled, as this is a console example.
@@ -123,6 +126,7 @@ pub fn run(options: &ExampleOptions, out: &mut dyn Write) -> anyhow::Result<()> 
 
     Ok(())
 }
+// [example]
 
 /// Report what the engine knows about its data file: path, publish date and any
 /// configured remote update URL.

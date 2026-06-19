@@ -20,10 +20,12 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-cloud-metadata.rs
+//! @example dd-cloud-metadata
 //!
 //! Cloud metadata console example. See the descriptive block at the bottom of
 //! this file for the full write-up.
+//!
+//! @snippet dd-cloud-metadata.rs example
 
 use std::sync::Arc;
 
@@ -39,6 +41,7 @@ pub struct ExampleOptions {
     pub endpoint: Option<String>,
 }
 
+// [example]
 /// Run the cloud metadata example.
 ///
 /// Lists the device properties the resource key grants (from the cloud device
@@ -81,6 +84,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Print the device properties the resource key grants, with their category and
 /// value type, one line per property.

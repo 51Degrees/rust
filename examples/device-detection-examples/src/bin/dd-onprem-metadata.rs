@@ -20,10 +20,12 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-metadata.rs
+//! @example dd-onprem-metadata
 //!
 //! On-premise metadata console example. See the descriptive block at the bottom
 //! of this file for the full write-up.
+//!
+//! @snippet dd-onprem-metadata.rs example
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -45,6 +47,7 @@ pub struct ExampleOptions {
     pub profile: PerformanceProfile,
 }
 
+// [example]
 /// Run the on-premise metadata example.
 ///
 /// Builds a Hash engine directly (no full pipeline is needed to read metadata),
@@ -73,6 +76,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Print the data file's publish date and data tier.
 ///

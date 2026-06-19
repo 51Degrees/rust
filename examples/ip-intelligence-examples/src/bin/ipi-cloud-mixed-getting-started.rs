@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-cloud-mixed-getting-started.rs
+//! @example ipi-cloud-mixed-getting-started
 //!
 //! Mixed cloud example: Device Detection and IP Intelligence in one pipeline.
 //!
@@ -29,6 +29,8 @@
 //! User-Agent and a client IP supplied together are resolved in one cloud call.
 //! The descriptive block the documentation tooling renders lives at the bottom of
 //! the file.
+//!
+//! @snippet ipi-cloud-mixed-getting-started.rs example
 
 use std::io::Write;
 use std::sync::Arc;
@@ -108,6 +110,7 @@ pub struct Options {
     pub endpoint: Option<String>,
 }
 
+// [example]
 /// Run the mixed example against the supplied options, writing all output to
 /// `out`.
 ///
@@ -166,6 +169,7 @@ pub fn run(options: &Options, out: &mut dyn Write) -> anyhow::Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Process one sample through the pipeline and print both the device and the IP
 /// intelligence results.

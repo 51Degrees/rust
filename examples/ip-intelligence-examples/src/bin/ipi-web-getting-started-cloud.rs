@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-web-getting-started-cloud.rs
+//! @example ipi-web-getting-started-cloud
 //!
 //! IP Intelligence web example: cloud Getting Started (server side).
 //!
@@ -30,6 +30,8 @@
 //! serves an HTML page that shows the weighted IP Intelligence (country,
 //! location, network) for the connecting client's IP address, with a form to
 //! look up any other address.
+//!
+//! @snippet ipi-web-getting-started-cloud.rs example
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -139,6 +141,7 @@ pub fn build_app(
     Ok(app)
 }
 
+// [example]
 /// Serve the example page over TCP until interrupted.
 pub fn run(options: Options) -> anyhow::Result<()> {
     // Build the pipeline (and so the share-usage element's blocking reqwest
@@ -175,6 +178,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         .context("serving the application")
     })
 }
+// [example]
 
 /// The home-page handler. The 51Degrees middleware has already processed the
 /// request (looking up the client IP, or the form-supplied IP), so the result is

@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-suspicious.rs
+//! @example ipi-onprem-suspicious
 //!
 //! On-premise IP Intelligence "suspicious" console example.
 //!
@@ -28,6 +28,8 @@
 //! carries to make a basic judgement about whether an IP address is a likely
 //! source of suspicious requests. The descriptive block the documentation tooling
 //! renders lives at the bottom of the file.
+//!
+//! @snippet ipi-onprem-suspicious.rs example
 
 use std::io::Write;
 use std::sync::Arc;
@@ -108,6 +110,7 @@ struct SuspiciousInputs {
     human_probability: i64,
 }
 
+// [example]
 /// Run the suspicious example against the supplied options, writing all output to
 /// `out`.
 ///
@@ -143,6 +146,7 @@ pub fn run(options: &ExampleOptions, out: &mut dyn Write) -> anyhow::Result<()> 
 
     Ok(())
 }
+// [example]
 
 /// Assess one IP address and print the contributing values plus the verdict.
 fn assess_ip(pipeline: &Arc<Pipeline>, ip: &str, out: &mut dyn Write) -> anyhow::Result<()> {
