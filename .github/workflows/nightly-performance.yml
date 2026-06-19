@@ -23,9 +23,14 @@ jobs:
   performance:
     runs-on: ubuntu-latest
     # The publish step commits the rendered graphs to the gh-images branch, which
-    # needs write access to repository contents.
+    # needs write access to repository contents. The comparison step also lists
+    # this repository's prior performance-result artifacts to chart the trend,
+    # which needs actions:read (gh api .../actions/artifacts returns 403
+    # otherwise). An explicit permissions block defaults everything else to none,
+    # so both must be named.
     permissions:
       contents: write
+      actions: read
     steps:
       # 1. The Rust workspace, checked out into a subdirectory named after the
       #    repository so the common-ci script's -RepoName convention matches the
