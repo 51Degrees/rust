@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-cloud-get-all-properties
+//! @page dd-cloud-get-all-properties-example Get All Properties (Device Detection, Cloud)
 //!
 //! Cloud get-all-properties console example. See the descriptive block at the
 //! bottom of this file for the full write-up.

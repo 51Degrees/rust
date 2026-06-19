@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-cloud-tac
+//! @page dd-cloud-tac-example TAC (Device Detection, Cloud)
 //!
 //! Cloud TAC-lookup console example. See the descriptive block at the bottom of
 //! this file for the full write-up.

@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-performance
+//! @page dd-onprem-performance-example Performance (Device Detection, On-premise)
 //!
 //! On-premise performance-benchmark console example. See the descriptive block
 //! at the bottom of this file for the full write-up.

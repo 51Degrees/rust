@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-metrics
+//! @page ipi-onprem-metrics-example Metrics (IP Intelligence, On-premise)
 //!
 //! On-premise IP Intelligence metrics console example.
 //!

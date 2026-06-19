@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-cloud-configurator
+//! @page dd-cloud-configurator-example Configurator (Device Detection, Cloud)
 //!
 //! Cloud configurator console example. See the descriptive block at the bottom
 //! of this file for the full write-up.

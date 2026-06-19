@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-metadata
+//! @page dd-onprem-metadata-example Metadata (Device Detection, On-premise)
 //!
 //! On-premise metadata console example. See the descriptive block at the bottom
 //! of this file for the full write-up.

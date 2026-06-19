@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-web-uach
+//! @page dd-web-uach-example UA Client Hints (Device Detection, Web)
 //!
 //! Device Detection web example: User-Agent Client Hints (UACH) flow.
 //!

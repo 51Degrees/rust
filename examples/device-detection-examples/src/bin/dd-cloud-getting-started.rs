@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-cloud-getting-started
+//! @page dd-cloud-getting-started-example Getting Started (Device Detection, Cloud)
 //!
 //! Cloud getting-started console example. See the descriptive block at the
 //! bottom of this file for the full write-up.

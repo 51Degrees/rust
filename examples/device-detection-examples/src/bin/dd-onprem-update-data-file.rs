@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-update-data-file
+//! @page dd-onprem-update-data-file-example Update Data File (Device Detection, On-premise)
 //!
 //! On-premise data-file-update console example. See the descriptive block at the
 //! bottom of this file for the full write-up.
