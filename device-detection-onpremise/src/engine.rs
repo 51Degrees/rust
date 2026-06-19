@@ -154,6 +154,11 @@ pub struct DeviceDetectionOnPremiseEngine {
     /// The data-source tier, for example `Lite`.
     data_source_tier: String,
 
+    /// The expected concurrency the data set's handle pool was sized for, or
+    /// `None` for the profile default. Carried so a reload re-opens the data set
+    /// with the same pool size.
+    concurrency: Option<u16>,
+
     /// The single data file's run-time state, shared with the update service.
     data_files: Vec<Arc<AspectEngineDataFile>>,
 }
@@ -170,6 +175,7 @@ impl DeviceDetectionOnPremiseEngine {
         requested_properties: Vec<String>,
         data_file_config: DataFileConfiguration,
         data_source_tier: Option<String>,
+        concurrency: Option<u16>,
     ) -> Self {
         // Resolve the data-source tier: an explicit builder override wins, then
         // the tier read from the native data file header (Lite, Enterprise, TAC
@@ -197,6 +203,7 @@ impl DeviceDetectionOnPremiseEngine {
             aspect_properties,
             evidence_key_filter,
             data_source_tier,
+            concurrency,
             data_files: vec![data_file],
         }
     }
@@ -337,7 +344,12 @@ impl DeviceDetectionOnPremiseEngine {
     /// path. A successful reload replaces the live manager; in-flight detections
     /// keep using the manager they snapshotted.
     fn reload_from_path(&self, path: &Path) -> Result<()> {
-        let manager = open_manager(path, self.profile, &self.requested_properties)?;
+        let manager = open_manager(
+            path,
+            self.profile,
+            &self.requested_properties,
+            self.concurrency,
+        )?;
         self.manager.store(manager);
 
         // Refresh the recorded publish time from the new file.
@@ -431,13 +443,14 @@ pub(crate) fn open_manager(
     path: &Path,
     profile: PerformanceProfile,
     requested_properties: &[String],
+    concurrency: Option<u16>,
 ) -> Result<Arc<Manager>> {
     let requested: Option<Vec<&str>> = if requested_properties.is_empty() {
         None
     } else {
         Some(requested_properties.iter().map(String::as_str).collect())
     };
-    Manager::open_with_properties(path, profile, requested.as_deref())
+    Manager::open_with_options(path, profile, requested.as_deref(), concurrency)
 }
 
 /// Build the core and aspect property metadata for the loaded data set.

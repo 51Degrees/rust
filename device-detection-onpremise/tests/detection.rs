@@ -188,6 +188,63 @@ fn detects_a_mobile_user_agent() {
 }
 
 #[test]
+fn concurrency_sizes_the_pool_for_parallel_use() {
+    // The LowMemory profile reads collections through a fixed-size handle pool.
+    // `.concurrency(n)` sizes that pool, so more threads than the default core
+    // count can share one engine. Build a LowMemory engine with an explicit
+    // concurrency and run detections from several threads at once: if the pool
+    // were not sized for them the native reads would error under contention.
+    let Some(data_file) = lite_data_file() else {
+        eprintln!("no Lite Hash data file found; skipping concurrency test");
+        return;
+    };
+    const THREADS: u16 = 8;
+    let engine = match DeviceDetectionOnPremiseEngineBuilder::new(data_file)
+        .performance_profile(PerformanceProfile::LowMemory)
+        .concurrency(THREADS)
+        .build()
+    {
+        Ok(engine) => engine,
+        Err(e) => {
+            eprintln!("native Hash data set did not load ({e}); skipping concurrency test");
+            return;
+        }
+    };
+
+    let element: Arc<dyn FlowElement> = engine;
+    let pipeline = Arc::new(
+        Pipeline::builder()
+            .add_element(element)
+            .build()
+            .expect("pipeline builds"),
+    );
+
+    let workers: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let pipeline = Arc::clone(&pipeline);
+            std::thread::spawn(move || {
+                for _ in 0..25 {
+                    let mut data = pipeline.create_flow_data_with(
+                        Evidence::builder()
+                            .add("header.user-agent", DESKTOP_USER_AGENT)
+                            .build(),
+                    );
+                    data.process().expect("concurrent processing succeeds");
+                    let device = data.get(DEVICE_DATA_KEY).expect("device data was produced");
+                    assert!(
+                        device.is_mobile().has_value(),
+                        "IsMobile should resolve on every worker thread"
+                    );
+                }
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().expect("a worker thread panicked");
+    }
+}
+
+#[test]
 fn refresh_round_trips() {
     let Some(engine) = build_engine() else {
         eprintln!("no Lite Hash data file found; skipping refresh test");
