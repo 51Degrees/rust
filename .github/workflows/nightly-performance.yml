@@ -134,6 +134,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Committing the rendered graphs onto the gh-images branch needs a git
+          # identity, which a bare runner checkout does not configure; use the
+          # github-actions bot identity so the commit succeeds.
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # The comparison step reads the current results from the working
           # directory, so copy them up from the summary folder it was told to
           # write to.
