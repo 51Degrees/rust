@@ -259,6 +259,7 @@ pub struct DeviceDetectionOnPremisePipelineBuilder {
     profile: PerformanceProfile,
     properties: Vec<String>,
     data_source_tier: Option<String>,
+    concurrency: Option<u16>,
     use_uach: bool,
     share_usage: bool,
 }
@@ -272,6 +273,7 @@ impl DeviceDetectionOnPremisePipelineBuilder {
             profile: PerformanceProfile::Default,
             properties: Vec::new(),
             data_source_tier: None,
+            concurrency: None,
             use_uach: true,
             share_usage: false,
         }
@@ -281,6 +283,19 @@ impl DeviceDetectionOnPremisePipelineBuilder {
     /// [`PerformanceProfile::Default`].
     pub fn performance_profile(mut self, profile: PerformanceProfile) -> Self {
         self.profile = profile;
+        self
+    }
+
+    /// Set the expected concurrency: the number of threads that will process
+    /// through the built pipeline at once.
+    ///
+    /// This sizes the file-handle pool the file-backed collections use under the
+    /// [`PerformanceProfile::LowMemory`] and [`PerformanceProfile::Balanced`]
+    /// profiles, which otherwise defaults to the number of cores. Set it when
+    /// more threads than that will share the pipeline. It has no effect on the
+    /// in-memory profiles.
+    pub fn concurrency(mut self, concurrency: u16) -> Self {
+        self.concurrency = Some(concurrency);
         self
     }
 
@@ -358,6 +373,9 @@ impl DeviceDetectionOnPremisePipelineBuilder {
         engine_builder = engine_builder.properties(self.properties);
         if let Some(tier) = self.data_source_tier {
             engine_builder = engine_builder.data_source_tier(tier);
+        }
+        if let Some(concurrency) = self.concurrency {
+            engine_builder = engine_builder.concurrency(concurrency);
         }
         let engine = engine_builder.build()?;
 

@@ -121,6 +121,30 @@ fn config_for(profile: PerformanceProfile) -> *mut sys::ConfigHash {
     }
 }
 
+/// Set the expected concurrency on every collection in a Hash configuration.
+///
+/// For the `LowMemory` and `Balanced` profiles the collections are read from
+/// file through a fixed-size handle pool, so the pool must be sized for the
+/// number of threads that will use the data set concurrently. This mirrors the
+/// `setConcurrency` helper in the other 51Degrees ports, which applies the value
+/// to every collection's config. A value of zero is treated by the native
+/// library as a single concurrent operation.
+fn set_pool_concurrency(config: &mut sys::ConfigHash, concurrency: u16) {
+    for collection in [
+        &mut config.strings,
+        &mut config.components,
+        &mut config.maps,
+        &mut config.properties,
+        &mut config.values,
+        &mut config.profiles,
+        &mut config.root_nodes,
+        &mut config.nodes,
+        &mut config.profile_offsets,
+    ] {
+        collection.concurrency = concurrency;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Manager
 // ---------------------------------------------------------------------------
@@ -169,6 +193,23 @@ impl Manager {
         profile: PerformanceProfile,
         properties: Option<&[&str]>,
     ) -> Result<Arc<Manager>> {
+        Self::open_with_options(path, profile, properties, None)
+    }
+
+    /// Open a Hash data file with the named properties and an optional expected
+    /// concurrency.
+    ///
+    /// `concurrency` sizes the file-handle pool the file-backed collections use
+    /// under the `LowMemory` and `Balanced` profiles, so it should be at least
+    /// the number of threads that will process through the data set at once.
+    /// [`None`] keeps the profile's default. It has no effect on the in-memory
+    /// profiles, where every collection is already resident.
+    pub fn open_with_options(
+        path: impl AsRef<Path>,
+        profile: PerformanceProfile,
+        properties: Option<&[&str]>,
+        concurrency: Option<u16>,
+    ) -> Result<Arc<Manager>> {
         let path = path.as_ref();
         let path_string = path.to_str().ok_or_else(|| Error::Native {
             status: String::from("InvalidInput"),
@@ -200,13 +241,23 @@ impl Manager {
         let boxed = Box::new(sys::ResourceManager::zeroed());
         let manager_ptr = Box::into_raw(boxed);
 
+        // Copy the predefined configuration for this profile into a local value
+        // so an expected-concurrency override sizes this engine's handle pool
+        // without mutating the shared global the other engines read.
+        // Safety: `config_for` returns a valid pointer to an initialized config
+        // global; copying out of it is a plain read of a `repr(C)` value.
+        let mut config = unsafe { *config_for(profile) };
+        if let Some(concurrency) = concurrency {
+            set_pool_concurrency(&mut config, concurrency);
+        }
+
         let mut exception = sys::Exception::cleared();
         // Safety: all pointers are valid for the duration of the call. The
-        // config global is read only and the path is null terminated.
+        // config is read only for the call and the path is null terminated.
         let status = unsafe {
             sys::fiftyoneDegreesHashInitManagerFromFile(
                 manager_ptr,
-                config_for(profile),
+                &mut config,
                 &mut required,
                 path_c.as_ptr(),
                 &mut exception,

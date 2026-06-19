@@ -64,6 +64,7 @@ pub struct DeviceDetectionOnPremiseEngineBuilder {
     requested_properties: Vec<String>,
     data_source_tier: Option<String>,
     auto_update: Option<AutoUpdate>,
+    concurrency: Option<u16>,
 }
 
 /// The optional automatic-update settings captured by the builder.
@@ -86,6 +87,7 @@ impl DeviceDetectionOnPremiseEngineBuilder {
             requested_properties: Vec::new(),
             data_source_tier: None,
             auto_update: None,
+            concurrency: None,
         }
     }
 
@@ -93,6 +95,20 @@ impl DeviceDetectionOnPremiseEngineBuilder {
     /// [`PerformanceProfile::Default`].
     pub fn performance_profile(mut self, profile: PerformanceProfile) -> Self {
         self.profile = profile;
+        self
+    }
+
+    /// Set the expected concurrency: the number of threads that will process
+    /// through the built engine at once.
+    ///
+    /// This sizes the file-handle pool the file-backed collections use under the
+    /// [`PerformanceProfile::LowMemory`] and [`PerformanceProfile::Balanced`]
+    /// profiles. The pool defaults to the number of cores; if more threads than
+    /// that will share the engine, set this to at least that many or threads
+    /// will contend on the pool. It has no effect on the in-memory profiles,
+    /// where the data set is fully resident.
+    pub fn concurrency(mut self, concurrency: u16) -> Self {
+        self.concurrency = Some(concurrency);
         self
     }
 
@@ -178,6 +194,7 @@ impl DeviceDetectionOnPremiseEngineBuilder {
             &self.data_file_path,
             self.profile,
             &self.requested_properties,
+            self.concurrency,
         )?;
 
         // The data-file configuration the engine carries. When auto-update was
@@ -201,6 +218,7 @@ impl DeviceDetectionOnPremiseEngineBuilder {
             self.requested_properties,
             data_file_config,
             self.data_source_tier,
+            self.concurrency,
         ));
 
         // Register the data file with the update service if one was supplied.
