@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-offline-processing
+//! @page ipi-onprem-offline-processing-example Offline Processing (IP Intelligence, On-premise)
 //!
 //! On-premise IP Intelligence offline (batch) processing console example.
 //!

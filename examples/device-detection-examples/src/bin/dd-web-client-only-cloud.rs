@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-web-client-only-cloud
+//! @page dd-web-client-only-cloud-example Client Only Cloud (Device Detection, Web)
 //!
 //! Device Detection web example: client-side-only cloud detection.
 //!

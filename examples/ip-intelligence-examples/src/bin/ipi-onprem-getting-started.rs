@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-getting-started
+//! @page ipi-onprem-getting-started-example Getting Started (IP Intelligence, On-premise)
 //!
 //! On-premise IP Intelligence "getting started" console example.
 //!

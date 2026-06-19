@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-web-getting-started-cloud
+//! @page ipi-web-getting-started-cloud-example Getting Started Cloud (IP Intelligence, Web)
 //!
 //! IP Intelligence web example: cloud Getting Started (server side).
 //!

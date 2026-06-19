@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-compare
+//! @page ipi-onprem-compare-example Compare (IP Intelligence, On-premise)
 //!
 //! On-premise IP Intelligence compare console example.
 //!

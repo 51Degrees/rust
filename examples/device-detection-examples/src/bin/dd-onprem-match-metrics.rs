@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-match-metrics
+//! @page dd-onprem-match-metrics-example Match Metrics (Device Detection, On-premise)
 //!
 //! On-premise match-metrics console example. See the descriptive block at the
 //! bottom of this file for the full write-up.

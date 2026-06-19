@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-cloud-mixed-getting-started
+//! @page ipi-cloud-mixed-getting-started-example Mixed Getting Started (IP Intelligence, Cloud)
 //!
 //! Mixed cloud example: Device Detection and IP Intelligence in one pipeline.
 //!

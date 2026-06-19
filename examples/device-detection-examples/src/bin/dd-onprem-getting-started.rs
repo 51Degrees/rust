@@ -20,9 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-getting-started
-//!
-//! # Getting Started: On-premise Device Detection (Rust)
+//! @page dd-onprem-getting-started-example Getting Started (Device Detection, On-premise)
 //!
 //! Builds an on-premise Device Detection pipeline and reads strongly-typed
 //! device properties (`IsMobile`, `PlatformName`, `BrowserName`, `DeviceId`)

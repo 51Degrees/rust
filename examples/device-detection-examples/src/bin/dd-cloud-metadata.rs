@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-cloud-metadata
+//! @page dd-cloud-metadata-example Metadata (Device Detection, Cloud)
 //!
 //! Cloud metadata console example. See the descriptive block at the bottom of
 //! this file for the full write-up.

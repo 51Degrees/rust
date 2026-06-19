@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-offline-processing
+//! @page dd-onprem-offline-processing-example Offline Processing (Device Detection, On-premise)
 //!
 //! On-premise offline-processing console example. See the descriptive block at
 //! the bottom of this file for the full write-up.

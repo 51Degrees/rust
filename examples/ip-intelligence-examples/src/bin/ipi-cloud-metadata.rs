@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-cloud-metadata
+//! @page ipi-cloud-metadata-example Metadata (IP Intelligence, Cloud)
 //!
 //! Cloud IP-intelligence metadata console example.
 //!

@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-performance
+//! @page ipi-onprem-performance-example Performance (IP Intelligence, On-premise)
 //!
 //! On-premise IP Intelligence performance (throughput) console example.
 //!

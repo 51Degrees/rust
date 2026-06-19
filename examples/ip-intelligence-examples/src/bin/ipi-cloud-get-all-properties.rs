@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-cloud-get-all-properties
+//! @page ipi-cloud-get-all-properties-example Get All Properties (IP Intelligence, Cloud)
 //!
 //! Cloud IP-intelligence get-all-properties console example.
 //!

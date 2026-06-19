@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-suspicious
+//! @page ipi-onprem-suspicious-example Suspicious (IP Intelligence, On-premise)
 //!
 //! On-premise IP Intelligence "suspicious" console example.
 //!

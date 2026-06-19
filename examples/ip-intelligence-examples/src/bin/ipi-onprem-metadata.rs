@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-metadata
+//! @page ipi-onprem-metadata-example Metadata (IP Intelligence, On-premise)
 //!
 //! On-premise IP Intelligence metadata console example.
 //!

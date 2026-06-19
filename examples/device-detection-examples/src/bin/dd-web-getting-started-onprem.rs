@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-web-getting-started-onprem
+//! @page dd-web-getting-started-onprem-example Getting Started On-premise (Device Detection, Web)
 //!
 //! Device Detection web example: on-premise Getting Started (server plus client).
 //!
