@@ -20,10 +20,12 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-cloud-tac.rs
+//! @example dd-cloud-tac
 //!
 //! Cloud TAC-lookup console example. See the descriptive block at the bottom of
 //! this file for the full write-up.
+//!
+//! @snippet dd-cloud-tac.rs example
 
 use anyhow::{Context, Result};
 
@@ -60,6 +62,7 @@ impl ExampleOptions {
     }
 }
 
+// [example]
 /// Run the cloud TAC-lookup example.
 ///
 /// A TAC identifies a class of device, so a lookup can match several device
@@ -117,6 +120,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Read the resource key from the command line or the environment, then run.
 fn main() -> Result<()> {

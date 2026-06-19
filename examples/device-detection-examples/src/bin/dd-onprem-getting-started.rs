@@ -20,14 +20,15 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-getting-started.rs
+//! @example dd-onprem-getting-started
 //!
 //! # Getting Started: On-premise Device Detection (Rust)
 //!
 //! Builds an on-premise Device Detection pipeline and reads strongly-typed
 //! device properties (`IsMobile`, `PlatformName`, `BrowserName`, `DeviceId`)
-//! back from processed User-Agent evidence. The annotated walk-through is in the
-//! comment at the foot of this file; the complete source follows.
+//! back from processed User-Agent evidence. The core of the example:
+//!
+//! @snippet dd-onprem-getting-started.rs example
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -51,6 +52,7 @@ pub struct ExampleOptions {
     pub profile: PerformanceProfile,
 }
 
+// [example]
 /// Run the on-premise getting-started example.
 ///
 /// Builds an on-premise device-detection pipeline from the Hash data file, then
@@ -85,6 +87,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// The representative evidence the example processes: a desktop and a mobile
 /// User-Agent, each as a labelled `(key, value)` pair list.

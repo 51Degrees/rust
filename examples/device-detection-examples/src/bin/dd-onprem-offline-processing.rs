@@ -20,10 +20,12 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-offline-processing.rs
+//! @example dd-onprem-offline-processing
 //!
 //! On-premise offline-processing console example. See the descriptive block at
 //! the bottom of this file for the full write-up.
+//!
+//! @snippet dd-onprem-offline-processing.rs example
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -56,6 +58,7 @@ pub struct ExampleOptions {
     pub max_records: usize,
 }
 
+// [example]
 /// Run the on-premise offline-processing example.
 ///
 /// Builds an on-premise pipeline, streams evidence records from the YAML file,
@@ -112,6 +115,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Iterate the records in a multi-document YAML evidence stream.
 ///

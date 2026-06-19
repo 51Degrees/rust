@@ -20,10 +20,12 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-cloud-get-all-properties.rs
+//! @example dd-cloud-get-all-properties
 //!
 //! Cloud get-all-properties console example. See the descriptive block at the
 //! bottom of this file for the full write-up.
+//!
+//! @snippet dd-cloud-get-all-properties.rs example
 
 use anyhow::{Context, Result};
 
@@ -59,6 +61,7 @@ impl ExampleOptions {
     }
 }
 
+// [example]
 /// Run the cloud get-all-properties example.
 ///
 /// Processes a single User-Agent and prints every property the resource key
@@ -116,6 +119,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Truncate a long value for display, appending an ellipsis when it is cut.
 fn truncate(value: &str) -> String {

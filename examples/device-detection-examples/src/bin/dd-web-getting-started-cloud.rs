@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-web-getting-started-cloud.rs
+//! @example dd-web-getting-started-cloud
 //!
 //! Device Detection web example: cloud Getting Started (server plus client).
 //!
@@ -29,6 +29,8 @@
 //! client-side endpoints (`/51Degrees.core.js` and `/51dpipeline/json`) are
 //! mounted, and serves an HTML page that shows the server-side detection result
 //! and then refreshes it client-side via the 51Degrees JavaScript.
+//!
+//! @snippet dd-web-getting-started-cloud.rs example
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -110,6 +112,7 @@ pub fn build_app(resource_key: &str, state: Option<CloudEngineState>) -> anyhow:
     Ok(app)
 }
 
+// [example]
 /// Serve the example page over TCP until interrupted.
 pub fn run(options: Options) -> anyhow::Result<()> {
     // Build the pipeline (and so the share-usage element's blocking reqwest
@@ -144,6 +147,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         .context("serving the application")
     })
 }
+// [example]
 
 /// The home-page handler. The 51Degrees middleware has already processed the
 /// request, so the detection result is read from the [`FiftyOneResult`]

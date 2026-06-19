@@ -20,10 +20,12 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-match-metrics.rs
+//! @example dd-onprem-match-metrics
 //!
 //! On-premise match-metrics console example. See the descriptive block at the
 //! bottom of this file for the full write-up.
+//!
+//! @snippet dd-onprem-match-metrics.rs example
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -47,6 +49,7 @@ pub struct ExampleOptions {
     pub timing_iterations: usize,
 }
 
+// [example]
 /// Run the on-premise match-metrics example.
 ///
 /// Processes a sample User-Agent and prints the detection match metrics
@@ -79,6 +82,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Process one evidence set and print every match metric the on-premise engine
 /// exposes for the detection.

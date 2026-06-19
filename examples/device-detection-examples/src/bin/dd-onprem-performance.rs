@@ -20,10 +20,12 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-performance.rs
+//! @example dd-onprem-performance
 //!
 //! On-premise performance-benchmark console example. See the descriptive block
 //! at the bottom of this file for the full write-up.
+//!
+//! @snippet dd-onprem-performance.rs example
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -68,6 +70,7 @@ struct BenchmarkResult {
     elapsed: Duration,
 }
 
+// [example]
 /// Run the on-premise performance benchmark.
 ///
 /// Loads a list of User-Agents, builds a single on-premise pipeline that requests
@@ -132,6 +135,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Build the pipeline used for the benchmark: a single requested property and the
 /// supplied performance profile.

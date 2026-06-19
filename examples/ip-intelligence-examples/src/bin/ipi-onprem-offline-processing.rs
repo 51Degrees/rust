@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-offline-processing.rs
+//! @example ipi-onprem-offline-processing
 //!
 //! On-premise IP Intelligence offline (batch) processing console example.
 //!
@@ -28,6 +28,8 @@
 //! a local `.ipi` data file and writes the results back as a YAML-like
 //! document stream. The descriptive block the documentation tooling renders
 //! lives at the bottom of the file.
+//!
+//! @snippet ipi-onprem-offline-processing.rs example
 
 use std::io::Write;
 use std::sync::Arc;
@@ -74,6 +76,7 @@ impl ExampleOptions {
 /// One evidence record read from the YAML file: client-IP key/value pairs.
 type EvidenceRecord = std::collections::BTreeMap<String, String>;
 
+// [example]
 /// Run the offline-processing example, writing all output to `out`.
 ///
 /// Usage sharing is not enabled, as this is a console example.
@@ -110,6 +113,7 @@ pub fn run(options: &ExampleOptions, out: &mut dyn Write) -> anyhow::Result<()> 
 
     Ok(())
 }
+// [example]
 
 /// Read up to `max_records` evidence records from a multi-document YAML file.
 ///

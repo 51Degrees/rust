@@ -20,10 +20,12 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-cloud-configurator.rs
+//! @example dd-cloud-configurator
 //!
 //! Cloud configurator console example. See the descriptive block at the bottom
 //! of this file for the full write-up.
+//!
+//! @snippet dd-cloud-configurator.rs example
 
 use std::sync::Arc;
 
@@ -64,6 +66,7 @@ impl ExampleOptions {
     }
 }
 
+// [example]
 /// Run the cloud configurator example.
 ///
 /// Builds the cloud pipeline by hand so the full resource-key configuration is
@@ -98,6 +101,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Assemble the cloud pipeline from the resource-key configuration.
 ///

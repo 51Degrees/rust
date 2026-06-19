@@ -20,10 +20,12 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-cloud-getting-started.rs
+//! @example dd-cloud-getting-started
 //!
 //! Cloud getting-started console example. See the descriptive block at the
 //! bottom of this file for the full write-up.
+//!
+//! @snippet dd-cloud-getting-started.rs example
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -54,6 +56,7 @@ pub struct ExampleOptions {
     pub endpoint: Option<String>,
 }
 
+// [example]
 /// Run the cloud getting-started example.
 ///
 /// Builds a cloud device-detection pipeline from the resource key, then runs the
@@ -94,6 +97,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Process one evidence set and print the key device properties.
 ///

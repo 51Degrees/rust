@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-web-getting-started-onprem.rs
+//! @example dd-web-getting-started-onprem
 //!
 //! Device Detection web example: on-premise Getting Started (server plus client).
 //!
@@ -30,6 +30,8 @@
 //! server-side detection then refreshes it client-side. Because the bundled data
 //! file is the free Lite tier, the page shows the standard Lite/stale warnings
 //! and a contact-us banner that lists the benefits of a paid data file.
+//!
+//! @snippet dd-web-getting-started-onprem.rs example
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -106,6 +108,7 @@ pub fn build_app(data_file: &std::path::Path) -> anyhow::Result<(Router, Vec<Str
     Ok((app, warnings))
 }
 
+// [example]
 /// Serve the example page over TCP until interrupted.
 pub fn run(options: Options) -> anyhow::Result<()> {
     // Build the pipeline (and so the share-usage element's blocking reqwest
@@ -139,6 +142,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         .context("serving the application")
     })
 }
+// [example]
 
 // The data-file warnings are computed once at build time and read on every page
 // render. A web handler cannot easily carry extra state alongside FiftyOneState

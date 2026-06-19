@@ -20,10 +20,12 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-cloud-native-model.rs
+//! @example dd-cloud-native-model
 //!
 //! Cloud native-model lookup console example. See the descriptive block at the
 //! bottom of this file for the full write-up.
+//!
+//! @snippet dd-cloud-native-model.rs example
 
 use anyhow::{Context, Result};
 
@@ -64,6 +66,7 @@ impl ExampleOptions {
     }
 }
 
+// [example]
 /// Run the cloud native-model lookup example.
 ///
 /// A native model name (the value a device reports about itself, for example
@@ -128,6 +131,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Read the resource key from the command line or the environment, then run.
 fn main() -> Result<()> {

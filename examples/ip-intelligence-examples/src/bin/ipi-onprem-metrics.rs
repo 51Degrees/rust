@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-metrics.rs
+//! @example ipi-onprem-metrics
 //!
 //! On-premise IP Intelligence metrics console example.
 //!
@@ -29,6 +29,8 @@
 //! a summary property, in place of Device Detection's match metrics. The
 //! descriptive block the documentation tooling renders lives at the bottom of
 //! the file.
+//!
+//! @snippet ipi-onprem-metrics.rs example
 
 use std::io::Write;
 use std::sync::Arc;
@@ -72,6 +74,7 @@ impl ExampleOptions {
 /// properties.
 const SUMMARY_PROPERTY: &str = "Asn";
 
+// [example]
 /// Run the metrics example, writing all output to `out`.
 ///
 /// Usage sharing is not enabled, as this is a console example.
@@ -108,6 +111,7 @@ pub fn run(options: &ExampleOptions, out: &mut dyn Write) -> anyhow::Result<()> 
 
     Ok(())
 }
+// [example]
 
 /// Time one lookup and print its insight: elapsed time, cache-hit flag and the
 /// resolved value of the summary property.

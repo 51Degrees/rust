@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-web-getting-started-onprem.rs
+//! @example ipi-web-getting-started-onprem
 //!
 //! IP Intelligence web example: on-premise Getting Started (server side).
 //!
@@ -31,6 +31,8 @@
 //! address, with a form to look up any other address. Because the bundled data
 //! file is a free tier, the page shows the standard data-file warnings as a
 //! `c-eg-alert` and a contact-us banner describing a paid Enterprise file.
+//!
+//! @snippet ipi-web-getting-started-onprem.rs example
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -109,6 +111,7 @@ pub fn build_app(data_file: &std::path::Path) -> anyhow::Result<(Router, Vec<Str
     Ok((app, warnings))
 }
 
+// [example]
 /// Serve the example page over TCP until interrupted.
 pub fn run(options: Options) -> anyhow::Result<()> {
     // Build the pipeline (and so the share-usage element's blocking reqwest
@@ -141,6 +144,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         .context("serving the application")
     })
 }
+// [example]
 
 // The data-file warnings are computed once at build time and read on every page
 // render. A web handler cannot easily carry extra state alongside FiftyOneState

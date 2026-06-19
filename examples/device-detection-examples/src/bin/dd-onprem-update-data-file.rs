@@ -20,10 +20,12 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example dd-onprem-update-data-file.rs
+//! @example dd-onprem-update-data-file
 //!
 //! On-premise data-file-update console example. See the descriptive block at the
 //! bottom of this file for the full write-up.
+//!
+//! @snippet dd-onprem-update-data-file.rs example
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -48,6 +50,7 @@ pub struct ExampleOptions {
     pub license_key: Option<String>,
 }
 
+// [example]
 /// Run the on-premise data-file-update example.
 ///
 /// Illustrates the four ways an on-premise data file is kept current:
@@ -148,6 +151,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
     // file-system watcher cleanly.
     Ok(())
 }
+// [example]
 
 /// Print a description of the four update mechanisms and how each is configured,
 /// so the example documents them even on a run that cannot download.

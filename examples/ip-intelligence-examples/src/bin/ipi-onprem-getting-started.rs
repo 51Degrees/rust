@@ -20,13 +20,15 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-onprem-getting-started.rs
+//! @example ipi-onprem-getting-started
 //!
 //! On-premise IP Intelligence "getting started" console example.
 //!
 //! Looks an IPv4 and an IPv6 address up against a local `.ipi` data file and
 //! prints the network and location properties. The descriptive block the
 //! documentation tooling renders lives at the bottom of the file.
+//!
+//! @snippet ipi-onprem-getting-started.rs example
 
 use std::io::Write;
 use std::sync::Arc;
@@ -108,6 +110,7 @@ const DISPLAYED_PROPERTIES: &[&str] = &[
     "Mcc",
 ];
 
+// [example]
 /// Run the getting-started example against the supplied options, writing all
 /// output to `out`.
 ///
@@ -146,6 +149,7 @@ pub fn run(options: &ExampleOptions, out: &mut dyn Write) -> anyhow::Result<()> 
 
     Ok(())
 }
+// [example]
 
 /// Look one IP address up and print its properties.
 fn analyse_ip(pipeline: &Arc<Pipeline>, ip: &str, out: &mut dyn Write) -> anyhow::Result<()> {

@@ -20,11 +20,13 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! @example ipi-cloud-metadata.rs
+//! @example ipi-cloud-metadata
 //!
 //! Cloud IP-intelligence metadata console example.
 //!
 //! See the descriptive block at the bottom of this file for the full narrative.
+//!
+//! @snippet ipi-cloud-metadata.rs example
 
 use anyhow::{Context, Result};
 use fiftyone_ip_intelligence::IpIntelligencePipelineBuilder;
@@ -55,6 +57,7 @@ pub struct Options {
     pub endpoint: Option<String>,
 }
 
+// [example]
 /// The example logic: build a cloud IP-intelligence pipeline, then print the
 /// properties the resource key exposes (with category and value type) and which
 /// evidence keys the pipeline accepts.
@@ -75,6 +78,7 @@ pub fn run(options: Options) -> Result<()> {
 
     Ok(())
 }
+// [example]
 
 /// Print the properties every element in the pipeline can populate.
 ///
