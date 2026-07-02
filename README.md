@@ -268,6 +268,30 @@ cargo run -p ip-intelligence-examples --bin ipi-onprem-getting-started
 cargo run -p device-detection-examples --bin dd-web-getting-started-cloud
 ```
 
+#### Browser (Selenium) tests
+
+The Device Detection web examples have Selenium-style browser tests
+(`examples/device-detection-examples/tests/selenium_*.rs`) that drive a real
+headless browser against the running example to prove the client-side round trip
+completes. They use the [`thirtyfour`](https://crates.io/crates/thirtyfour)
+WebDriver client and are the Rust counterpart of the .NET example Selenium tests.
+
+They are all `#[ignore]`d, so the normal offline test run skips them and needs no
+browser. To run them you need, per browser you want to cover, the browser plus
+its WebDriver server (`chromedriver`, `msedgedriver` or `geckodriver`) on `PATH`
+or pointed to by `CHROMEDRIVER` / `MSEDGEDRIVER` / `GECKODRIVER`, and the
+credential the example reads (`51DEGREES_RESOURCE_KEY` for the cloud examples,
+`51DEGREES_DD_PATH` for the on-premise ones). Any test whose browser, driver or
+credential is missing self-skips.
+
+```sh
+cd examples
+# Run every browser test that has its prerequisites available.
+cargo test --config source.toml -- --ignored
+# Or one example, one browser.
+cargo test --config source.toml --test selenium_getting_started_cloud -- --ignored chrome
+```
+
 The `fodid` crate depends on the
 [`owid`](https://github.com/SWAN-community/owid-rust) crate (the OWID envelope
 library a 51Did is built on), consumed as a git dependency. A network

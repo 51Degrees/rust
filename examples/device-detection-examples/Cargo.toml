@@ -58,3 +58,21 @@ serde.workspace = true
 # CSV reader for the "20000 User Agents.csv" evidence file the offline and
 # performance examples can stream as an alternative to the YAML records.
 csv.workspace = true
+
+[dev-dependencies]
+# Selenium-style browser automation for the web-example integration tests in
+# tests/ (the Rust analogue of the .NET Selenium.WebDriver tests). It drives a
+# real headless browser through an external WebDriver server (chromedriver /
+# msedgedriver / geckodriver). Dev-only: this crate is `publish = false`, so the
+# dependency never reaches crates.io consumers. The browser tests are all
+# `#[ignore]`d, so a normal `cargo test` still runs offline with no driver.
+thirtyfour = "0.35"
+# The Selenium harness resolves the SAME resource key / data file the example
+# binaries read (so a test skips cleanly when the credential is absent) via
+# examples_shared. It is already a normal dependency; it is repeated here so the
+# separate tests/ integration crates can name it directly.
+examples-shared = { version = "4.5.2", path = "../examples-shared" }
+# The harness sleeps between DOM polls while it waits for the client-side round
+# trip, so the tokio time driver is enabled on top of the runtime and macros the
+# crate already uses. Features unify with the main dependency for the test build.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
