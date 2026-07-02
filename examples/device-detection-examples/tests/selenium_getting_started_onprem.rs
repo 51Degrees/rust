@@ -23,8 +23,7 @@
 //! Selenium browser tests for the on-premise Getting Started web example
 //! (`dd-web-getting-started-onprem`).
 //!
-//! The Rust analogue of the .NET `GettingStarted{Chrome,Edge,Firefox}Test` in
-//! the on-premise web test project: one test per browser proving the client-side
+//! One test per browser proving the client-side
 //! round trip completes and (on Chromium) that a result cookie is written.
 //!
 //! Detection is only as precise as the data file supplied through
@@ -34,7 +33,7 @@
 //! richer data file for stricter results.
 //!
 //! All tests are `#[ignore]`d and need a WebDriver, the browser and a Device
-//! Detection data file. Run with `-- --ignored`; each self-skips when a
+//! Detection data file. Run with `-- --ignored` as each self-skips when a
 //! prerequisite is missing.
 
 mod common;

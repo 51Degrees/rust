@@ -23,15 +23,15 @@
 //! Selenium browser tests for the client-only cloud web example
 //! (`dd-web-client-only-cloud`).
 //!
-//! The Rust analogue of the .NET client-only Selenium test project. This example
-//! renders nothing server-side: the page loads the cloud resource script and the
-//! vendored `examples.min.js` fills `#content` entirely in the browser. The test
-//! therefore proves the client-only path works by waiting for that table and
-//! checking the detected browser, plus (on Chromium) the result cookie.
+//! This example renders nothing server-side: 
+//! The page loads the cloud resource script and the vendored `examples.min.js` 
+//! fills `#content` entirely in the browser. The test therefore proves the 
+//! client-only path works by waiting for that table and checking the detected 
+//! browser, plus (on Chromium) the result cookie.
 //!
 //! All tests are `#[ignore]`d and need a WebDriver, the browser, a cloud
 //! resource key (`51DEGREES_RESOURCE_KEY`) and outbound access to the 51Degrees
-//! cloud. Run with `-- --ignored`; each self-skips when a prerequisite is
+//! cloud. Run with `-- --ignored` as each self-skips when a prerequisite is
 //! missing.
 
 mod common;

@@ -23,8 +23,7 @@
 //! Selenium browser tests for the cloud Getting Started web example
 //! (`dd-web-getting-started-cloud`).
 //!
-//! The Rust analogue of the .NET `GettingStarted{Chrome,Edge,Firefox}Test` in
-//! the cloud web test project: one test per browser, each driving a real
+//! One test per browser, each driving a real
 //! headless browser against the running example to prove the client-side round
 //! trip completes and (on Chromium) that a result cookie is written.
 //!
@@ -32,7 +31,7 @@
 //! cloud resource key (`51DEGREES_RESOURCE_KEY`), none of which the offline
 //! `cargo test` gate provides. Run them explicitly with `-- --ignored`. Each
 //! test also self-skips (returns early) when the resource key or the driver is
-//! absent, mirroring the .NET `Assert.Inconclusive` behaviour.
+//! absent.
 
 mod common;
 

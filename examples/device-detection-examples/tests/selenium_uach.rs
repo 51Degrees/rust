@@ -30,11 +30,10 @@
 //! the driven browser, plus (on Chromium) that a result cookie is written.
 //!
 //! The high-entropy handshake is a Chromium feature, but the `complete` event
-//! still fires on Firefox (detection just runs on the plain User-Agent), so the
-//! completion check is kept for all three browsers to mirror the .NET matrix.
+//! still fires on Firefox (detection just runs on the plain User-Agent).
 //!
 //! All tests are `#[ignore]`d and need a WebDriver, the browser and a Device
-//! Detection data file (`51DEGREES_DD_PATH`). Run with `-- --ignored`; each
+//! Detection data file (`51DEGREES_DD_PATH`). Run with `-- --ignored` as each
 //! self-skips when a prerequisite is missing.
 
 mod common;

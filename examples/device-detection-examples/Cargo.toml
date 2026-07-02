@@ -69,8 +69,8 @@ csv.workspace = true
 thirtyfour = "0.35"
 # The Selenium harness resolves the SAME resource key / data file the example
 # binaries read (so a test skips cleanly when the credential is absent) via
-# examples_shared. It is already a normal dependency; it is repeated here so the
-# separate tests/ integration crates can name it directly.
+# examples_shared. It is already a normal dependency and it is repeated here so 
+# that the separate tests/ integration crates can name it directly.
 examples-shared = { version = "4.5.2", path = "../examples-shared" }
 # The harness sleeps between DOM polls while it waits for the client-side round
 # trip, so the tokio time driver is enabled on top of the runtime and macros the
