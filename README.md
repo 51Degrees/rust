@@ -277,9 +277,11 @@ automation. Its `Contract` category drives headless Chrome against a running
 example and checks that the page serves `51Degrees.core.js`, that client-side
 evidence flows back, and that the server renders a real detection result.
 
-CI runs it in `.github/workflows/selenium-contract.yml`: the workflow launches
-`dd-web-getting-started-cloud` against the local source tree and points the
-suite at it with `EXAMPLE_URL`.
+CI runs it through `ci/run-integration-tests.ps1` (the org-standard script
+name every SDK repo uses), called from the Examples workflow: the script
+launches `dd-web-getting-started-cloud` against the local source tree,
+shallow-clones the suite as a sibling directory (it is deliberately not a
+submodule) and points it at the example with `EXAMPLE_URL`.
 
 To run it locally, check out `selenium-api-tests` as a sibling of this repo
 and let the suite launch the example itself through its `rust` descriptor:
