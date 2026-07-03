@@ -1,0 +1,133 @@
+name: Selenium Contract
+
+# Browser-driven contract check for the web integration, using the shared
+# 51Degrees selenium-api-tests suite instead of repo-local browser automation.
+# The suite's Contract category drives headless Chrome against a running
+# example and verifies the three things every SDK's web integration must
+# provide: the page serves 51Degrees.core.js, client-side evidence flows back
+# through the JSON endpoint, and the server renders a real detection result.
+#
+# The wiring follows the suite's "API CI" model: this workflow launches the
+# Device Detection cloud web example built from the LOCAL source tree
+# (cargo --config source.toml), then points the suite at it with EXAMPLE_URL,
+# talking to the stable public cloud. The suite itself stays unmodified and is
+# checked out at main.
+#
+# A cloud resource key is required (the example makes real cloud calls), so the
+# run skips cleanly when no key secret is available (for example on a fork PR).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same ref cancels an in-flight run so the queue stays short.
+concurrency:
+  group: selenium-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The fixed local port the example listens on and the suite is pointed at.
+  EXAMPLE_PORT: "5101"
+
+jobs:
+  contract:
+    name: contract (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      # The shared suite is not a submodule: each caller checks it out beside
+      # its own sources and runs it at the integration-test step.
+      - name: Checkout selenium-api-tests
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/selenium-api-tests
+          path: selenium-api-tests
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Cache the examples workspace build; it compiles the library crates too
+      # via the source.toml patch, so the key is separate from other workflows.
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: selenium-contract
+          workspaces: examples
+
+      # The suite targets net10.0 (see SeleniumApiTests.csproj). Chrome is
+      # preinstalled on the ubuntu runner image and Selenium Manager (bundled
+      # with Selenium.WebDriver 4.x) resolves a matching chromedriver, so no
+      # separate browser or driver setup step is needed.
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # Resolve a single key in the examples-shared resolver order (paid over
+      # free). Written to GITHUB_ENV under a digit-free name so later steps can
+      # both read it and gate on it with an `if:` expression.
+      - name: Resolve resource key
+        env:
+          PAID: ${{ secrets._51DEGREES_RESOURCE_KEY_PAID }}
+          FREE: ${{ secrets._51DEGREES_RESOURCE_KEY_FREE }}
+        run: |
+          KEY="${PAID:-$FREE}"
+          if [ -z "$KEY" ]; then
+            echo "No resource key secret available; skipping the contract tests."
+          fi
+          echo "RESOURCE_KEY=$KEY" >> "$GITHUB_ENV"
+
+      # Compile ahead of the launch step so readiness polling only has to wait
+      # for the server start, not for the build.
+      - name: Build the cloud web example (local source)
+        if: env.RESOURCE_KEY != ''
+        working-directory: examples
+        run: >
+          cargo build --config source.toml
+          -p device-detection-examples
+          --bin dd-web-getting-started-cloud
+
+      # Launch in the background and poll / until the example serves HTTP. The
+      # example resolves its discovery from the cloud as it builds, so a bad
+      # key or unreachable cloud surfaces here rather than in the suite.
+      - name: Launch the example
+        if: env.RESOURCE_KEY != ''
+        working-directory: examples
+        env:
+          51DEGREES_RESOURCE_KEY: ${{ env.RESOURCE_KEY }}
+          PORT: ${{ env.EXAMPLE_PORT }}
+        run: |
+          nohup cargo run --config source.toml \
+            -p device-detection-examples \
+            --bin dd-web-getting-started-cloud > example.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null "http://localhost:${EXAMPLE_PORT}/"; then
+              echo "example is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "example did not become ready"
+          cat example.log
+          exit 1
+
+      # EXAMPLE_URL puts the suite in external mode: it drives the already
+      # running example instead of launching one from a sibling checkout.
+      - name: Run the shared Contract tests
+        if: env.RESOURCE_KEY != ''
+        working-directory: selenium-api-tests
+        env:
+          CLOUD_ROOT_URL: https://cloud.51degrees.com/
+          PAID_RESOURCE_KEY: ${{ env.RESOURCE_KEY }}
+          EXAMPLE_URL: http://localhost:${{ env.EXAMPLE_PORT }}/
+        run: dotnet test --filter TestCategory=Contract
+
+      - name: Example log (on failure)
+        if: failure()
+        working-directory: examples
+        run: cat example.log || true

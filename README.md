@@ -270,26 +270,26 @@ cargo run -p device-detection-examples --bin dd-web-getting-started-cloud
 
 #### Browser (Selenium) tests
 
-The Device Detection web examples have Selenium-style browser tests
-(`examples/device-detection-examples/tests/selenium_*.rs`) that drive a real
-headless browser against the running example to prove the client-side round trip
-completes. They use the [`thirtyfour`](https://crates.io/crates/thirtyfour)
-WebDriver client and are the Rust counterpart of the .NET example Selenium tests.
+Browser-driven verification of the web examples comes from the shared
+[selenium-api-tests](https://github.com/51Degrees/selenium-api-tests) suite,
+which every 51Degrees SDK reuses rather than maintaining its own browser
+automation. Its `Contract` category drives headless Chrome against a running
+example and checks that the page serves `51Degrees.core.js`, that client-side
+evidence flows back, and that the server renders a real detection result.
 
-They are all `#[ignore]`d, so the normal offline test run skips them and needs no
-browser. To run them you need, per browser you want to cover, the browser plus
-its WebDriver server (`chromedriver`, `msedgedriver` or `geckodriver`) on `PATH`
-or pointed to by `CHROMEDRIVER` / `MSEDGEDRIVER` / `GECKODRIVER`, and the
-credential the example reads (`51DEGREES_RESOURCE_KEY` for the cloud examples,
-`51DEGREES_DD_PATH` for the on-premise ones). Any test whose browser, driver or
-credential is missing self-skips.
+CI runs it in `.github/workflows/selenium-contract.yml`: the workflow launches
+`dd-web-getting-started-cloud` against the local source tree and points the
+suite at it with `EXAMPLE_URL`.
+
+To run it locally, check out `selenium-api-tests` as a sibling of this repo
+and let the suite launch the example itself through its `rust` descriptor:
 
 ```sh
-cd examples
-# Run every browser test that has its prerequisites available.
-cargo test --config source.toml -- --ignored
-# Or one example, one browser.
-cargo test --config source.toml --test selenium_getting_started_cloud -- --ignored chrome
+cd ../selenium-api-tests
+export CLOUD_ROOT_URL="https://cloud.51degrees.com/"
+export PAID_RESOURCE_KEY="<your resource key>"
+export EXAMPLE_LANG="rust"
+dotnet test --filter TestCategory=Contract
 ```
 
 The `fodid` crate depends on the
