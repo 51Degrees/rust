@@ -1,6 +1,6 @@
 name: Examples
 
-# The example crates live in their own workspace (examples/) and depend on the
+# The example crates live in their own workspace (examples/) and depend on the 
 # PUBLISHED 51Degrees crates from crates.io by default. This workflow is the
 # BEFORE-publish gate: it tests the examples against the LOCAL source tree
 # (cargo --config source.toml), so a change is validated through the examples
