@@ -210,9 +210,15 @@ jobs:
             exit 0
           }
           ${env:51DEGREES_RESOURCE_KEY} = $key
-          # Run the ignored cloud tests across the workspace. They make live calls
-          # to the 51Degrees cloud, so a failure here is a real regression.
-          cargo test --workspace -- --include-ignored --nocapture
+          # Run ONLY the ignored tests across the workspace: the live cloud tests
+          # that make real calls to the 51Degrees cloud, so a failure here is a
+          # real regression. Deliberately --ignored, not --include-ignored: the
+          # normal tests (including the memory-heavy native Hash detection tests)
+          # already ran in the "cargo test" step above, and re-running them here
+          # alongside the live cloud tests piled enough concurrent memory onto the
+          # shared macOS runner to get the process OS-killed (SIGKILL). Running the
+          # cloud tests alone keeps the coverage without the pileup.
+          cargo test --workspace -- --ignored --nocapture
 
   # The cloud crates must keep compiling for WebAssembly (wasm32-wasip1) so a
   # wasm consumer (for example a trusted-server deployment) can link them and
