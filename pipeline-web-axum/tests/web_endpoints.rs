@@ -109,11 +109,15 @@ async fn javascript_endpoint_serves_200_with_object_name_and_etag() {
 
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let body = String::from_utf8(body.to_vec()).unwrap();
-    // The default object name "fod" appears in the generated JavaScript
-    // (var fod = new fiftyoneDegreesManager();).
+    // The global `fod` object must be ASSIGNED, not merely mentioned: the
+    // template ends with `var fod = new fiftyoneDegreesManager();` and a
+    // mis-configured minifier once dropped that binding as unused while the
+    // `fod_` prefix string kept a bare contains("fod") check green. Accept the
+    // minified and unminified spacings.
     assert!(
-        body.contains("fod"),
-        "body contains the object name, got: {body}"
+        body.contains("fod=new fiftyoneDegreesManager")
+            || body.contains("fod = new fiftyoneDegreesManager"),
+        "body assigns the global fod manager object, got: {body}"
     );
 }
 

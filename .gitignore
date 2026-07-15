@@ -3,6 +3,10 @@ target/
 # Performance results written by the nightly performance workflow.
 /test-results
 *.log
+# The shared browser contract suite, shallow-cloned by
+# ci/run-integration-tests.ps1 (a sibling checkout in CI, but cloned here when
+# the script is run from the repo root locally).
+/selenium-api-tests/
 .DS_Store
 Thumbs.db
 

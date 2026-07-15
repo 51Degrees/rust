@@ -684,6 +684,15 @@ mod tests {
     /// detection from a desktop user agent, read IsMobile, enumerate a couple of
     /// properties and evidence keys, then free everything in the correct order.
     ///
+    /// The low memory configuration is used deliberately. It keeps a connection
+    /// to the source file and caches nothing, giving the smallest resident
+    /// footprint. That is all this smoke test needs (it only proves the native
+    /// symbols link and a basic property/evidence read works) and it keeps the
+    /// process small enough not to be SIGKILLed by the OS under the memory
+    /// pressure of the shared macOS CI runner. The high-memory default config
+    /// is exercised by `default_config_global_links` and by the higher-level
+    /// on-premise tests.
+    ///
     /// When the data file is absent the test still exercised the linking above,
     /// so it returns early with an explanatory note rather than failing.
     #[test]
@@ -701,9 +710,9 @@ mod tests {
             let mut exception = Exception::cleared();
             let path = CString::new(data_file).expect("data file path has no interior nul");
 
-            // Use the default configuration unmodified. Passing null requests
-            // all available properties.
-            let config = std::ptr::addr_of_mut!(fiftyoneDegreesHashDefaultConfig);
+            // Use the low memory configuration unmodified for the smallest
+            // footprint. Passing null requests all available properties.
+            let config = std::ptr::addr_of_mut!(fiftyoneDegreesHashLowMemoryConfig);
             let status = fiftyoneDegreesHashInitManagerFromFile(
                 &mut manager,
                 config,
