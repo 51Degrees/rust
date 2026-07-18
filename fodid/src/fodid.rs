@@ -104,12 +104,11 @@ impl IdType {
 /// |-------:|-------:|----------------------------------------------------|
 /// |      0 |      1 | Flags (bits 0-2 usage, bits 6-7 type)              |
 /// |      1 |      4 | LicenseId (`u32` little endian)                    |
-/// |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
-/// |      5 |     16 | Value: GUID (Random)                               |
+/// |      5 |     32 | Match key: SHA-256 (Probabilistic, HashedEmail)    |
+/// |      5 |     16 | Match key: GUID (Random)                           |
 ///
-/// The value bytes are read through [`hash`](FodId::hash). The name is kept for
-/// continuity (a probabilistic value is a SHA-256), but for a [`IdType::Random`]
-/// identifier the value is a GUID, not a hash.
+/// The match key is read through [`match_key`](FodId::match_key). For a
+/// [`IdType::Random`] identifier it is a GUID, otherwise a SHA-256.
 ///
 /// `FodId` [`Deref`]s to [`Owid`], so the OWID level fields and operations
 /// (`domain`, `date`, `payload`, `signature`, `as_base64`,
@@ -123,7 +122,7 @@ pub struct FodId {
     owid: Owid,
     flags: u8,
     license_id: u32,
-    value: Vec<u8>,
+    match_key: Vec<u8>,
 }
 
 impl FodId {
@@ -186,12 +185,12 @@ impl FodId {
                 actual: payload.len(),
             });
         }
-        let value = payload[HASH_OFFSET..HASH_OFFSET + value_length].to_vec();
+        let match_key = payload[HASH_OFFSET..HASH_OFFSET + value_length].to_vec();
         Ok(FodId {
             owid,
             flags,
             license_id,
-            value,
+            match_key,
         })
     }
 
@@ -212,15 +211,23 @@ impl FodId {
         self.license_id
     }
 
-    /// The value bytes from the payload: a 32-byte SHA-256 for
+    /// The match key from the payload: a 32-byte SHA-256 for
     /// [`IdType::Probabilistic`] and [`IdType::HashedEmail`] identifiers, 16 GUID
     /// bytes for [`IdType::Random`] ones.
     ///
     /// This is the stable field for comparing two 51Dids: two identifiers for
-    /// the same inputs share the same value even though their wrapping envelopes
-    /// (date, signature) differ on every issue. Compare values, never envelopes.
+    /// the same inputs share the same match key even though their wrapping
+    /// envelopes (date, signature) differ on every issue. Compare match keys,
+    /// never envelopes.
+    pub fn match_key(&self) -> &[u8] {
+        &self.match_key
+    }
+
+    /// Obsolete alias for [`match_key`](FodId::match_key). The stable,
+    /// comparable part of a 51Did is now called the match key.
+    #[deprecated(note = "renamed to match_key")]
     pub fn hash(&self) -> &[u8] {
-        &self.value
+        self.match_key()
     }
 
     /// A reference to the underlying OWID envelope.

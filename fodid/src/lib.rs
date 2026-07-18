@@ -82,13 +82,13 @@
 //! let flags: u8 = fod_id.flags();
 //! let id_type = fod_id.id_type();
 //! let license_id: u32 = fod_id.license_id();
-//! let value: &[u8] = fod_id.hash(); // the value to compare (32 or 16 bytes)
+//! let match_key: &[u8] = fod_id.match_key(); // the match key to compare (32 or 16 bytes)
 //!
 //! // Inherited OWID level fields and operations, available through Deref.
 //! let domain = &fod_id.domain;
 //! let verified = fod_id.verify_with_public_key(public_pem, &[])?;
 //! let round_trip = fod_id.as_base64()?;
-//! # let _ = (flags, id_type, license_id, value, domain, verified, round_trip);
+//! # let _ = (flags, id_type, license_id, match_key, domain, verified, round_trip);
 //! # Ok(())
 //! # }
 //! ```

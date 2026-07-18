@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fod_id = FodId::from_base64(&base64)?;
     println!("flags     : {:#010b}", fod_id.flags());
     println!("license_id: {:#010x}", fod_id.license_id());
-    println!("hash      : {}", hex(fod_id.hash()));
+    println!("hash      : {}", hex(fod_id.match_key()));
 
     // OWID level fields are reachable directly through Deref.
     println!("domain    : {}", fod_id.domain);

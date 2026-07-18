@@ -336,7 +336,7 @@ fn live_cloud_returns_a_parseable_identifier() {
     // the content assertion is skipped in that case rather than failing.
     match fodid.id_prob_global_fod_id().value() {
         Ok(fod_id) => {
-            assert_eq!(fod_id.hash().len(), 32, "a parsed 51Did has a 32-byte hash");
+            assert_eq!(fod_id.match_key().len(), 32, "a parsed 51Did has a 32-byte hash");
         }
         Err(_) => eprintln!(
             "the resource key returned no 51Degrees identifier (it may not grant the \
