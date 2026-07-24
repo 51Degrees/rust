@@ -116,8 +116,13 @@ fn minify_with_oxc(source: &str) -> Option<String> {
     use oxc::span::SourceType;
 
     let allocator = Allocator::default();
-    // The generated client script is a classic script, not a module.
-    let source_type = SourceType::cjs();
+    // The generated client script is a classic script, not a module. This must
+    // be SourceType::script(): under cjs (CommonJS) semantics a top-level var
+    // is file-scoped, so the minifier is entitled to drop the unused
+    // `var fod = new fiftyoneDegreesManager();` binding, and the page's global
+    // `fod` object never exists. In script mode a top-level var is an
+    // observable global and is kept.
+    let source_type = SourceType::script();
     let parsed = Parser::new(&allocator, source, source_type).parse();
     if parsed.panicked || !parsed.diagnostics.is_empty() {
         return None;
@@ -154,6 +159,27 @@ mod tests {
         assert!(
             !outcome.content.contains("  "),
             "insignificant whitespace is removed: {:?}",
+            outcome.content
+        );
+    }
+
+    #[cfg(all(feature = "minify", not(target_family = "wasm")))]
+    #[test]
+    fn minify_keeps_an_unreferenced_top_level_var() {
+        // The template's final statement is
+        // `var fod = new fiftyoneDegreesManager();` and nothing else in the
+        // file references `fod`: the binding exists for the page's own
+        // scripts. Under module (cjs) parsing the minifier may drop it as
+        // unused, which silently breaks every client-side integration, so the
+        // script-mode global must survive minification.
+        let content =
+            "function manager() { this.complete = function () {}; }\nvar fod = new manager();\n"
+                .to_owned();
+        let outcome = minify(content);
+        assert!(!outcome.had_error, "valid input minifies without error");
+        assert!(
+            outcome.content.contains("fod"),
+            "the top-level fod binding must survive minification: {:?}",
             outcome.content
         );
     }

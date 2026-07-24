@@ -268,6 +268,32 @@ cargo run -p ip-intelligence-examples --bin ipi-onprem-getting-started
 cargo run -p device-detection-examples --bin dd-web-getting-started-cloud
 ```
 
+#### Browser (Selenium) tests
+
+Browser-driven verification of the web examples comes from the shared
+[selenium-api-tests](https://github.com/51Degrees/selenium-api-tests) suite,
+which every 51Degrees SDK reuses rather than maintaining its own browser
+automation. Its `Contract` category drives headless Chrome against a running
+example and checks that the page serves `51Degrees.core.js`, that client-side
+evidence flows back, and that the server renders a real detection result.
+
+CI runs it through `ci/run-integration-tests.ps1` (the org-standard script
+name every SDK repo uses), called from the Examples workflow: the script
+launches `dd-web-getting-started-cloud` against the local source tree,
+shallow-clones the suite as a sibling directory (it is deliberately not a
+submodule) and points it at the example with `EXAMPLE_URL`.
+
+To run it locally, check out `selenium-api-tests` as a sibling of this repo
+and let the suite launch the example itself through its `rust` descriptor:
+
+```sh
+cd ../selenium-api-tests
+export CLOUD_ROOT_URL="https://cloud.51degrees.com/"
+export PAID_RESOURCE_KEY="<your resource key>"
+export EXAMPLE_LANG="rust"
+dotnet test --filter TestCategory=Contract
+```
+
 The `fodid` crate depends on the
 [`owid`](https://github.com/SWAN-community/owid-rust) crate (the OWID envelope
 library a 51Did is built on), consumed as a git dependency. A network
