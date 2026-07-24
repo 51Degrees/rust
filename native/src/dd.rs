@@ -382,9 +382,13 @@ impl Manager {
 
     /// Create a per-thread results structure for running detections.
     pub fn create_results(self: &Arc<Self>) -> Result<Results> {
-        // Safety: the manager is initialized. An overrides capacity of zero is
-        // the standard default.
-        let results = unsafe { sys::fiftyoneDegreesResultsHashCreate(self.as_ptr(), 0) };
+        // Safety: the manager is initialized. The first capacity argument
+        // (user-agent capacity) is ignored by the C library - results are sized
+        // by the data set - and the overrides capacity of zero is the standard
+        // default. Both must be passed explicitly: the C signature takes two
+        // uint32_t parameters, so dropping one leaves the overrides capacity
+        // reading an uninitialised register and crashes under detection.
+        let results = unsafe { sys::fiftyoneDegreesResultsHashCreate(self.as_ptr(), 0, 0) };
         let results = NonNull::new(results).ok_or_else(|| Error::Native {
             status: String::from("InsufficientMemory"),
             message: String::from("failed to allocate Hash results"),
