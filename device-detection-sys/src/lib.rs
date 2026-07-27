@@ -374,10 +374,19 @@ extern "C" {
     /// Allocates a results structure referencing the data set in `manager`. The
     /// returned pointer must be freed with [`fiftyoneDegreesResultsHashFree`].
     ///
+    /// The C signature takes `userAgentCapacity` and `overridesCapacity` as two
+    /// separate `uint32_t` parameters (see `hash.h`). `userAgentCapacity` is
+    /// accepted only for source compatibility and is ignored - results are
+    /// sized by the number of components in the data set. `overridesCapacity`
+    /// sizes the property-override array and MUST be passed explicitly: omitting
+    /// it leaves the C function reading the argument from an uninitialised
+    /// register, which sizes the override allocation from garbage and crashes.
+    ///
     /// # Safety
     /// `manager` must be an initialized Hash manager.
     pub fn fiftyoneDegreesResultsHashCreate(
         manager: *mut ResourceManager,
+        user_agent_capacity: u32,
         overrides_capacity: u32,
     ) -> *mut ResultsHash;
 
@@ -775,8 +784,10 @@ mod tests {
                 "IsMobile should be an available property in the Lite data file"
             );
 
-            // Run a single detection from the desktop user agent.
-            let results = fiftyoneDegreesResultsHashCreate(&mut manager, 0);
+            // Run a single detection from the desktop user agent. The results
+            // are sized by the data set, so the user-agent capacity is unused;
+            // the overrides capacity is zero (no property overrides here).
+            let results = fiftyoneDegreesResultsHashCreate(&mut manager, 0, 0);
             assert!(!results.is_null(), "results allocation should succeed");
 
             fiftyoneDegreesResultsHashFromUserAgent(
