@@ -917,6 +917,12 @@ impl DidClient {
     /// and signature. One use against the resource key, and the open
     /// endpoint that needs no licence key.
     ///
+    /// The identifier is sent under both parameter names the endpoint has
+    /// carried, `51did` and `owid`, because a cloud that has not taken the
+    /// creator context release reads only `owid` and answers 400 to a call
+    /// naming `51did` alone. The endpoint reads one value and ignores the
+    /// other.
+    ///
     /// # Errors
     ///
     /// [`ClientError::InvalidIdentifier`] when the cloud could not parse the
@@ -925,11 +931,10 @@ impl DidClient {
     /// or a 400 carrying `valid`, and [`ClientError::Malformed`] when the
     /// answer could not be read.
     pub fn verify<I: DidInput + ?Sized>(&self, fod_id: &I) -> Result<bool, ClientError> {
+        let identifier = percent_encode(&fod_id.to_url_safe()?);
         let url = format!(
-            "{}id/verify/{}?51did={}",
-            self.endpoint,
-            self.resource_key,
-            percent_encode(&fod_id.to_url_safe()?)
+            "{}id/verify/{}?51did={identifier}&owid={identifier}",
+            self.endpoint, self.resource_key
         );
         let response = self.send(Method::Get, url, Vec::new())?;
         match response.status {

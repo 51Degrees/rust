@@ -588,11 +588,11 @@ fn verify_answers_true_for_200_valid() {
     let sent = harness.fake.sent_to("/id/verify/");
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].method, Method::Get);
-    // The identifier goes in the URL-safe alphabet, which needs no encoding.
-    let expected = format!(
-        "{ENDPOINT}id/verify/{RESOURCE_KEY}?51did={}",
-        fod_id.as_base64_url().unwrap()
-    );
+    // The identifier goes in the URL-safe alphabet, which needs no encoding,
+    // under both names the endpoint has carried, so a cloud that reads only
+    // the older `owid` name still answers.
+    let url_safe = fod_id.as_base64_url().unwrap();
+    let expected = format!("{ENDPOINT}id/verify/{RESOURCE_KEY}?51did={url_safe}&owid={url_safe}");
     assert_eq!(sent[0].url, expected);
     assert!(!sent[0].url.contains(LICENCE_KEY));
     // No key fetch is needed for the cloud check.
@@ -644,7 +644,7 @@ fn verify_raises_the_cloud_message_for_400_errors() {
         .answer("/id/verify/", 400, r#"{"errors":["nope"]}"#);
     harness.client.verify("a b&c").unwrap_err();
     let sent = harness.fake.sent_to("/id/verify/");
-    assert!(sent[1].url.ends_with("?51did=a%20b%26c"));
+    assert!(sent[1].url.ends_with("?51did=a%20b%26c&owid=a%20b%26c"));
 }
 
 #[test]
