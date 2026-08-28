@@ -917,11 +917,10 @@ impl DidClient {
     /// and signature. One use against the resource key, and the open
     /// endpoint that needs no licence key.
     ///
-    /// The identifier is sent under both parameter names the endpoint has
-    /// carried, `51did` and `owid`, because a cloud that has not taken the
-    /// creator context release reads only `owid` and answers 400 to a call
-    /// naming `51did` alone. The endpoint reads one value and ignores the
-    /// other.
+    /// The identifier is sent under both supported parameter names, `51did`
+    /// and `owid`, so the request works with hosts that read either one.
+    /// Hosts that recognise both prefer `51did` and treat `owid` as a
+    /// compatibility alias.
     ///
     /// # Errors
     ///
@@ -1065,9 +1064,8 @@ fn parse_utc(text: &str) -> Result<DateTime<Utc>, ClientError> {
 }
 
 /// Reads the key list: a JSON array of objects carrying `publicKey` and
-/// `startsAt`, or `created` where `startsAt` is absent, as the endpoint on
-/// the cloud deployed before the creator context release emits. `weekStart`
-/// is ignored.
+/// `startsAt`, or `created` where `startsAt` is absent. Both are supported
+/// start fields in key-list responses. `weekStart` is ignored.
 fn parse_keys(body: &str) -> Result<Vec<SigningKey>, ClientError> {
     let json = parse_json(body)?;
     let entries = json

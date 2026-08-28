@@ -268,8 +268,7 @@ fn key_list_reads_starts_at_and_sorts_by_start() {
 
 #[test]
 fn key_list_falls_back_to_created_when_starts_at_is_absent() {
-    // The endpoint as deployed before the creator context release emits
-    // created and publicKey only.
+    // The compatibility form uses created as the start field.
     let fake = Fake::new();
     let pair = KeyPair::new();
     fake.answer(
