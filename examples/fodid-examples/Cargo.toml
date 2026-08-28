@@ -19,6 +19,11 @@ examples-shared = { version = "4.5.2", path = "../examples-shared" }
 # refresh updates this demo's stylesheet along with the others.
 examples-web-shared = { version = "4.5.2", path = "../examples-web-shared" }
 
+# The 51Did reader and, with the `cloud` feature, its cloud client, which
+# the server-side redeem step goes through. Referenced from this repository
+# so the example tests the branch it sits on.
+fodid = { version = "4.5.2", path = "../../fodid", features = ["cloud"] }
+
 # axum 0.8 matches the version the other web examples use, so no second major
 # version is pulled into the graph.
 axum.workspace = true
@@ -26,17 +31,11 @@ axum.workspace = true
 # macros, and the TCP listener it serves on (net).
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 
-# Async HTTP client for the server-side redeem call to the cloud. Default
-# features are off and rustls is on, exactly as the cloud request engine
-# configures its own reqwest, so one TLS stack serves the whole examples graph
-# and no system OpenSSL is needed on Windows. The query feature builds the
-# redeem call's query string, encoding the base64 result on the way.
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "query"] }
 # Random source for the per-load challenge. The standard library has none.
 getrandom = "0.3"
 
-# Query-string parsing for the redeem route and the JSON error body it returns
-# when the cloud cannot be reached.
+# Query-string parsing for the redeem route and the JSON bodies it answers
+# the page with.
 serde.workspace = true
 serde_json = "1"
 # Ergonomic error handling for the example `run` function and `main`.
@@ -46,3 +45,6 @@ anyhow = "1"
 # The `util` feature provides `ServiceExt::oneshot`, used by the test to drive
 # the router in process without binding a socket.
 tower = { workspace = true, features = ["util"] }
+# The OWID envelope library, to sign a 51Did in the tests the way the cloud
+# would, so the redeem route is driven with a genuine identifier.
+owid = "1.0.0"

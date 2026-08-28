@@ -20,11 +20,14 @@ created on. The page runs the full flow the way production does:
    observes the browser's live connection. The answer is only an encrypted
    `result` that the browser can neither read nor forge, with the signature
    outcome and the creator context verdict sealed inside it.
-3. **Redeem** the encrypted result on the demo's own server, which calls
-   `redeem` with the 51Did, the encrypted result and the account's licence
-   key, and receives the signature outcome, the true creator context verdict,
-   when the verification happened (`verifiedAt`) and how long ago that was
-   (`secondsSinceVerified`).
+3. **Redeem** the encrypted result on the demo's own server, which parses
+   the 51Did, checks its signature offline against the cloud's public key
+   for its date, then calls `redeem` with the 51Did, the encrypted result
+   and the account's licence key, and receives the signature outcome, the
+   true creator context verdict, when the verification happened
+   (`verifiedAt`) and how long ago that was (`secondsSinceVerified`). The
+   server does this through the `fodid` crate's cloud client, `DidClient`,
+   so it writes no HTTP or key handling of its own.
 
 The licence key lives on the server and only there. A fresh single-use
 challenge is issued per page load and bound through both verification steps
@@ -42,15 +45,20 @@ not to emit the creator context, so an identifier it issued redeems as
 `nocontext`, and the page shows that verdict the way it shows any other.
 Only a transport failure or an answer other than a 2xx status is an error,
 which the page reports as a failure with the status and body the cloud
-sent. The demo server relays the cloud's redeem answer to the page exactly
-as received, and answers 502 with a JSON error of its own only when the
-cloud cannot be reached.
+sent. The demo server answers the page with the cloud's status and a JSON
+body in the cloud's own shape (`signature`, `context`, `factors` when
+present, `verifiedAt`, `secondsSinceVerified`), built from the client's
+typed result, plus one extra field, `serverSignature`, with `verified` or
+`invalid` from the server's own offline signature check. The page ignores
+fields it does not know, so the page is the same in every language. The
+server answers 502 with a JSON error of its own only when the cloud cannot
+be reached.
 
 A 404 from `verify-full` or `redeem` means the host answering does not
 offer the creator context at all, which is a service without the feature
 rather than a failed check, and the page says so, naming the service and
-asking to be pointed at one that does. The demo server relays that 404
-unchanged.
+asking to be pointed at one that does. The demo server answers that case
+with a 404 of its own.
 
 ### Environment variables
 
@@ -80,34 +88,42 @@ To build against the local source tree rather than the published crates, add
 ### The server-side step, for your own server
 
 The one part of this demo a developer copies into their own server is the
-redeem call, which is the `redeem` handler in
+redeem step, which is the `redeem_with` function in
 `src/bin/fodid-web-creator-context.rs`. The page sends it the 51Did, the
 encrypted result from `verify-full` and the challenge the page was served
-with, and the server adds the licence key, which is the only thing the
-browser must never see. Its essential lines are these.
+with, and the server's `DidClient` adds the licence key, which is the only
+thing the browser must never see. The client is built once at start-up
+from the same environment variables the demo reads, and its essential lines
+are these.
 
 ```rust
-let upstream = format!("{}id/redeem/{}", demo.api, demo.resource_key);
-let sent = demo
-    .client
-    .get(&upstream)
-    .query(&[
-        ("51did", query.fodid.as_str()),
-        ("result", query.result.as_str()),
-        ("challenge", query.challenge.as_str()),
-        ("license", demo.licence_key.as_str()),
-    ])
-    .send()
-    .await;
+use fodid::client::DidClient;
+use fodid::FodId;
+
+// At start-up. The endpoint defaults to the public cloud or the
+// 51DEGREES_CLOUD_ENDPOINT environment variable.
+let client = DidClient::builder(resource_key)
+    .licence_key(licence_key)
+    .build();
+
+// Per request. The page sends the URL-safe alphabet, which is accepted.
+let fod_id = FodId::from_base64(&query.fodid)?;
+// Offline, against the cloud's public key for the identifier's date. The
+// keys are fetched once and cached.
+let server_signature = client.verify_signature(&fod_id)?;
+// With the licence key, one use against the resource key.
+let redeemed = client.redeem(&fod_id, &query.result, &query.challenge)?;
 ```
 
-`demo.api` is the cloud API base ending in `/api/v4/`, `demo.resource_key`
-is the page's resource key and `demo.licence_key` is the licence key from
-`51DEGREES_LICENSE_KEY`, or empty where the account holds none. The cloud
-answers with the signature outcome, the creator context verdict,
-`verifiedAt` and `secondsSinceVerified`, and the handler relays that answer
-to the page unchanged. A production server would also check that the
-challenge is one it issued and has not been redeemed before.
+`redeemed` is a typed `RedeemResult` with the signature outcome, the
+creator context verdict, the factors where the verdict is a mismatch,
+`verified_at` and `seconds_since_verified`, and the handler answers the
+page with those in the cloud's own shape plus `serverSignature`. A host
+without the creator context raises `ClientError::NotSupported`, which the
+handler turns into a 404, and a cloud that cannot be reached raises
+`ClientError::Transport`, which becomes a 502. A production server would
+also check that the challenge is one it issued and has not been redeemed
+before.
 
 ### What a run costs
 
@@ -115,7 +131,8 @@ Every call the page or the server makes to the cloud is one use against the
 subscription behind the resource key. A browser checking a 51Did makes two,
 `verify-full` from the page and `redeem` from the server, so a browser-based
 context check is two uses every time. Checking only the signature with
-`verify` is one use.
+`verify` is one use. The server's own offline signature check costs nothing
+per identifier, because the public keys are fetched once and cached.
 
 ### The copy-and-paste proof
 

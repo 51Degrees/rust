@@ -54,10 +54,24 @@ and meaning of the value:
 |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
 |      5 |     16 | Value: GUID (Random)                               |
 
+An identifier carrying a creator context is longer than this base, with a
+section after the value that only the issuing cloud can read. The reader
+accepts it as it accepts any payload of at least the base length. On such an
+identifier the LicenseId field holds an encrypted value that only 51Degrees
+can turn back into a licence identifier, so `license_id()` is the field's raw
+value and identifies nothing outside 51Degrees.
+
 [`FodId`] derefs to the underlying [`owid::Owid`], so a `FodId` value can be
 used directly for all OWID level concerns (domain, date, payload bytes,
 signature, base64 round tripping and signature verification) and adds typed
 accessors for the payload fields on top.
+
+`FodId::from_base64` reads either base64 alphabet, the standard one with
+padding as the cloud issues it and the URL-safe one (`-` and `_`, padding
+optional) a page uses when it puts the identifier in a link, and
+`as_base64_url()` produces the URL-safe form for a URL. `date_minutes()` is
+the envelope's date as the wire format stores it, the count of minutes since
+2020-01-01T00:00:00Z.
 
 ## Usage
 
@@ -96,11 +110,88 @@ assert_eq!(a.hash(), b.hash());       // value is stable
 Use `hash()` (the value, a 32-byte SHA-256 or 16-byte GUID) as the cache /
 dedup key.
 
+## Verifying on your server
+
+The `cloud` feature adds `fodid::client::DidClient`, which handles every
+manipulation of a 51Did a server needs beyond reading it, so server code
+never hand-writes HTTP or key handling. It uses `ureq` and `serde_json`,
+which this crate already carried for its live test, and is opt-in so the
+reader alone pulls in no HTTP stack.
+
+```toml
+[dependencies]
+fodid = { version = "4.5.2", features = ["cloud"] }
+```
+
+Build one client at start-up and share it. It takes the page's resource key
+(public by nature), optionally a licence key of the same account (server
+side only, needed to redeem where the account holds licence keys) and
+optionally the API base including `/api/v4/`, which defaults to
+`https://cloud.51degrees.com/api/v4/` or the `51DEGREES_CLOUD_ENDPOINT`
+environment variable, the same variable the cloud request engine honours. A
+trailing slash is normalised. The resource key travels in the route of the
+key and verify calls and in the form body of the redeem POST, and the
+licence key only in that form body, so neither reaches a query string. The
+client is blocking, so an async server calls it from a blocking thread.
+
+```rust
+use fodid::client::{ContextOutcome, DidClient};
+use fodid::FodId;
+
+let client = DidClient::builder(resource_key)
+    .licence_key(licence_key)
+    .build();
+
+// 1. Parse. Either base64 alphabet is accepted, so an identifier taken
+//    from a link (URL-safe, no padding) reads the same as one from the
+//    cloud's JSON.
+let fod_id = FodId::from_base64(fifty_one_did)?;
+
+// 2. Verify the signature offline. The client fetches the signing public
+//    keys once, caches them, and picks the key in force when the
+//    identifier was created. No call per identifier.
+let signed = client.verify_signature(&fod_id)?;
+
+// 3. Verify through the cloud's verify endpoint instead, one use against
+//    the resource key. No licence key is needed.
+let signed_by_cloud = client.verify(&fod_id)?;
+
+// 4. Redeem a sealed creator context result the browser relayed, with the
+//    licence key, and act on the typed verdict.
+let redeemed = client.redeem(&fod_id, &sealed_result, &challenge)?;
+if redeemed.context == ContextOutcome::Verified {
+    // The identifier is being presented from the browser and connection
+    // it was created on.
+}
+```
+
+`verify-context` and `verify-full` are browser calls, because the creator
+context describes the browser's own connection, so they have no method here.
+The [creator context web example](../examples/fodid-examples/README.md)
+shows the whole flow, with the browser creating and verifying and the server
+redeeming through this client.
+
+`RedeemResult` carries `context` (`Verified`, `Mismatch`, `NoContext`,
+`NotCheckable`, `Expired`, `Replayed`, `Unreadable` or `Unconfirmed`, with a
+word the client does not know mapping to `Unreadable` and kept in
+`context_value`), `signature` (`Verified`, `Invalid`, or `Unknown` when the
+cloud sent none), `factors` when the cloud sent them (the mismatch case),
+`verified_at` and `seconds_since_verified` on the redeemed and expired
+outcomes, and the HTTP `status_code` and `raw` body. A 503 answers
+`Unconfirmed` and may be retried. A 400 raises
+`ClientError::InvalidIdentifier` with the cloud's message, a 404 raises
+`ClientError::NotSupported` (the host does not offer the creator context),
+any other status raises `ClientError::Http` with the status and body, and a
+cloud that could not be reached raises `ClientError::Transport`. Every
+cryptographic failure comes back as the one word `unreadable`, by design, so
+the client does not try to distinguish them either.
+
 ## Non goals
 
 - **Signature verification on construction.** Building a `FodId` does not check
   the signature. Call `verify_with_public_key` (inherited from `owid::Owid`
-  through `Deref`) when needed.
+  through `Deref`) when needed, or let the client pick the key for you with
+  the `cloud` feature.
 - **Construction of new 51Dids.** This is a reader. New 51Dids are issued by
   the 51Degrees cloud, which alone holds the signing key.
 

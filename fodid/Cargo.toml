@@ -11,14 +11,30 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[features]
+# The 51Did cloud client (the `client` module): fetches the signing public
+# keys, verifies a signature offline or through the cloud, and redeems a
+# sealed creator context result. Opt-in so the reader alone pulls in no HTTP
+# stack, which keeps the crate buildable for WebAssembly consumers.
+cloud = ["dep:ureq", "dep:serde_json", "dep:chrono"]
+
 [dependencies]
 owid.workspace = true
+# The `cloud` feature only. ureq is the blocking HTTP client the live test
+# already used, serde_json reads the cloud's answers and chrono handles the
+# key schedule dates. All three are already in the workspace graph (chrono
+# through owid), so the feature adds no new third-party crate.
+ureq = { version = "2", optional = true }
+serde_json = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 
 [dev-dependencies]
-# Used only by the live cloud integration test (tests/cloud_51did.rs) to call
-# the 51Degrees cloud JSON endpoint and read its response.
+# Used by the live cloud integration test (tests/cloud_51did.rs) to call the
+# 51Degrees cloud JSON endpoint and read its response, and by the client tests
+# to build envelopes with a chosen date.
 ureq = "2"
 serde_json = "1"
+chrono.workspace = true
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the

@@ -768,6 +768,7 @@ dependencies = [
 name = "fodid"
 version = "4.5.2"
 dependencies = [
+ "chrono",
  "owid",
  "serde_json",
  "ureq",
