@@ -373,7 +373,7 @@ fn key_list_is_fetched_again_when_no_entry_covers_the_date() {
 }
 
 #[test]
-fn key_list_errors_without_a_held_list_and_stands_through_a_failed_refresh() {
+fn key_list_errors_without_a_held_list_and_on_a_failed_refresh() {
     let fake = Fake::new();
     fake.fail("/id/key/", "connection refused");
     let client = DidClient::builder(RESOURCE_KEY)
@@ -389,6 +389,13 @@ fn key_list_errors_without_a_held_list_and_stands_through_a_failed_refresh() {
     harness.client.public_keys().unwrap();
     harness.advance(Duration::hours(25));
     harness.fake.fail("/id/key/", "connection refused");
+    assert!(matches!(
+        harness.client.public_keys().unwrap_err(),
+        ClientError::Transport(message) if message == "connection refused"
+    ));
+    // The failed refresh did not replace the held list. A later successful
+    // refresh recovers normally.
+    harness.fake.answer("/id/key/", 200, harness.schedule());
     assert_eq!(harness.client.public_keys().unwrap().len(), 4);
 }
 
@@ -498,6 +505,21 @@ fn every_earlier_key_is_not_tried() {
     let harness = Harness::new();
     let fod_id = harness.week_1.sign_at("2026-08-19T12:00:00Z");
     assert!(!harness.client.verify_signature(&fod_id).unwrap());
+}
+
+#[test]
+fn verify_signature_reports_a_failed_refresh_instead_of_false() {
+    let harness = Harness::new();
+    harness.client.public_keys().unwrap();
+    let missing_key = KeyPair::new();
+    let fod_id = missing_key.sign_at("2026-09-01T00:00:00Z");
+    harness.fake.fail("/id/key/", "connection refused");
+
+    assert!(matches!(
+        harness.client.verify_signature(&fod_id).unwrap_err(),
+        ClientError::Transport(message) if message == "connection refused"
+    ));
+    assert_eq!(harness.key_fetches(), 2);
 }
 
 // ---------------------------------------------- offline verification

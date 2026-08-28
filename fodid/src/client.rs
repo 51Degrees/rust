@@ -760,13 +760,13 @@ impl DidClient {
 
     /// The cloud's signing key schedule, fetched on first use and kept in
     /// memory, oldest start first. Fetched again when the held list is more
-    /// than a day old. Where a refresh fails and a list is already held, the
-    /// held list is answered from.
+    /// than a day old. A required refresh failure is returned because the
+    /// held list may not contain the key needed by the caller.
     ///
     /// # Errors
     ///
-    /// [`ClientError::Transport`] when the cloud could not be reached and no
-    /// list is held, [`ClientError::Http`] for a status other than 200, and
+    /// [`ClientError::Transport`] when the cloud could not be reached,
+    /// [`ClientError::Http`] for a status other than 200, and
     /// [`ClientError::Malformed`] when the list could not be read.
     pub fn public_keys(&self) -> Result<Vec<SigningKey>, ClientError> {
         let mut cache = self.lock_keys();
@@ -810,8 +810,9 @@ impl DidClient {
             .unwrap_or_default())
     }
 
-    /// Fetches into the cache when asked to. A failed fetch is an error only
-    /// when nothing is held, otherwise the held list stands.
+    /// Fetches into the cache when asked to. A failed fetch leaves any held
+    /// list in place but propagates because it may not cover the caller's
+    /// date.
     fn refresh_if(
         &self,
         refetch: bool,
@@ -820,14 +821,9 @@ impl DidClient {
         if !refetch {
             return Ok(());
         }
-        match self.fetch_keys() {
-            Ok(fresh) => {
-                **cache = Some(fresh);
-                Ok(())
-            }
-            Err(error) if cache.is_none() => Err(error),
-            Err(_) => Ok(()),
-        }
+        let fresh = self.fetch_keys()?;
+        **cache = Some(fresh);
+        Ok(())
     }
 
     fn lock_keys(&self) -> MutexGuard<'_, Option<KeyCache>> {
