@@ -84,6 +84,17 @@ impl KeyPair {
         date: DateTime<Utc>,
         version: Version,
     ) -> FodId {
+        self.try_sign_for_domain(domain, payload, date, version)
+            .unwrap()
+    }
+
+    fn try_sign_for_domain(
+        &self,
+        domain: &str,
+        payload: Vec<u8>,
+        date: DateTime<Utc>,
+        version: Version,
+    ) -> fodid::Result<FodId> {
         let mut owid = Owid::new(domain, date, payload);
         owid.version = version;
         owid.signature = vec![0u8; owid::SIGNATURE_LENGTH];
@@ -91,7 +102,7 @@ impl KeyPair {
         let signed = &bytes[..bytes.len() - owid::SIGNATURE_LENGTH];
         let crypto = Crypto::new_sign_only(&self.private_pem).unwrap();
         owid.signature = crypto.sign_byte_array(signed).unwrap();
-        FodId::from_owid(owid).unwrap()
+        FodId::from_owid(owid)
     }
 
     fn sign_at(&self, date: &str) -> FodId {
@@ -615,17 +626,17 @@ fn verify_signature_rejects_an_oversized_identifier_before_fetching_keys() {
     let harness = Harness::new();
     let mut payload = probabilistic_payload();
     payload.extend_from_slice(&[0u8; 20]);
-    let fod_id = harness.week_2.sign_for_domain(
+    let result = harness.week_2.try_sign_for_domain(
         "51d.es",
         payload,
         at("2026-08-12T12:00:00Z"),
         Version::Version3,
     );
 
-    assert_eq!(
-        harness.client.verify_signature_detailed(&fod_id).unwrap(),
-        SignatureCheck::Invalid
-    );
+    assert!(matches!(
+        result,
+        Err(fodid::Error::IdentifierTooLong { .. })
+    ));
     assert_eq!(harness.key_fetches(), 0);
 }
 
@@ -743,7 +754,7 @@ fn verify_and_redeem_reject_an_oversized_fodid_object_without_transport() {
     let harness = Harness::new();
     let mut oversized_payload = probabilistic_payload();
     oversized_payload.extend_from_slice(&[0u8; 20]);
-    let oversized_payload = harness.week_2.sign_for_domain(
+    let oversized_payload = harness.week_2.try_sign_for_domain(
         "51d.es",
         oversized_payload,
         at("2026-08-12T12:00:00Z"),
@@ -752,24 +763,17 @@ fn verify_and_redeem_reject_an_oversized_fodid_object_without_transport() {
 
     let mut maximum_payload = probabilistic_payload();
     maximum_payload.extend_from_slice(&[0u8; 19]);
-    let oversized_envelope = harness.week_2.sign_for_domain(
+    let oversized_envelope = harness.week_2.try_sign_for_domain(
         "51d.esx",
         maximum_payload,
         at("2026-08-12T12:00:00Z"),
         Version::Version3,
     );
 
-    for fod_id in [&oversized_payload, &oversized_envelope] {
+    for result in [oversized_payload, oversized_envelope] {
         assert!(matches!(
-            harness.client.verify(fod_id).unwrap_err(),
-            ClientError::InvalidIdentifier(_)
-        ));
-        assert!(matches!(
-            harness
-                .client
-                .redeem(fod_id, "result", "challenge")
-                .unwrap_err(),
-            ClientError::InvalidIdentifier(_)
+            result,
+            Err(fodid::Error::IdentifierTooLong { .. })
         ));
     }
     assert!(harness.fake.sent().is_empty());

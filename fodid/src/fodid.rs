@@ -23,7 +23,7 @@
 use std::ops::Deref;
 use std::str::FromStr;
 
-use owid::Owid;
+use owid::{Owid, Version};
 
 use crate::error::{Error, Result};
 
@@ -59,6 +59,13 @@ pub const RANDOM_PAYLOAD_LENGTH: usize = HEADER_LENGTH + GUID_LENGTH;
 /// 51Did payload (header + hash). Random payloads are shorter, see
 /// [`RANDOM_PAYLOAD_LENGTH`].
 pub const PAYLOAD_LENGTH: usize = HASH_OFFSET + HASH_LENGTH;
+
+/// Largest possible byte length of a serialized 51Did envelope, including
+/// its signature. Every constructor enforces this boundary.
+pub const MAXIMUM_BYTE_LENGTH: usize = 136;
+
+const MAXIMUM_PAYLOAD_LENGTH: usize = 56;
+const MAXIMUM_BASE64_LENGTH: usize = ((MAXIMUM_BYTE_LENGTH + 2) / 3) * 4;
 
 /// Unix time of the OWID base date, 2020-01-01T00:00:00Z, from which the
 /// envelope's date is counted in minutes on the wire.
@@ -146,10 +153,14 @@ impl FodId {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Owid`] if the string is not a valid OWID envelope, or
-    /// [`Error::PayloadTooShort`] if the payload is shorter than the minimum for
-    /// its identifier type.
+    /// Returns [`Error::IdentifierTooLong`] if the encoded or decoded envelope
+    /// cannot fit within [`MAXIMUM_BYTE_LENGTH`], [`Error::Owid`] if the string
+    /// is not a valid OWID envelope, or [`Error::PayloadTooShort`] or
+    /// [`Error::PayloadTooLong`] if its payload length cannot be a 51Did.
     pub fn from_base64(base64: &str) -> Result<Self> {
+        if base64.len() > MAXIMUM_BASE64_LENGTH {
+            return Err(too_long());
+        }
         Self::from_owid(Owid::from_base64(&from_base64_url(base64))?)
     }
 
@@ -157,10 +168,14 @@ impl FodId {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Owid`] if the bytes are not a valid OWID envelope, or
-    /// [`Error::PayloadTooShort`] if the payload is shorter than the minimum for
-    /// its identifier type.
+    /// Returns [`Error::IdentifierTooLong`] if the buffer exceeds
+    /// [`MAXIMUM_BYTE_LENGTH`], [`Error::Owid`] if the bytes are not a valid
+    /// OWID envelope, or [`Error::PayloadTooShort`] or
+    /// [`Error::PayloadTooLong`] if its payload length cannot be a 51Did.
     pub fn from_byte_array(buffer: &[u8]) -> Result<Self> {
+        if buffer.len() > MAXIMUM_BYTE_LENGTH {
+            return Err(too_long());
+        }
         Self::from_owid(Owid::from_byte_array(buffer)?)
     }
 
@@ -170,10 +185,19 @@ impl FodId {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::PayloadTooShort`] if the OWID payload is shorter than the
-    /// minimum for its identifier type (the [`HEADER_LENGTH`] byte header, plus
-    /// the value length the type requires).
+    /// Returns [`Error::IdentifierTooLong`] if the envelope would exceed
+    /// [`MAXIMUM_BYTE_LENGTH`], or [`Error::PayloadTooShort`] or
+    /// [`Error::PayloadTooLong`] if the OWID payload length cannot be a 51Did.
     pub fn from_owid(owid: Owid) -> Result<Self> {
+        if !maximum_envelope_length_valid(&owid) {
+            return Err(too_long());
+        }
+        if owid.payload.len() > MAXIMUM_PAYLOAD_LENGTH {
+            return Err(Error::PayloadTooLong {
+                maximum: MAXIMUM_PAYLOAD_LENGTH,
+                actual: owid.payload.len(),
+            });
+        }
         if owid.payload.len() < HEADER_LENGTH {
             return Err(Error::PayloadTooShort {
                 expected: HEADER_LENGTH,
@@ -275,6 +299,47 @@ impl FodId {
         let minutes = (self.owid.date.timestamp() - OWID_BASE_DATE_UNIX_SECONDS).div_euclid(60);
         u32::try_from(minutes.max(0)).unwrap_or(u32::MAX)
     }
+
+    /// Defensive check used by the cloud client. Constructors are the
+    /// authoritative enforcement point; this also requires a signed envelope.
+    #[cfg(feature = "cloud")]
+    pub(crate) fn has_valid_length(&self) -> bool {
+        maximum_length_valid(&self.owid) && self.owid.signature.len() == owid::SIGNATURE_LENGTH
+    }
+}
+
+fn too_long() -> Error {
+    Error::IdentifierTooLong {
+        maximum: MAXIMUM_BYTE_LENGTH,
+    }
+}
+
+fn maximum_length_valid(owid: &Owid) -> bool {
+    owid.payload.len() <= MAXIMUM_PAYLOAD_LENGTH && maximum_envelope_length_valid(owid)
+}
+
+fn maximum_envelope_length_valid(owid: &Owid) -> bool {
+    owid.domain.len() <= MAXIMUM_BYTE_LENGTH
+        && envelope_length(owid).is_some_and(|length| length <= MAXIMUM_BYTE_LENGTH)
+}
+
+fn envelope_length(owid: &Owid) -> Option<usize> {
+    let date_length = match owid.version {
+        Version::Version1 => 2,
+        Version::Version2 | Version::Version3 => 4,
+        Version::Empty => return Some(1),
+    };
+    [
+        1,
+        owid.domain.len(),
+        1,
+        date_length,
+        4,
+        owid.payload.len(),
+        owid.signature.len(),
+    ]
+    .into_iter()
+    .try_fold(0usize, usize::checked_add)
 }
 
 /// Restores a string in the URL-safe base64 alphabet to the standard alphabet

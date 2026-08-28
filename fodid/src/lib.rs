@@ -133,7 +133,8 @@ mod fodid;
 pub use error::{Error, Result};
 pub use fodid::{
     FodId, IdType, FLAGS_OFFSET, GUID_LENGTH, HASH_LENGTH, HASH_OFFSET, HEADER_LENGTH,
-    LICENSE_ID_LENGTH, LICENSE_ID_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
+    LICENSE_ID_LENGTH, LICENSE_ID_OFFSET, MAXIMUM_BYTE_LENGTH, PAYLOAD_LENGTH,
+    RANDOM_PAYLOAD_LENGTH,
 };
 
 // Re-exported so callers can reach the OWID envelope type without adding a

@@ -91,6 +91,7 @@ fn constants_are_internally_consistent() {
         fodid::LICENSE_ID_OFFSET + fodid::LICENSE_ID_LENGTH,
         fodid::HASH_OFFSET
     );
+    assert_eq!(136, fodid::MAXIMUM_BYTE_LENGTH);
 }
 
 #[test]
@@ -285,19 +286,69 @@ fn constructor_from_bytes_short_payload_errors() {
 }
 
 #[test]
-fn constructor_payload_larger_than_spec_uses_first_37_bytes() {
-    let fixture = Fixture::new();
-    // 64-byte payload whose first 37 bytes are canonical; the rest is 0xCC
-    // and must be ignored.
-    let mut payload = vec![0xCCu8; 64];
+fn constructor_maximum_length_uses_first_37_payload_bytes() {
+    let mut payload = vec![0xCCu8; 56];
     payload[..fodid::PAYLOAD_LENGTH].copy_from_slice(&canonical_payload());
+    let mut owid = Owid::new("51d.es", Utc::now(), payload);
+    owid.signature = vec![0u8; owid::SIGNATURE_LENGTH];
+    let bytes = owid.as_byte_array().unwrap();
+    assert_eq!(fodid::MAXIMUM_BYTE_LENGTH, bytes.len());
 
-    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+    let fod_id = FodId::from_byte_array(&bytes).unwrap();
 
     assert_eq!(CANONICAL_FLAGS, fod_id.flags());
     assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id());
     assert_eq!(&canonical_hash(), fod_id.hash());
     assert_eq!(fodid::HASH_LENGTH, fod_id.hash().len());
+}
+
+#[test]
+fn constructor_one_byte_beyond_maximum_errors_for_every_input() {
+    let mut payload = vec![0xCCu8; 57];
+    payload[..fodid::PAYLOAD_LENGTH].copy_from_slice(&canonical_payload());
+    let mut owid = Owid::new("51d.es", Utc::now(), payload);
+    owid.signature = vec![0u8; owid::SIGNATURE_LENGTH];
+    let bytes = owid.as_byte_array().unwrap();
+    let encoded = owid.as_base64().unwrap();
+    assert_eq!(fodid::MAXIMUM_BYTE_LENGTH + 1, bytes.len());
+
+    assert!(matches!(
+        FodId::from_base64(&encoded),
+        Err(Error::IdentifierTooLong { .. })
+    ));
+    assert!(matches!(
+        FodId::from_byte_array(&bytes),
+        Err(Error::IdentifierTooLong { .. })
+    ));
+    assert!(matches!(
+        FodId::from_owid(owid),
+        Err(Error::IdentifierTooLong { .. })
+    ));
+}
+
+#[test]
+fn oversized_payload_in_short_envelope_explains_payload_limit() {
+    let mut payload = vec![0xCCu8; 57];
+    payload[..fodid::PAYLOAD_LENGTH].copy_from_slice(&canonical_payload());
+    let mut owid = Owid::new("x", Utc::now(), payload);
+    owid.signature = vec![0u8; owid::SIGNATURE_LENGTH];
+    let bytes = owid.as_byte_array().unwrap();
+    assert!(bytes.len() <= fodid::MAXIMUM_BYTE_LENGTH);
+
+    assert!(matches!(
+        FodId::from_byte_array(&bytes),
+        Err(Error::PayloadTooLong {
+            maximum: 56,
+            actual: 57
+        })
+    ));
+    assert!(matches!(
+        FodId::from_owid(owid),
+        Err(Error::PayloadTooLong {
+            maximum: 56,
+            actual: 57
+        })
+    ));
 }
 
 #[test]

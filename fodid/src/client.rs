@@ -85,11 +85,7 @@ const KEY_LIST_MAX_AGE_HOURS: i64 = 24;
 /// for all but a few minutes around a boundary.
 const BOUNDARY_TOLERANCE_MINUTES: i64 = 15;
 
-/// Private limits for the largest 51Did accepted by the cloud endpoints.
-/// They are client policy, not limits on the general OWID format.
-const MAX_IDENTIFIER_PAYLOAD_LENGTH: usize = 56;
-const MAX_IDENTIFIER_ENVELOPE_LENGTH: usize = 136;
-const MAX_IDENTIFIER_ENCODED_LENGTH: usize = 184;
+const MAX_IDENTIFIER_ENCODED_LENGTH: usize = ((crate::MAXIMUM_BYTE_LENGTH + 2) / 3) * 4;
 
 // ----------------------------------------------------------------------
 // Transport
@@ -597,31 +593,8 @@ fn validate_encoded_identifier(identifier: &str) -> Result<(), ClientError> {
     Ok(())
 }
 
-/// The serialized length without serializing. This prevents an oversized
-/// object from first allocating another buffer merely to discover its size.
-fn envelope_length(fod_id: &FodId) -> Option<usize> {
-    let date_length = match fod_id.version {
-        Version::Version1 => 2,
-        Version::Version2 | Version::Version3 => 4,
-        Version::Empty => return None,
-    };
-    [
-        1,
-        fod_id.domain.len(),
-        1,
-        date_length,
-        4,
-        fod_id.payload.len(),
-        fod_id.signature.len(),
-    ]
-    .into_iter()
-    .try_fold(0usize, usize::checked_add)
-}
-
 fn maximum_size_valid(fod_id: &FodId) -> bool {
-    fod_id.payload.len() <= MAX_IDENTIFIER_PAYLOAD_LENGTH
-        && fod_id.signature.len() == owid::SIGNATURE_LENGTH
-        && envelope_length(fod_id).is_some_and(|length| length <= MAX_IDENTIFIER_ENVELOPE_LENGTH)
+    fod_id.has_valid_length()
 }
 
 fn checked_identifier<I: DidInput + ?Sized>(fod_id: &I) -> Result<String, ClientError> {
