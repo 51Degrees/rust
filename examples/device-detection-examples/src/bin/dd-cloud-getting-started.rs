@@ -51,8 +51,9 @@ const PRICING_MESSAGE: &str =
 pub struct ExampleOptions {
     /// The cloud resource key the pipeline authenticates with.
     pub resource_key: String,
-    /// An optional override for the cloud endpoint. Left `None` for the public
-    /// 51Degrees cloud, set by a test pointing at an alternative deployment.
+    /// An optional override for the cloud endpoint, read from
+    /// `51DEGREES_CLOUD_ENDPOINT`. `None` leaves the choice to the cloud request
+    /// engine, which reads the same variable and defaults to the public cloud.
     pub endpoint: Option<String>,
 }
 
@@ -197,7 +198,12 @@ fn main() -> Result<()> {
 
     run(ExampleOptions {
         resource_key,
-        endpoint: None,
+        // The cloud endpoint. Unset, the cloud request engine reads
+        // 51DEGREES_CLOUD_ENDPOINT itself, and it is passed here as well so the
+        // choice is visible. A host other than cloud.51degrees.com is an on
+        // premise web server or a privately hosted 51Degrees cloud (see
+        // examples_shared::CLOUD_ENDPOINT_ENV_VAR).
+        endpoint: examples_shared::cloud_endpoint_from_env(),
     })
 }
 
@@ -219,7 +225,7 @@ mod tests {
         };
         run(ExampleOptions {
             resource_key,
-            endpoint: None,
+            endpoint: examples_shared::cloud_endpoint_from_env(),
         })
         .expect("the cloud getting-started example should complete");
     }

@@ -40,8 +40,10 @@
 //! - [`resource_key_from_env`] and [`is_invalid_key`]. Read a cloud resource key
 //!   from the aligned, legacy and CI-exported environment variables, and screen
 //!   out obvious placeholders.
-//! - [`cloud_endpoint_from_env`]. Read the optional self-hosted cloud endpoint
-//!   from `51DEGREES_CLOUD_ENDPOINT`, trimmed and screened for blankness.
+//! - [`cloud_endpoint_from_env`]. Read the optional cloud endpoint from
+//!   `51DEGREES_CLOUD_ENDPOINT`, trimmed and screened for blankness, for an on
+//!   premise web server or a privately hosted 51Degrees cloud (see
+//!   [`CLOUD_ENDPOINT_ENV_VAR`]).
 //! - [`dd_data_path`] and [`ipi_data_path`]. Resolve the on-premise Device
 //!   Detection and IP Intelligence data files, the latter through the
 //!   ([`IpiTier`]) Enterprise/ASN scheme.

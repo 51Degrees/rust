@@ -22,10 +22,20 @@
 
 //! Resolution of the optional self-hosted cloud endpoint from the environment.
 
-/// The environment variable giving an optional self-hosted cloud endpoint, used
-/// to point the cloud examples at a deployment other than the public 51Degrees
-/// cloud. This is the same variable the cloud request engine reads as its base
-/// URL override, so a single value configures both.
+/// The environment variable giving an optional cloud endpoint, used to point the
+/// cloud examples at a host other than the public 51Degrees cloud at
+/// `https://cloud.51degrees.com/api/v4/`. This is the same variable the cloud
+/// request engine reads as its base URL override, so a single value configures
+/// both.
+///
+/// A host other than cloud.51degrees.com would be used to (a) use an on premise
+/// web server, or (b) use a privately hosted version of the 51Degrees cloud for
+/// performance reasons. This is the private hosting option of the 51Degrees
+/// cloud service. Both run the same service as the public cloud, so every
+/// example works unchanged against them. Every cloud example in this workspace
+/// honours this variable, either by passing [`cloud_endpoint_from_env`] to its
+/// builder or by leaving the endpoint unset so the cloud request engine reads
+/// the variable itself, and the value is normalised to end in one `/`.
 pub const CLOUD_ENDPOINT_ENV_VAR: &str = "51DEGREES_CLOUD_ENDPOINT";
 
 /// Read the optional cloud endpoint from [`CLOUD_ENDPOINT_ENV_VAR`].

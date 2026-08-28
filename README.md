@@ -85,6 +85,7 @@ path, so cloud-only users and most of CI build without a C compiler.
 | [`device-detection-examples`](examples/device-detection-examples) | Runnable device-detection examples (cloud, on-premise and web). |
 | [`ip-intelligence-examples`](examples/ip-intelligence-examples) | Runnable IP-intelligence examples (cloud, on-premise and web). |
 | [`pipeline-examples`](examples/pipeline-examples) | Runnable pipeline examples: custom flow elements, caching, usage sharing and the combined-pipeline server-side examples. |
+| [`fodid-examples`](examples/fodid-examples) | Runnable 51Did examples: the creator context web demo, which verifies a 51Did from the browser and redeems the encrypted verdict on the server. |
 | [`examples-benches`](examples/benches) | Criterion micro-benchmarks guarding the DD, IPI and JavaScript-builder throughput budgets. |
 | [`fodid`](fodid) | Standalone reader for the 51Did (51Degrees Identifier) returned by the cloud, described in the [identifiers documentation](https://51degrees.com/documentation/_identifiers__index.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=readme.md&utm_term=51did). It parses the OWID envelope and is independent of the pipeline stack. |
 
@@ -266,6 +267,21 @@ cargo run -p ip-intelligence-examples --bin ipi-onprem-getting-started
 
 # Web examples (cloud variant shown).
 cargo run -p device-detection-examples --bin dd-web-getting-started-cloud
+cargo run -p fodid-examples --bin fodid-web-creator-context
+```
+
+Every cloud example calls the public 51Degrees cloud at
+`https://cloud.51degrees.com/api/v4/` unless `51DEGREES_CLOUD_ENDPOINT` names
+another host. A host other than cloud.51degrees.com would be used to (a) use an
+on premise web server, or (b) use a privately hosted version of the 51Degrees
+cloud for performance reasons. This is the private hosting option of the
+51Degrees cloud service. Both run the same service as the public cloud, so the
+examples work unchanged. The variable is the same one the cloud request engine
+reads, so setting it once points every example at the same place, and the
+value is the API base including the `/api/v4/` segment.
+
+```sh
+51DEGREES_CLOUD_ENDPOINT=http://localhost:8080/api/v4/ cargo run -p ip-intelligence-examples --bin ipi-cloud-getting-started
 ```
 
 #### Browser (Selenium) tests
