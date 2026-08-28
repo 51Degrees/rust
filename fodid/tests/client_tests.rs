@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 use fodid::client::{
-    ClientError, ContextOutcome, DidClient, FactorOutcome, Method, Request, Response,
+    ClientError, ContextOutcome, DidClient, DidInput, FactorOutcome, Method, Request, Response,
     SignatureCheck, SignatureOutcome, Transport, TransportError, USER_AGENT,
 };
 use fodid::{FodId, IdType};
@@ -74,7 +74,17 @@ impl KeyPair {
     /// stamps the current time, so the envelope is serialised with a
     /// placeholder signature and the bytes before it are signed directly.
     fn sign(&self, payload: Vec<u8>, date: DateTime<Utc>, version: Version) -> FodId {
-        let mut owid = Owid::new(TEST_DOMAIN, date, payload);
+        self.sign_for_domain(TEST_DOMAIN, payload, date, version)
+    }
+
+    fn sign_for_domain(
+        &self,
+        domain: &str,
+        payload: Vec<u8>,
+        date: DateTime<Utc>,
+        version: Version,
+    ) -> FodId {
+        let mut owid = Owid::new(domain, date, payload);
         owid.version = version;
         owid.signature = vec![0u8; owid::SIGNATURE_LENGTH];
         let bytes = owid.as_byte_array().unwrap();
@@ -577,13 +587,16 @@ fn verify_signature_is_false_for_a_payload_shorter_than_the_base() {
 
 #[test]
 fn verify_signature_is_true_for_a_payload_longer_than_the_base() {
-    // A creator context section after the base is signed with the rest.
+    // The largest payload currently issued is signed with the rest.
     let harness = Harness::new();
     let mut payload = probabilistic_payload();
     payload.extend_from_slice(&[0u8; 19]);
-    let fod_id = harness
-        .week_2
-        .sign(payload, at("2026-08-12T12:00:00Z"), Version::Version3);
+    let fod_id = harness.week_2.sign_for_domain(
+        "51d.es",
+        payload,
+        at("2026-08-12T12:00:00Z"),
+        Version::Version3,
+    );
     assert!(harness.client.verify_signature(&fod_id).unwrap());
 
     // The random base is shorter, and a random identifier with a section
@@ -595,6 +608,25 @@ fn verify_signature_is_true_for_a_payload_longer_than_the_base() {
         .sign(payload, at("2026-08-12T12:00:00Z"), Version::Version3);
     assert_eq!(fod_id.id_type(), IdType::Random);
     assert!(harness.client.verify_signature(&fod_id).unwrap());
+}
+
+#[test]
+fn verify_signature_rejects_an_oversized_identifier_before_fetching_keys() {
+    let harness = Harness::new();
+    let mut payload = probabilistic_payload();
+    payload.extend_from_slice(&[0u8; 20]);
+    let fod_id = harness.week_2.sign_for_domain(
+        "51d.es",
+        payload,
+        at("2026-08-12T12:00:00Z"),
+        Version::Version3,
+    );
+
+    assert_eq!(
+        harness.client.verify_signature_detailed(&fod_id).unwrap(),
+        SignatureCheck::Invalid
+    );
+    assert_eq!(harness.key_fetches(), 0);
 }
 
 // ------------------------------------------------ cloud verification
@@ -633,6 +665,114 @@ fn verify_accepts_a_string_in_either_alphabet() {
     let sent = harness.fake.sent_to("/id/verify/");
     assert_eq!(sent[0].url, sent[1].url);
     assert!(sent[0].url.ends_with(&url_safe));
+}
+
+#[test]
+fn verify_accepts_the_largest_identifier_padded_or_unpadded() {
+    let harness = Harness::new();
+    let mut payload = probabilistic_payload();
+    payload.extend_from_slice(&[0u8; 19]);
+    let fod_id = harness.week_2.sign_for_domain(
+        "51d.es",
+        payload,
+        at("2026-08-12T12:00:00Z"),
+        Version::Version3,
+    );
+    let padded = fod_id.as_base64().unwrap();
+    let unpadded = fod_id.as_base64_url().unwrap();
+    assert_eq!(fod_id.as_byte_array().unwrap().len(), 136);
+    assert_eq!(padded.len(), 184);
+    assert_eq!(unpadded.len(), 182);
+
+    harness.fake.answer("/id/verify/", 200, r#"{"valid":true}"#);
+    harness.fake.answer("/id/verify/", 200, r#"{"valid":true}"#);
+    harness.fake.answer("/id/verify/", 200, r#"{"valid":true}"#);
+    assert!(harness.client.verify(&fod_id).unwrap());
+    assert!(harness.client.verify(padded.as_str()).unwrap());
+    assert!(harness.client.verify(unpadded.as_str()).unwrap());
+    assert_eq!(harness.fake.sent_to("/id/verify/").len(), 3);
+}
+
+#[test]
+fn verify_and_redeem_reject_185_encoded_bytes_without_transport() {
+    let harness = Harness::new();
+    let oversized = "A".repeat(185);
+
+    assert!(matches!(
+        harness.client.verify(&oversized).unwrap_err(),
+        ClientError::InvalidIdentifier(_)
+    ));
+    assert!(matches!(
+        harness
+            .client
+            .redeem(oversized.as_str(), "result", "challenge")
+            .unwrap_err(),
+        ClientError::InvalidIdentifier(_)
+    ));
+    assert!(harness.fake.sent().is_empty());
+}
+
+struct OversizedDidInput;
+
+impl DidInput for OversizedDidInput {
+    fn to_url_safe(&self) -> Result<String, ClientError> {
+        Ok("A".repeat(185))
+    }
+}
+
+#[test]
+fn verify_and_redeem_recheck_third_party_did_input() {
+    let harness = Harness::new();
+
+    assert!(matches!(
+        harness.client.verify(&OversizedDidInput).unwrap_err(),
+        ClientError::InvalidIdentifier(_)
+    ));
+    assert!(matches!(
+        harness
+            .client
+            .redeem(&OversizedDidInput, "result", "challenge")
+            .unwrap_err(),
+        ClientError::InvalidIdentifier(_)
+    ));
+    assert!(harness.fake.sent().is_empty());
+}
+
+#[test]
+fn verify_and_redeem_reject_an_oversized_fodid_object_without_transport() {
+    let harness = Harness::new();
+    let mut oversized_payload = probabilistic_payload();
+    oversized_payload.extend_from_slice(&[0u8; 20]);
+    let oversized_payload = harness.week_2.sign_for_domain(
+        "51d.es",
+        oversized_payload,
+        at("2026-08-12T12:00:00Z"),
+        Version::Version3,
+    );
+
+    let mut maximum_payload = probabilistic_payload();
+    maximum_payload.extend_from_slice(&[0u8; 19]);
+    let oversized_envelope = harness.week_2.sign_for_domain(
+        "51d.esx",
+        maximum_payload,
+        at("2026-08-12T12:00:00Z"),
+        Version::Version3,
+    );
+
+    for fod_id in [&oversized_payload, &oversized_envelope] {
+        assert!(matches!(
+            harness.client.verify(fod_id).unwrap_err(),
+            ClientError::InvalidIdentifier(_)
+        ));
+        assert!(matches!(
+            harness
+                .client
+                .redeem(fod_id, "result", "challenge")
+                .unwrap_err(),
+            ClientError::InvalidIdentifier(_)
+        ));
+    }
+    assert!(harness.fake.sent().is_empty());
 }
 
 #[test]

@@ -85,6 +85,12 @@ const KEY_LIST_MAX_AGE_HOURS: i64 = 24;
 /// for all but a few minutes around a boundary.
 const BOUNDARY_TOLERANCE_MINUTES: i64 = 15;
 
+/// Private limits for the largest 51Did accepted by the cloud endpoints.
+/// They are client policy, not limits on the general OWID format.
+const MAX_IDENTIFIER_PAYLOAD_LENGTH: usize = 56;
+const MAX_IDENTIFIER_ENVELOPE_LENGTH: usize = 136;
+const MAX_IDENTIFIER_ENCODED_LENGTH: usize = 184;
+
 // ----------------------------------------------------------------------
 // Transport
 // ----------------------------------------------------------------------
@@ -233,9 +239,9 @@ pub enum ClientError {
         /// The response body.
         body: String,
     },
-    /// The cloud refused the 51Did as malformed (a 400 carrying `errors`),
-    /// with the cloud's own message. The identifier is the caller's own, so
-    /// naming the mistake gives nothing away.
+    /// The client rejected the 51Did before sending it, or the cloud refused
+    /// it as malformed (a 400 carrying `errors`). The identifier is the
+    /// caller's own, so naming the mistake gives nothing away.
     InvalidIdentifier(String),
     /// The host answering does not offer the creator context (a 404 from
     /// the redeem endpoint), which is a service without the feature rather
@@ -257,7 +263,7 @@ impl fmt::Display for ClientError {
                 write!(f, "the cloud answered {status}: {body}")
             }
             ClientError::InvalidIdentifier(message) => {
-                write!(f, "the cloud refused the 51Did because {message}")
+                write!(f, "the 51Did was refused because {message}")
             }
             ClientError::NotSupported => f.write_str("the host does not offer the creator context"),
             ClientError::Malformed(message) => {
@@ -578,15 +584,74 @@ pub trait DidInput {
     fn to_url_safe(&self) -> Result<String, ClientError>;
 }
 
+fn invalid_identifier_size() -> ClientError {
+    ClientError::InvalidIdentifier(
+        "its encoded form exceeds the maximum accepted by DidClient".to_owned(),
+    )
+}
+
+fn validate_encoded_identifier(identifier: &str) -> Result<(), ClientError> {
+    if identifier.len() > MAX_IDENTIFIER_ENCODED_LENGTH {
+        return Err(invalid_identifier_size());
+    }
+    Ok(())
+}
+
+/// The serialized length without serializing. This prevents an oversized
+/// object from first allocating another buffer merely to discover its size.
+fn envelope_length(fod_id: &FodId) -> Option<usize> {
+    let date_length = match fod_id.version {
+        Version::Version1 => 2,
+        Version::Version2 | Version::Version3 => 4,
+        Version::Empty => return None,
+    };
+    [
+        1,
+        fod_id.domain.len(),
+        1,
+        date_length,
+        4,
+        fod_id.payload.len(),
+        fod_id.signature.len(),
+    ]
+    .into_iter()
+    .try_fold(0usize, usize::checked_add)
+}
+
+fn maximum_size_valid(fod_id: &FodId) -> bool {
+    fod_id.payload.len() <= MAX_IDENTIFIER_PAYLOAD_LENGTH
+        && fod_id.signature.len() == owid::SIGNATURE_LENGTH
+        && envelope_length(fod_id).is_some_and(|length| length <= MAX_IDENTIFIER_ENVELOPE_LENGTH)
+}
+
+fn checked_identifier<I: DidInput + ?Sized>(fod_id: &I) -> Result<String, ClientError> {
+    let identifier = fod_id.to_url_safe()?;
+    // DidInput is public and third-party implementations need not use one of
+    // the checked implementations below. The request boundary is therefore
+    // authoritative.
+    validate_encoded_identifier(&identifier)?;
+    Ok(identifier)
+}
+
 impl DidInput for FodId {
     fn to_url_safe(&self) -> Result<String, ClientError> {
-        Ok(self.as_base64_url()?)
+        if !maximum_size_valid(self) {
+            return Err(invalid_identifier_size());
+        }
+        let identifier = self.as_base64_url()?;
+        validate_encoded_identifier(&identifier)?;
+        Ok(identifier)
     }
 }
 
 impl DidInput for str {
     fn to_url_safe(&self) -> Result<String, ClientError> {
-        Ok(to_base64_url(self.trim()))
+        validate_encoded_identifier(self)?;
+        let identifier = self.trim();
+        validate_encoded_identifier(identifier)?;
+        let identifier = to_base64_url(identifier);
+        validate_encoded_identifier(&identifier)?;
+        Ok(identifier)
     }
 }
 
@@ -788,8 +853,13 @@ impl DidClient {
     ///
     /// # Errors
     ///
-    /// As [`public_keys`](DidClient::public_keys).
+    /// As [`public_keys`](DidClient::public_keys), or
+    /// [`ClientError::InvalidIdentifier`] when the value is larger than a
+    /// 51Did accepted by this client.
     pub fn public_key_for(&self, fod_id: &FodId) -> Result<Option<SigningKey>, ClientError> {
+        if !maximum_size_valid(fod_id) {
+            return Err(invalid_identifier_size());
+        }
         let keys = self.keys_covering(fod_id.date)?;
         Ok(in_force_at(&keys, fod_id.date).cloned())
     }
@@ -855,11 +925,10 @@ impl DidClient {
     /// signing key for its date, checked here without a call per identifier.
     /// The key list is fetched on first use and cached.
     ///
-    /// The envelope must be version 3 and the payload at least the base
-    /// length for its type (the header plus a 32-byte match key, or 16 for a
-    /// random identifier). Any longer payload is accepted, because an
-    /// identifier carrying a creator context is longer than the base and the
-    /// signature covers the whole payload. The key in force at the
+    /// The envelope must be version 3, fit within the size accepted for a
+    /// 51Did, and have at least the base payload length for its type (the
+    /// header plus a 32-byte match key, or 16 for a random identifier). The
+    /// key in force at the
     /// identifier's date is tried first, then a neighbouring key where the
     /// date sits within a small tolerance of a boundary, and never every
     /// earlier key. `false` when no held key covers the date, which
@@ -884,7 +953,7 @@ impl DidClient {
         if fod_id.version != Version::Version3 {
             return Ok(SignatureCheck::Invalid);
         }
-        if fod_id.payload.len() < base_length(fod_id.id_type()) {
+        if !maximum_size_valid(fod_id) || fod_id.payload.len() < base_length(fod_id.id_type()) {
             return Ok(SignatureCheck::Invalid);
         }
         let keys = self.keys_covering(fod_id.date)?;
@@ -920,13 +989,13 @@ impl DidClient {
     ///
     /// # Errors
     ///
-    /// [`ClientError::InvalidIdentifier`] when the cloud could not parse the
-    /// identifier at all, [`ClientError::Transport`] when the cloud could
-    /// not be reached, [`ClientError::Http`] for a status other than 200
-    /// or a 400 carrying `valid`, and [`ClientError::Malformed`] when the
-    /// answer could not be read.
+    /// [`ClientError::InvalidIdentifier`] when the identifier is too large
+    /// for a 51Did or the cloud could not parse it, [`ClientError::Transport`]
+    /// when the cloud could not be reached, [`ClientError::Http`] for a
+    /// status other than 200 or a 400 carrying `valid`, and
+    /// [`ClientError::Malformed`] when the answer could not be read.
     pub fn verify<I: DidInput + ?Sized>(&self, fod_id: &I) -> Result<bool, ClientError> {
-        let identifier = percent_encode(&fod_id.to_url_safe()?);
+        let identifier = percent_encode(&checked_identifier(fod_id)?);
         let url = format!(
             "{}id/verify/{}?51did={identifier}&owid={identifier}",
             self.endpoint, self.resource_key
@@ -970,22 +1039,23 @@ impl DidClient {
     ///
     /// # Errors
     ///
-    /// [`ClientError::InvalidIdentifier`] when the cloud refused the
-    /// identifier as malformed (400), [`ClientError::NotSupported`] when the
-    /// host does not offer the creator context (404), [`ClientError::Http`]
-    /// for any other status, [`ClientError::Transport`] when the cloud
-    /// could not be reached, and [`ClientError::Malformed`] when the answer
-    /// could not be read.
+    /// [`ClientError::InvalidIdentifier`] when the identifier is too large
+    /// for a 51Did or the cloud refused it as malformed (400),
+    /// [`ClientError::NotSupported`] when the host does not offer the creator
+    /// context (404), [`ClientError::Http`] for any other status,
+    /// [`ClientError::Transport`] when the cloud could not be reached, and
+    /// [`ClientError::Malformed`] when the answer could not be read.
     pub fn redeem<I: DidInput + ?Sized>(
         &self,
         fod_id: &I,
         result: &str,
         challenge: &str,
     ) -> Result<RedeemResult, ClientError> {
+        let identifier = checked_identifier(fod_id)?;
         let url = format!("{}id/redeem", self.endpoint);
         let mut form = vec![
             ("resource".to_owned(), self.resource_key.clone()),
-            ("51did".to_owned(), fod_id.to_url_safe()?),
+            ("51did".to_owned(), identifier),
             ("result".to_owned(), result.to_owned()),
             ("challenge".to_owned(), challenge.to_owned()),
         ];
