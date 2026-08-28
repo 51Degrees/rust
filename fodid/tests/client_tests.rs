@@ -84,17 +84,6 @@ impl KeyPair {
         date: DateTime<Utc>,
         version: Version,
     ) -> FodId {
-        self.try_sign_for_domain(domain, payload, date, version)
-            .unwrap()
-    }
-
-    fn try_sign_for_domain(
-        &self,
-        domain: &str,
-        payload: Vec<u8>,
-        date: DateTime<Utc>,
-        version: Version,
-    ) -> fodid::Result<FodId> {
         let mut owid = Owid::new(domain, date, payload);
         owid.version = version;
         owid.signature = vec![0u8; owid::SIGNATURE_LENGTH];
@@ -102,7 +91,7 @@ impl KeyPair {
         let signed = &bytes[..bytes.len() - owid::SIGNATURE_LENGTH];
         let crypto = Crypto::new_sign_only(&self.private_pem).unwrap();
         owid.signature = crypto.sign_byte_array(signed).unwrap();
-        FodId::from_owid(owid)
+        FodId::from_owid(owid).unwrap()
     }
 
     fn sign_at(&self, date: &str) -> FodId {
@@ -598,21 +587,18 @@ fn verify_signature_is_false_for_a_payload_shorter_than_the_base() {
 
 #[test]
 fn verify_signature_is_true_for_a_payload_longer_than_the_base() {
-    // The largest payload currently issued is signed with the rest.
+    // A creator context section after the base is signed with the rest.
     let harness = Harness::new();
     let mut payload = probabilistic_payload();
-    payload.extend_from_slice(&[0u8; 19]);
-    let fod_id = harness.week_2.sign_for_domain(
-        "51d.es",
-        payload,
-        at("2026-08-12T12:00:00Z"),
-        Version::Version3,
-    );
+    payload.extend_from_slice(&[0u8; 24]);
+    let fod_id = harness
+        .week_2
+        .sign(payload, at("2026-08-12T12:00:00Z"), Version::Version3);
     assert!(harness.client.verify_signature(&fod_id).unwrap());
 
     // The random base is shorter, and a random identifier with a section
     // verifies too.
-    let mut payload = vec![0u8; fodid::RANDOM_PAYLOAD_LENGTH + 19];
+    let mut payload = vec![0u8; fodid::RANDOM_PAYLOAD_LENGTH + 24];
     payload[fodid::FLAGS_OFFSET] = 0b0100_0000;
     let fod_id = harness
         .week_2
@@ -622,22 +608,20 @@ fn verify_signature_is_true_for_a_payload_longer_than_the_base() {
 }
 
 #[test]
-fn verify_signature_rejects_an_oversized_identifier_before_fetching_keys() {
+fn verify_signature_is_true_for_a_long_domain_and_a_long_context_section() {
+    // The creator domain is a deployment parameter, so a self-hosted service
+    // may sign with a longer one, and a later version of the creator context
+    // may add to the section after the value. Neither changes the check.
     let harness = Harness::new();
     let mut payload = probabilistic_payload();
-    payload.extend_from_slice(&[0u8; 20]);
-    let result = harness.week_2.try_sign_for_domain(
-        "51d.es",
+    payload.extend_from_slice(&[0u8; 200]);
+    let fod_id = harness.week_2.sign_for_domain(
+        "creator.context.self.hosted.example.com",
         payload,
         at("2026-08-12T12:00:00Z"),
         Version::Version3,
     );
-
-    assert!(matches!(
-        result,
-        Err(fodid::Error::IdentifierTooLong { .. })
-    ));
-    assert_eq!(harness.key_fetches(), 0);
+    assert!(harness.client.verify_signature(&fod_id).unwrap());
 }
 
 // ------------------------------------------------ cloud verification
@@ -679,21 +663,17 @@ fn verify_accepts_a_string_in_either_alphabet() {
 }
 
 #[test]
-fn verify_accepts_the_largest_identifier_padded_or_unpadded() {
+fn verify_accepts_an_identifier_with_a_context_section_padded_or_unpadded() {
     let harness = Harness::new();
     let mut payload = probabilistic_payload();
-    payload.extend_from_slice(&[0u8; 19]);
-    let fod_id = harness.week_2.sign_for_domain(
-        "51d.es",
-        payload,
-        at("2026-08-12T12:00:00Z"),
-        Version::Version3,
-    );
+    payload.extend_from_slice(&[0u8; 24]);
+    let fod_id = harness
+        .week_2
+        .sign(payload, at("2026-08-12T12:00:00Z"), Version::Version3);
     let padded = fod_id.as_base64().unwrap();
     let unpadded = fod_id.as_base64_url().unwrap();
-    assert_eq!(fod_id.as_byte_array().unwrap().len(), 136);
-    assert_eq!(padded.len(), 184);
-    assert_eq!(unpadded.len(), 182);
+    assert!(padded.ends_with('='));
+    assert!(!unpadded.ends_with('='));
 
     harness.fake.answer("/id/verify/", 200, r#"{"valid":true}"#);
     harness.fake.answer("/id/verify/", 200, r#"{"valid":true}"#);
@@ -701,13 +681,51 @@ fn verify_accepts_the_largest_identifier_padded_or_unpadded() {
     assert!(harness.client.verify(&fod_id).unwrap());
     assert!(harness.client.verify(padded.as_str()).unwrap());
     assert!(harness.client.verify(unpadded.as_str()).unwrap());
-    assert_eq!(harness.fake.sent_to("/id/verify/").len(), 3);
+    let sent = harness.fake.sent_to("/id/verify/");
+    assert_eq!(sent.len(), 3);
+    assert_eq!(sent[0].url, sent[1].url);
+    assert_eq!(sent[1].url, sent[2].url);
 }
 
 #[test]
-fn verify_and_redeem_reject_185_encoded_bytes_without_transport() {
+fn verify_ignores_whitespace_around_a_string_identifier() {
+    // A value copied out of a link, a header or a file arrives with a
+    // newline or a stray space around it, and must reach the cloud as the
+    // same identifier the clean form does.
     let harness = Harness::new();
-    let oversized = "A".repeat(185);
+    let fod_id = harness.week_2.sign_at("2026-08-12T12:00:00Z");
+    let padded = fod_id.as_base64().unwrap();
+    let unpadded = fod_id.as_base64_url().unwrap();
+    let spaced = [
+        format!("{padded}\n"),
+        format!(" {padded}"),
+        format!("{padded} "),
+        format!("\r\n\t {unpadded} \t\r\n"),
+    ];
+
+    for value in &spaced {
+        harness.fake.answer("/id/verify/", 200, r#"{"valid":true}"#);
+        assert!(harness.client.verify(value.as_str()).unwrap());
+    }
+
+    let expected = format!("{ENDPOINT}id/verify/{RESOURCE_KEY}?51did={unpadded}&owid={unpadded}");
+    let sent = harness.fake.sent_to("/id/verify/");
+    assert_eq!(sent.len(), spaced.len());
+    for request in sent {
+        assert_eq!(request.url, expected);
+    }
+}
+
+/// Far longer than any identifier, so the client's guard against obviously
+/// malformed input refuses it before it can reach the cloud.
+fn over_length_encoded() -> String {
+    "A".repeat(8192)
+}
+
+#[test]
+fn verify_and_redeem_reject_an_over_length_string_without_transport() {
+    let harness = Harness::new();
+    let oversized = over_length_encoded();
 
     assert!(matches!(
         harness.client.verify(&oversized).unwrap_err(),
@@ -721,13 +739,14 @@ fn verify_and_redeem_reject_185_encoded_bytes_without_transport() {
         ClientError::InvalidIdentifier(_)
     ));
     assert!(harness.fake.sent().is_empty());
+    assert_eq!(harness.key_fetches(), 0);
 }
 
 struct OversizedDidInput;
 
 impl DidInput for OversizedDidInput {
     fn to_url_safe(&self) -> Result<String, ClientError> {
-        Ok("A".repeat(185))
+        Ok(over_length_encoded())
     }
 }
 
@@ -747,36 +766,7 @@ fn verify_and_redeem_recheck_third_party_did_input() {
         ClientError::InvalidIdentifier(_)
     ));
     assert!(harness.fake.sent().is_empty());
-}
-
-#[test]
-fn verify_and_redeem_reject_an_oversized_fodid_object_without_transport() {
-    let harness = Harness::new();
-    let mut oversized_payload = probabilistic_payload();
-    oversized_payload.extend_from_slice(&[0u8; 20]);
-    let oversized_payload = harness.week_2.try_sign_for_domain(
-        "51d.es",
-        oversized_payload,
-        at("2026-08-12T12:00:00Z"),
-        Version::Version3,
-    );
-
-    let mut maximum_payload = probabilistic_payload();
-    maximum_payload.extend_from_slice(&[0u8; 19]);
-    let oversized_envelope = harness.week_2.try_sign_for_domain(
-        "51d.esx",
-        maximum_payload,
-        at("2026-08-12T12:00:00Z"),
-        Version::Version3,
-    );
-
-    for result in [oversized_payload, oversized_envelope] {
-        assert!(matches!(
-            result,
-            Err(fodid::Error::IdentifierTooLong { .. })
-        ));
-    }
-    assert!(harness.fake.sent().is_empty());
+    assert_eq!(harness.key_fetches(), 0);
 }
 
 #[test]

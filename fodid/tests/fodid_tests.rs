@@ -91,7 +91,6 @@ fn constants_are_internally_consistent() {
         fodid::LICENSE_ID_OFFSET + fodid::LICENSE_ID_LENGTH,
         fodid::HASH_OFFSET
     );
-    assert_eq!(136, fodid::MAXIMUM_BYTE_LENGTH);
 }
 
 #[test]
@@ -286,15 +285,14 @@ fn constructor_from_bytes_short_payload_errors() {
 }
 
 #[test]
-fn constructor_maximum_length_uses_first_37_payload_bytes() {
-    let mut payload = vec![0xCCu8; 56];
+fn constructor_payload_larger_than_spec_uses_first_37_bytes() {
+    let fixture = Fixture::new();
+    // 64-byte payload whose first 37 bytes are canonical; the rest is 0xCC
+    // and must be ignored.
+    let mut payload = vec![0xCCu8; 64];
     payload[..fodid::PAYLOAD_LENGTH].copy_from_slice(&canonical_payload());
-    let mut owid = Owid::new("51d.es", Utc::now(), payload);
-    owid.signature = vec![0u8; owid::SIGNATURE_LENGTH];
-    let bytes = owid.as_byte_array().unwrap();
-    assert_eq!(fodid::MAXIMUM_BYTE_LENGTH, bytes.len());
 
-    let fod_id = FodId::from_byte_array(&bytes).unwrap();
+    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
 
     assert_eq!(CANONICAL_FLAGS, fod_id.flags());
     assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id());
@@ -303,52 +301,52 @@ fn constructor_maximum_length_uses_first_37_payload_bytes() {
 }
 
 #[test]
-fn constructor_one_byte_beyond_maximum_errors_for_every_input() {
-    let mut payload = vec![0xCCu8; 57];
+fn constructor_accepts_a_long_creator_domain_and_a_long_context_section() {
+    // The creator domain is a deployment parameter, so a self-hosted service
+    // may sign with a longer one, and a later version of the creator context
+    // may add to the section after the value. Both must still read back.
+    let mut payload = vec![0xCCu8; 200];
     payload[..fodid::PAYLOAD_LENGTH].copy_from_slice(&canonical_payload());
-    let mut owid = Owid::new("51d.es", Utc::now(), payload);
-    owid.signature = vec![0u8; owid::SIGNATURE_LENGTH];
-    let bytes = owid.as_byte_array().unwrap();
-    let encoded = owid.as_base64().unwrap();
-    assert_eq!(fodid::MAXIMUM_BYTE_LENGTH + 1, bytes.len());
+    let domain = format!("{}.example.com", "a".repeat(120));
+    let creator = Creator::new(&domain, Crypto::new()).expect("create creator");
+    let owid = creator.sign_bytes(payload).expect("sign payload");
 
-    assert!(matches!(
-        FodId::from_base64(&encoded),
-        Err(Error::IdentifierTooLong { .. })
-    ));
-    assert!(matches!(
-        FodId::from_byte_array(&bytes),
-        Err(Error::IdentifierTooLong { .. })
-    ));
-    assert!(matches!(
-        FodId::from_owid(owid),
-        Err(Error::IdentifierTooLong { .. })
-    ));
+    let fod_id = FodId::from_base64(&owid.as_base64().unwrap()).unwrap();
+
+    assert_eq!(domain, fod_id.domain);
+    assert_eq!(CANONICAL_FLAGS, fod_id.flags());
+    assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id());
+    assert_eq!(&canonical_hash(), fod_id.hash());
 }
 
 #[test]
-fn oversized_payload_in_short_envelope_explains_payload_limit() {
-    let mut payload = vec![0xCCu8; 57];
-    payload[..fodid::PAYLOAD_LENGTH].copy_from_slice(&canonical_payload());
-    let mut owid = Owid::new("x", Utc::now(), payload);
-    owid.signature = vec![0u8; owid::SIGNATURE_LENGTH];
-    let bytes = owid.as_byte_array().unwrap();
-    assert!(bytes.len() <= fodid::MAXIMUM_BYTE_LENGTH);
+fn from_base64_ignores_surrounding_whitespace() {
+    let fixture = Fixture::new();
+    // A payload chosen so the encoding needs padding, which the URL-safe
+    // form leaves out and the reader works back from the stripped length.
+    let mut payload = canonical_payload();
+    for (i, b) in payload[fodid::HASH_OFFSET..].iter_mut().enumerate() {
+        *b = 0xFB + (i as u8 % 5);
+    }
+    let standard = fixture.signed_owid_base64(payload);
+    assert!(standard.ends_with('='));
+    let url_safe = standard
+        .replace('+', "-")
+        .replace('/', "_")
+        .trim_end_matches('=')
+        .to_owned();
 
-    assert!(matches!(
-        FodId::from_byte_array(&bytes),
-        Err(Error::PayloadTooLong {
-            maximum: 56,
-            actual: 57
-        })
-    ));
-    assert!(matches!(
-        FodId::from_owid(owid),
-        Err(Error::PayloadTooLong {
-            maximum: 56,
-            actual: 57
-        })
-    ));
+    let expected = FodId::from_base64(&standard).unwrap();
+    for clean in [&standard, &url_safe] {
+        for spaced in [
+            format!("{clean}\n"),
+            format!(" {clean}"),
+            format!("{clean} "),
+            format!("\r\n\t {clean} \t\r\n"),
+        ] {
+            assert_eq!(FodId::from_base64(&spaced).unwrap(), expected);
+        }
+    }
 }
 
 #[test]

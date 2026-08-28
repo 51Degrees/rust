@@ -85,7 +85,12 @@ const KEY_LIST_MAX_AGE_HOURS: i64 = 24;
 /// for all but a few minutes around a boundary.
 const BOUNDARY_TOLERANCE_MINUTES: i64 = 15;
 
-const MAX_IDENTIFIER_ENCODED_LENGTH: usize = ((crate::MAXIMUM_BYTE_LENGTH + 2) / 3) * 4;
+/// A guard against obviously malformed input, not a statement of how long a
+/// 51Did is. Anything this long is not an identifier at all, so it is refused
+/// before decoding, fetching a key or calling the cloud. The figure is
+/// arbitrary and deliberately generous, with room for far more than any
+/// identifier the cloud issues.
+const MAXIMUM_ENCODED_LENGTH: usize = 4096;
 
 // ----------------------------------------------------------------------
 // Transport
@@ -235,7 +240,7 @@ pub enum ClientError {
         /// The response body.
         body: String,
     },
-    /// The client rejected the 51Did before sending it, or the cloud refused
+    /// The client refused the value before sending it, or the cloud refused
     /// it as malformed (a 400 carrying `errors`). The identifier is the
     /// caller's own, so naming the mistake gives nothing away.
     InvalidIdentifier(String),
@@ -582,49 +587,40 @@ pub trait DidInput {
 
 fn invalid_identifier_size() -> ClientError {
     ClientError::InvalidIdentifier(
-        "its encoded form exceeds the maximum accepted by DidClient".to_owned(),
+        "its encoded form is far longer than any 51Did can be".to_owned(),
     )
 }
 
 fn validate_encoded_identifier(identifier: &str) -> Result<(), ClientError> {
-    if identifier.len() > MAX_IDENTIFIER_ENCODED_LENGTH {
+    if identifier.len() > MAXIMUM_ENCODED_LENGTH {
         return Err(invalid_identifier_size());
     }
     Ok(())
 }
 
-fn maximum_size_valid(fod_id: &FodId) -> bool {
-    fod_id.has_valid_length()
-}
-
 fn checked_identifier<I: DidInput + ?Sized>(fod_id: &I) -> Result<String, ClientError> {
     let identifier = fod_id.to_url_safe()?;
-    // DidInput is public and third-party implementations need not use one of
-    // the checked implementations below. The request boundary is therefore
-    // authoritative.
+    // DidInput is public and a third-party implementation need not go through
+    // one of the implementations below. The request boundary is therefore the
+    // one place the guard has to be applied.
     validate_encoded_identifier(&identifier)?;
     Ok(identifier)
 }
 
 impl DidInput for FodId {
     fn to_url_safe(&self) -> Result<String, ClientError> {
-        if !maximum_size_valid(self) {
-            return Err(invalid_identifier_size());
-        }
-        let identifier = self.as_base64_url()?;
-        validate_encoded_identifier(&identifier)?;
-        Ok(identifier)
+        Ok(self.as_base64_url()?)
     }
 }
 
 impl DidInput for str {
     fn to_url_safe(&self) -> Result<String, ClientError> {
-        validate_encoded_identifier(self)?;
+        // Surrounding whitespace goes before the value is measured or its
+        // alphabet converted, because the padding the URL-safe form leaves
+        // out is worked out from the length.
         let identifier = self.trim();
         validate_encoded_identifier(identifier)?;
-        let identifier = to_base64_url(identifier);
-        validate_encoded_identifier(&identifier)?;
-        Ok(identifier)
+        Ok(to_base64_url(identifier))
     }
 }
 
@@ -826,13 +822,8 @@ impl DidClient {
     ///
     /// # Errors
     ///
-    /// As [`public_keys`](DidClient::public_keys), or
-    /// [`ClientError::InvalidIdentifier`] when the value is larger than a
-    /// 51Did accepted by this client.
+    /// As [`public_keys`](DidClient::public_keys).
     pub fn public_key_for(&self, fod_id: &FodId) -> Result<Option<SigningKey>, ClientError> {
-        if !maximum_size_valid(fod_id) {
-            return Err(invalid_identifier_size());
-        }
         let keys = self.keys_covering(fod_id.date)?;
         Ok(in_force_at(&keys, fod_id.date).cloned())
     }
@@ -898,10 +889,11 @@ impl DidClient {
     /// signing key for its date, checked here without a call per identifier.
     /// The key list is fetched on first use and cached.
     ///
-    /// The envelope must be version 3, fit within the size accepted for a
-    /// 51Did, and have at least the base payload length for its type (the
-    /// header plus a 32-byte match key, or 16 for a random identifier). The
-    /// key in force at the
+    /// The envelope must be version 3 and the payload at least the base
+    /// length for its type (the header plus a 32-byte match key, or 16 for a
+    /// random identifier). Any longer payload is accepted, because an
+    /// identifier carrying a creator context is longer than the base and the
+    /// signature covers the whole payload. The key in force at the
     /// identifier's date is tried first, then a neighbouring key where the
     /// date sits within a small tolerance of a boundary, and never every
     /// earlier key. `false` when no held key covers the date, which
@@ -926,7 +918,7 @@ impl DidClient {
         if fod_id.version != Version::Version3 {
             return Ok(SignatureCheck::Invalid);
         }
-        if !maximum_size_valid(fod_id) || fod_id.payload.len() < base_length(fod_id.id_type()) {
+        if fod_id.payload.len() < base_length(fod_id.id_type()) {
             return Ok(SignatureCheck::Invalid);
         }
         let keys = self.keys_covering(fod_id.date)?;
@@ -962,11 +954,12 @@ impl DidClient {
     ///
     /// # Errors
     ///
-    /// [`ClientError::InvalidIdentifier`] when the identifier is too large
-    /// for a 51Did or the cloud could not parse it, [`ClientError::Transport`]
-    /// when the cloud could not be reached, [`ClientError::Http`] for a
-    /// status other than 200 or a 400 carrying `valid`, and
-    /// [`ClientError::Malformed`] when the answer could not be read.
+    /// [`ClientError::InvalidIdentifier`] when the value is far too long to
+    /// be an identifier at all or the cloud could not parse it,
+    /// [`ClientError::Transport`] when the cloud could not be reached,
+    /// [`ClientError::Http`] for a status other than 200 or a 400 carrying
+    /// `valid`, and [`ClientError::Malformed`] when the answer could not be
+    /// read.
     pub fn verify<I: DidInput + ?Sized>(&self, fod_id: &I) -> Result<bool, ClientError> {
         let identifier = percent_encode(&checked_identifier(fod_id)?);
         let url = format!(
@@ -1012,8 +1005,8 @@ impl DidClient {
     ///
     /// # Errors
     ///
-    /// [`ClientError::InvalidIdentifier`] when the identifier is too large
-    /// for a 51Did or the cloud refused it as malformed (400),
+    /// [`ClientError::InvalidIdentifier`] when the value is far too long to
+    /// be an identifier at all or the cloud refused it as malformed (400),
     /// [`ClientError::NotSupported`] when the host does not offer the creator
     /// context (404), [`ClientError::Http`] for any other status,
     /// [`ClientError::Transport`] when the cloud could not be reached, and

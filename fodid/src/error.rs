@@ -39,19 +39,6 @@ pub enum Error {
         /// The number of payload bytes actually present.
         actual: usize,
     },
-    /// The decoded OWID payload is longer than a 51Did payload can be.
-    PayloadTooLong {
-        /// The maximum number of payload bytes a 51Did may contain.
-        maximum: usize,
-        /// The number of payload bytes actually present.
-        actual: usize,
-    },
-    /// The encoded value, byte buffer, or OWID fields exceed the largest
-    /// possible serialized 51Did envelope.
-    IdentifierTooLong {
-        /// The maximum serialized byte length of a 51Did.
-        maximum: usize,
-    },
 }
 
 impl fmt::Display for Error {
@@ -62,13 +49,6 @@ impl fmt::Display for Error {
                 f,
                 "51Did payload must be at least {expected} bytes; got {actual}"
             ),
-            Error::PayloadTooLong { maximum, actual } => write!(
-                f,
-                "51Did payload must not exceed {maximum} bytes; got {actual}"
-            ),
-            Error::IdentifierTooLong { maximum } => {
-                write!(f, "a 51Did must not exceed {maximum} bytes")
-            }
         }
     }
 }
@@ -78,8 +58,6 @@ impl std::error::Error for Error {
         match self {
             Error::Owid(e) => Some(e),
             Error::PayloadTooShort { .. } => None,
-            Error::PayloadTooLong { .. } => None,
-            Error::IdentifierTooLong { .. } => None,
         }
     }
 }

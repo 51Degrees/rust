@@ -23,7 +23,7 @@
 use std::ops::Deref;
 use std::str::FromStr;
 
-use owid::{Owid, Version};
+use owid::Owid;
 
 use crate::error::{Error, Result};
 
@@ -59,13 +59,6 @@ pub const RANDOM_PAYLOAD_LENGTH: usize = HEADER_LENGTH + GUID_LENGTH;
 /// 51Did payload (header + hash). Random payloads are shorter, see
 /// [`RANDOM_PAYLOAD_LENGTH`].
 pub const PAYLOAD_LENGTH: usize = HASH_OFFSET + HASH_LENGTH;
-
-/// Largest possible byte length of a serialized 51Did envelope, including
-/// its signature. Every constructor enforces this boundary.
-pub const MAXIMUM_BYTE_LENGTH: usize = 136;
-
-const MAXIMUM_PAYLOAD_LENGTH: usize = 56;
-const MAXIMUM_BASE64_LENGTH: usize = ((MAXIMUM_BYTE_LENGTH + 2) / 3) * 4;
 
 /// Unix time of the OWID base date, 2020-01-01T00:00:00Z, from which the
 /// envelope's date is counted in minutes on the wire.
@@ -151,31 +144,29 @@ impl FodId {
     /// and [`as_base64_url`](FodId::as_base64_url) produces the URL-safe
     /// form again.
     ///
+    /// Leading and trailing whitespace is stripped before anything else, so a
+    /// value carrying a trailing newline from a file, a header or a copied
+    /// link reads back to the same envelope as the clean form. The padding
+    /// the URL-safe alphabet leaves out is worked out from the stripped
+    /// length.
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::IdentifierTooLong`] if the encoded or decoded envelope
-    /// cannot fit within [`MAXIMUM_BYTE_LENGTH`], [`Error::Owid`] if the string
-    /// is not a valid OWID envelope, or [`Error::PayloadTooShort`] or
-    /// [`Error::PayloadTooLong`] if its payload length cannot be a 51Did.
+    /// Returns [`Error::Owid`] if the string is not a valid OWID envelope, or
+    /// [`Error::PayloadTooShort`] if the payload is shorter than the minimum
+    /// for its identifier type.
     pub fn from_base64(base64: &str) -> Result<Self> {
-        if base64.len() > MAXIMUM_BASE64_LENGTH {
-            return Err(too_long());
-        }
-        Self::from_owid(Owid::from_base64(&from_base64_url(base64))?)
+        Self::from_owid(Owid::from_base64(&from_base64_url(base64.trim()))?)
     }
 
     /// Parses a 51Did from the raw bytes of an OWID envelope.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::IdentifierTooLong`] if the buffer exceeds
-    /// [`MAXIMUM_BYTE_LENGTH`], [`Error::Owid`] if the bytes are not a valid
-    /// OWID envelope, or [`Error::PayloadTooShort`] or
-    /// [`Error::PayloadTooLong`] if its payload length cannot be a 51Did.
+    /// Returns [`Error::Owid`] if the bytes are not a valid OWID envelope, or
+    /// [`Error::PayloadTooShort`] if the payload is shorter than the minimum
+    /// for its identifier type.
     pub fn from_byte_array(buffer: &[u8]) -> Result<Self> {
-        if buffer.len() > MAXIMUM_BYTE_LENGTH {
-            return Err(too_long());
-        }
         Self::from_owid(Owid::from_byte_array(buffer)?)
     }
 
@@ -185,19 +176,13 @@ impl FodId {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::IdentifierTooLong`] if the envelope would exceed
-    /// [`MAXIMUM_BYTE_LENGTH`], or [`Error::PayloadTooShort`] or
-    /// [`Error::PayloadTooLong`] if the OWID payload length cannot be a 51Did.
+    /// Returns [`Error::PayloadTooShort`] if the OWID payload is shorter than the
+    /// minimum for its identifier type (the [`HEADER_LENGTH`] byte header, plus
+    /// the value length the type requires).
+    ///
+    /// Anything beyond the base is a creator context section, whose exact
+    /// lengths belong to the cloud, so any longer payload is accepted here.
     pub fn from_owid(owid: Owid) -> Result<Self> {
-        if !maximum_envelope_length_valid(&owid) {
-            return Err(too_long());
-        }
-        if owid.payload.len() > MAXIMUM_PAYLOAD_LENGTH {
-            return Err(Error::PayloadTooLong {
-                maximum: MAXIMUM_PAYLOAD_LENGTH,
-                actual: owid.payload.len(),
-            });
-        }
         if owid.payload.len() < HEADER_LENGTH {
             return Err(Error::PayloadTooShort {
                 expected: HEADER_LENGTH,
@@ -299,53 +284,14 @@ impl FodId {
         let minutes = (self.owid.date.timestamp() - OWID_BASE_DATE_UNIX_SECONDS).div_euclid(60);
         u32::try_from(minutes.max(0)).unwrap_or(u32::MAX)
     }
-
-    /// Defensive check used by the cloud client. Constructors are the
-    /// authoritative enforcement point; this also requires a signed envelope.
-    #[cfg(feature = "cloud")]
-    pub(crate) fn has_valid_length(&self) -> bool {
-        maximum_length_valid(&self.owid) && self.owid.signature.len() == owid::SIGNATURE_LENGTH
-    }
-}
-
-fn too_long() -> Error {
-    Error::IdentifierTooLong {
-        maximum: MAXIMUM_BYTE_LENGTH,
-    }
-}
-
-fn maximum_length_valid(owid: &Owid) -> bool {
-    owid.payload.len() <= MAXIMUM_PAYLOAD_LENGTH && maximum_envelope_length_valid(owid)
-}
-
-fn maximum_envelope_length_valid(owid: &Owid) -> bool {
-    owid.domain.len() <= MAXIMUM_BYTE_LENGTH
-        && envelope_length(owid).is_some_and(|length| length <= MAXIMUM_BYTE_LENGTH)
-}
-
-fn envelope_length(owid: &Owid) -> Option<usize> {
-    let date_length = match owid.version {
-        Version::Version1 => 2,
-        Version::Version2 | Version::Version3 => 4,
-        Version::Empty => return Some(1),
-    };
-    [
-        1,
-        owid.domain.len(),
-        1,
-        date_length,
-        4,
-        owid.payload.len(),
-        owid.signature.len(),
-    ]
-    .into_iter()
-    .try_fold(0usize, usize::checked_add)
 }
 
 /// Restores a string in the URL-safe base64 alphabet to the standard alphabet
-/// with padding: `-` becomes `+`, `_` becomes `/`, and `==` or `=` is added
+/// with padding. `-` becomes `+`, `_` becomes `/`, and `==` or `=` is added
 /// when the length modulo 4 is 2 or 3. A value already in the standard
-/// alphabet with padding passes through unchanged.
+/// alphabet with padding passes through unchanged. The caller strips
+/// surrounding whitespace first, because the padding is worked out from the
+/// length.
 pub(crate) fn from_base64_url(value: &str) -> String {
     let mut standard = value.replace('-', "+").replace('_', "/");
     match standard.len() % 4 {

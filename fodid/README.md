@@ -55,18 +55,11 @@ and meaning of the value:
 |      5 |     16 | Value: GUID (Random)                               |
 
 An identifier carrying a creator context is longer than this base, with a
-section after the value that only the issuing cloud can read. On such an
+section after the value that only the issuing cloud can read. The reader
+accepts it as it accepts any payload of at least the base length. On such an
 identifier the LicenseId field holds an encrypted value that only 51Degrees
 can turn back into a licence identifier, so `license_id()` is the field's raw
 value and identifies nothing outside 51Degrees.
-
-The complete serialized envelope of a valid 51Did is at most 136 bytes.
-[`MAXIMUM_BYTE_LENGTH`] exposes that boundary for callers that want to check
-raw input before parsing; every [`FodId`] constructor also enforces it and
-returns [`Error::IdentifierTooLong`] for a longer value. This is a limit on
-the identifier itself, not on an HTTP response that happens to carry one.
-The payload layout is also enforced independently, with
-[`Error::PayloadTooLong`] identifying an oversized payload.
 
 [`FodId`] derefs to the underlying [`owid::Owid`], so a `FodId` value can be
 used directly for all OWID level concerns (domain, date, payload bytes,
