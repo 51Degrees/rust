@@ -78,11 +78,6 @@ pub const USER_AGENT: &str = concat!("fodid/", env!("CARGO_PKG_VERSION"));
 /// How long a fetched key list is answered from before it is fetched again.
 const KEY_LIST_MAX_AGE_HOURS: i64 = 24;
 
-/// How far either side of a key boundary the neighbouring key is also tried,
-/// for the small ways a creation time can land a moment outside the period
-/// whose key made it. Deliberately far smaller than any period the schedule
-/// runs at, so the set of keys that can produce a given moment stays at one
-/// for all but a few minutes around a boundary.
 const BOUNDARY_TOLERANCE_MINUTES: i64 = 15;
 
 /// A guard against obviously malformed input, not a statement of how long a
@@ -357,10 +352,6 @@ fn shift(at: DateTime<Utc>, minutes: i64) -> DateTime<Utc> {
 /// tolerance later (the next key, just before a boundary) where those
 /// differ. Empty when `at` precedes the whole schedule by more than the
 /// tolerance.
-///
-/// This is deliberately not every earlier key. Accepting any earlier key
-/// would mean one leaked period of key material could sign something dated
-/// in any later period, and rotating the key would then bound nothing.
 fn candidates_for_date(keys: &[SigningKey], at: DateTime<Utc>) -> Vec<&SigningKey> {
     let mut candidates: Vec<&SigningKey> = Vec::with_capacity(2);
     let neighbours = [
