@@ -1234,20 +1234,20 @@ mod tests {
         };
         // Mid period: the one key.
         assert_eq!(names("2026-08-06T00:00:00Z"), ["2026-08-03T00:00:00Z"]);
-        // Just after the boundary: in force first, then the previous.
+        // A minute after the boundary: in force first, then the previous.
         assert_eq!(
-            names("2026-08-10T00:05:00Z"),
+            names("2026-08-10T00:01:00Z"),
             ["2026-08-10T00:00:00Z", "2026-08-03T00:00:00Z"]
         );
-        // Just before the boundary: in force first, then the next.
+        // A minute before the boundary: in force first, then the next.
         assert_eq!(
-            names("2026-08-09T23:50:00Z"),
+            names("2026-08-09T23:59:00Z"),
             ["2026-08-03T00:00:00Z", "2026-08-10T00:00:00Z"]
         );
         // Before the schedule by more than the tolerance: nothing.
         assert!(names("2026-08-02T00:00:00Z").is_empty());
         // Before the schedule by less than the tolerance: the first key.
-        assert_eq!(names("2026-08-02T23:50:00Z"), ["2026-08-03T00:00:00Z"]);
+        assert_eq!(names("2026-08-02T23:59:00Z"), ["2026-08-03T00:00:00Z"]);
     }
 
     #[test]

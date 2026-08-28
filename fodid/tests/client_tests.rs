@@ -462,15 +462,17 @@ fn public_key_for_is_the_key_in_force_at_the_date() {
 
 #[test]
 fn earlier_neighbour_is_tried_within_the_tolerance_after_a_boundary() {
-    // Signed by week 2's key but stamped five minutes into week 3.
+    // Signed by week 2's key but stamped one minute into week 3, which is
+    // well inside the allowance either side of a boundary.
     let harness = Harness::new();
-    let fod_id = harness.week_2.sign_at("2026-08-17T00:05:00Z");
+    let fod_id = harness.week_2.sign_at("2026-08-17T00:01:00Z");
     assert_eq!(
         harness.client.verify_signature_detailed(&fod_id).unwrap(),
         SignatureCheck::Verified
     );
-    // Twenty minutes in is outside the tolerance.
-    let fod_id = harness.week_2.sign_at("2026-08-17T00:20:00Z");
+    // A full hour in is well outside the allowance, so week 2's key is no
+    // longer tried and the signature does not verify.
+    let fod_id = harness.week_2.sign_at("2026-08-17T01:00:00Z");
     assert_eq!(
         harness.client.verify_signature_detailed(&fod_id).unwrap(),
         SignatureCheck::Invalid
@@ -479,14 +481,17 @@ fn earlier_neighbour_is_tried_within_the_tolerance_after_a_boundary() {
 
 #[test]
 fn later_neighbour_is_tried_within_the_tolerance_before_a_boundary() {
-    // Signed by week 3's key but stamped five minutes before week 3.
+    // Signed by week 3's key but stamped one minute before week 3, which is
+    // well inside the allowance either side of a boundary.
     let harness = Harness::new();
-    let fod_id = harness.week_3.sign_at("2026-08-16T23:55:00Z");
+    let fod_id = harness.week_3.sign_at("2026-08-16T23:59:00Z");
     assert_eq!(
         harness.client.verify_signature_detailed(&fod_id).unwrap(),
         SignatureCheck::Verified
     );
-    let fod_id = harness.week_3.sign_at("2026-08-16T23:40:00Z");
+    // A full hour before is well outside the allowance, so week 3's key is
+    // not tried yet and the signature does not verify.
+    let fod_id = harness.week_3.sign_at("2026-08-16T23:00:00Z");
     assert_eq!(
         harness.client.verify_signature_detailed(&fod_id).unwrap(),
         SignatureCheck::Invalid
