@@ -79,16 +79,18 @@ use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use examples_web_shared::{serve_css, ASSETS_CSS_ROUTE};
+use examples_web_shared::serve_css;
 use fodid::client::{ClientError, DidClient, RedeemResult};
 use fodid::FodId;
 use serde::Deserialize;
 
-/// The demo page, embedded so the binary is self-contained. It is the page every
-/// 51Degrees language example serves for this demo, differing only in where it
-/// loads its stylesheet from, which here is the shared example asset route
-/// rather than a copy vendored beside the page.
+/// The demo page, embedded so the binary is self-contained. It is byte for byte
+/// the page every 51Degrees language example serves for this demo. Its relative
+/// stylesheet URL is served from the shared Rust example asset.
 const PAGE: &str = include_str!("../../assets/page.html");
+
+/// The route the demo page's relative stylesheet URL resolves to.
+const PAGE_CSS_ROUTE: &str = "/examples-main.min.css";
 
 /// The environment variable holding the optional licence key.
 const LICENCE_KEY_ENV_VAR: &str = "51DEGREES_LICENSE_KEY";
@@ -120,7 +122,7 @@ struct Demo {
 pub fn build_app(client: DidClient) -> Router {
     Router::new()
         .route("/", get(home))
-        .route(ASSETS_CSS_ROUTE, get(serve_css))
+        .route(PAGE_CSS_ROUTE, get(serve_css))
         .route("/redeem", get(redeem))
         .with_state(Demo {
             client: Arc::new(client),
@@ -509,7 +511,7 @@ mod tests {
         }
         assert!(page.contains("var API = \"http://cloud.example/api/v4/\""));
         assert!(page.contains("var RESOURCE = \"resource-key-placeholder\""));
-        assert!(page.contains("href=\"/static/examples-main.min.css\""));
+        assert!(page.contains("href=\"examples-main.min.css\""));
 
         // 16 random bytes as 32 lowercase hex characters, different each load.
         let first = challenge_of(&page);
@@ -623,10 +625,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stylesheet_is_served_from_the_shared_route() {
+    async fn page_stylesheet_is_served() {
         let (_, crypto) = signed_51did();
         let app = app_with_redeem(&crypto, 200, "");
-        let css = get(&app, ASSETS_CSS_ROUTE).await;
+        let css = get(&app, PAGE_CSS_ROUTE).await;
         assert_eq!(css.status(), StatusCode::OK);
         assert_eq!(
             css.headers().get(header::CONTENT_TYPE),
@@ -670,8 +672,8 @@ mod tests {
  *
  * The page is written to the shared 51Degrees example design system. It
  * references the vendored `examples-main.min.css`, embedded in the
- * `examples-web-shared` crate and served from `/static/`, and uses the
- * `.c-eg-*` class contract.
+ * `examples-web-shared` crate and served at the page's relative URL. It uses
+ * the `.c-eg-*` class contract.
  *
  * Build a resource key at https://configure.51degrees.com?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-fodid-examples-src-bin-fodid-web-creator-context.rs&utm_term=fodid-web-creator-context and export it as
  * `51DEGREES_RESOURCE_KEY`, then run the binary and open http://localhost:5100/.

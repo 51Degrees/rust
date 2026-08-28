@@ -150,9 +150,9 @@ presents the same context and may still verify.
 ### The stylesheet
 
 The page is styled with the shared 51Degrees example design system and holds
-no styles of its own. Unlike the other language versions of this demo, which
-vendor `examples-main.min.css` beside the page, this one loads the stylesheet
-from `/static/examples-main.min.css`, served by the `examples-web-shared`
-crate from the single copy every Rust web example shares. That copy is
+no styles of its own. The page stays byte for byte identical to the other
+language versions and loads `examples-main.min.css` through a relative URL.
+The server answers that URL with the copy embedded by the
+`examples-web-shared` crate, which every Rust web example shares. That copy is
 refreshed by the weekly example assets update workflow, so the demo does not
 drift from the design system.
