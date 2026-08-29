@@ -104,9 +104,9 @@
 //!
 //! ## Verifying on your server (the `cloud` feature)
 //!
-//! The `cloud` feature adds the [`client`] module and its
-//! [`DidClient`](client::DidClient), which handles every manipulation of a
-//! 51Did a server needs beyond reading it: fetching the signing public keys
+//! The `cloud` feature adds the `client` module and its `DidClient`, which
+//! handles every manipulation of a 51Did a server needs beyond reading it,
+//! being fetching the signing public keys
 //! and picking the one in force when an identifier was created, verifying a
 //! signature offline against that key, verifying through the cloud's verify
 //! endpoint, and redeeming a sealed creator context result with the licence
