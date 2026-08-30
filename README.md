@@ -277,18 +277,20 @@ automation. Its `Contract` category drives headless Chrome against a running
 example and checks that the page serves `51Degrees.core.js`, that client-side
 evidence flows back, and that the server renders a real detection result.
 
-CI runs it through `ci/run-integration-tests.ps1` (the org-standard script
-name every SDK repo uses), called from the Examples workflow: the script
-launches `dd-web-getting-started-cloud` against the local source tree,
-shallow-clones the suite as a sibling directory (it is deliberately not a
-submodule) and points it at the example with `EXAMPLE_URL`.
+CI does not run it here. The browser contract for this SDK runs in the
+[cloud](https://github.com/51Degrees/cloud) repository, in the language matrix
+alongside the .NET, Java, Node, Python and PHP examples, against the container
+that run builds. It used to run here against the public cloud, which made this
+the only SDK testing production data rather than the code under review.
 
-To run it locally, check out `selenium-api-tests` as a sibling of this repo
-and let the suite launch the example itself through its `rust` descriptor:
+To run it locally, check out `selenium-api-tests` as a sibling of this repo and
+let the suite launch the example itself through its `rust` descriptor. Point
+`CLOUD_ROOT_URL` at a cloud container rather than the public service, so the
+result reflects the code and data you are testing:
 
 ```sh
 cd ../selenium-api-tests
-export CLOUD_ROOT_URL="https://cloud.51degrees.com/"
+export CLOUD_ROOT_URL="http://localhost:8080/"   # a running cloud container
 export PAID_RESOURCE_KEY="<your resource key>"
 export EXAMPLE_LANG="rust"
 dotnet test --filter TestCategory=Contract
