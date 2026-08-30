@@ -30,27 +30,8 @@ jobs:
       # Data-file and resource-key gated tests skip cleanly when those are
       # absent, so this validates the build and the offline tests.
       - run: cargo test --config source.toml
-      # Browser contract check via the shared 51Degrees selenium-api-tests
-      # suite (the same pattern every SDK repo uses, via the org-standard
-      # ci/run-integration-tests.ps1 script name). The script launches the
-      # cloud web example from the local source tree, shallow-clones the suite
-      # as a sibling (deliberately not a submodule) and runs its Contract
-      # category with headless Chrome. Skips with a warning when no resource
-      # key secret is available, for example on a fork PR. Linux only: one
-      # platform suffices for a browser contract and the suite drives Chrome
-      # through Selenium Manager, which the ubuntu image supports out of the
-      # box.
-      # The suite targets net10.0 (SeleniumApiTests.csproj), which the runner
-      # image is not guaranteed to carry.
-      - name: Install .NET SDK
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-      - name: Selenium contract tests
-        if: matrix.os == 'ubuntu-latest'
-        working-directory: .
-        shell: pwsh
-        env:
-          RESOURCE_KEY: ${{ secrets._51DEGREES_RESOURCE_KEY_PAID || secrets._51DEGREES_RESOURCE_KEY_FREE }}
-        run: ./ci/run-integration-tests.ps1 -TestResourceKey $env:RESOURCE_KEY
+      # The browser contract for this SDK runs in the cloud repository, in its
+      # language matrix, against the container that run builds. It used to run
+      # here against cloud.51degrees.com, which made this the only SDK testing
+      # production data rather than the code under review, and left it red for
+      # a fault in production that nothing here could fix.

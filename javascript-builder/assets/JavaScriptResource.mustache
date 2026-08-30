@@ -1,9 +1,11 @@
 fiftyoneDegreesManager = function() {
-    'use-strict';
+    'use strict';
     var json = {{&_jsonObject}};
     var parameters = {{&_parameters}};
     var sessionId = "{{&_sessionId}}";
-    var sessionKey = "{{_objName}}_" + sessionId;
+    // The session id is deliberately not part of the key: it changes on
+    // every request, and session storage is already scoped to one tab.
+    var sessionKey = "{{_objName}}";
     this.sessionId = sessionId;
     var sequence = {{&_sequence}};
 
@@ -36,6 +38,12 @@ fiftyoneDegreesManager = function() {
     // Array of JavaScript properties that have started evaluation.
     var jsPropertiesStarted = [];
 
+    // Properties whose snippets have run but whose evidence has not yet reached
+    // the server. They are flagged in session storage only once the response
+    // they feed is cached, so a flag can never be present without the payload
+    // it belongs to.
+    var jsPropertiesPending = [];
+
     // startsWith polyfill.
     var startsWith = function(source, searchValue) {
         return source.lastIndexOf(searchValue, 0) === 0;
@@ -48,34 +56,105 @@ fiftyoneDegreesManager = function() {
 
     var clearCache = function() {
         if (sessionStorage) {
-            for (i = 0; i < sessionStorage.length; i++) {
-                key = sessionStorage.key(i);
-                if (startsWith(key, sessionKey)) {
+            // Iterate backwards: removeItem shifts every later key down one
+            // index, so a forward loop skips whichever key moves into the slot
+            // just vacated.
+            for (var i = sessionStorage.length - 1; i >= 0; i--) {
+                var key = sessionStorage.key(i);
+                // Match the exact key or the key plus a separator. Without the
+                // session id the prefix is short enough that a bare startsWith
+                // would also match an unrelated key on the same origin.
+                if (key === sessionKey || startsWith(key, sessionKey + "_")) {
                     sessionStorage.removeItem(key);
                 }
             }
         }
     }
 
-    var loadParameters = function() {
-        if (sessionStorage) {
-            var parametersString = sessionStorage.getItem(sessionKey + "_parameters");
-            if (parametersString) {
-                parameters = JSON.parse(parametersString);
-            }
+    // Read the cached payload, or null when there is none or it cannot be used.
+    // An entry that does not parse into an object is cleared here rather than
+    // ignored: this runs before the '_property_' flags are read, so a bad entry
+    // makes this page view execute the snippets again instead of completing
+    // with neither the cached values nor a request.
+    var getCachedJson = function() {
+        if (!sessionStorage) {
+            return null;
         }
-        return parameters;
+        var cachedResponse = sessionStorage.getItem(sessionKey);
+        if (!cachedResponse) {
+            return null;
+        }
+        var cachedJson = null;
+        try {
+            cachedJson = JSON.parse(cachedResponse);
+        } catch (err) {
+            // Handled by the check below, which also covers a payload that
+            // parses to null or to a value that is not an object.
+        }
+        if (typeof cachedJson !== 'object' || cachedJson === null) {
+            clearCache();
+            return null;
+        }
+        return cachedJson;
     }
 
-    var saveParameters = function(sourceParams) {
-        if (sourceParams) {
-            parameters = sourceParams
-        }
+    // Suffix the server appends to a property name to carry the reason that
+    // property has no value.
+    var nullReasonSuffix = 'nullreason';
 
-        if (sessionStorage) {
-            var parametersString = JSON.stringify(parameters);
-            sessionStorage.setItem(sessionKey + "_parameters", parametersString);
-        }
+    // Cached values take precedence over the payload rendered for this page
+    // view. The cached payload is the response to a request that carried the
+    // JavaScript evidence, whereas the payload rendered into this page view was
+    // answered from headers alone, so the cached value is the better-informed
+    // one. Leaving the rendered value in place would discard exactly what the
+    // cache exists to preserve: a property the server can answer from headers
+    // is not null, so its ambiguous answer would survive - on an iPhone
+    // 'hardwarename' is the whole candidate list rather than the resolved model.
+    var mergeCached = function(cachedJson) {
+        Object.getOwnPropertyNames(cachedJson).forEach(function(group) {
+            var cachedGroup = cachedJson[group];
+            // Only aspect objects carry cached values. The arrays at this level
+            // (javascriptProperties, errors, warnings) describe the request that
+            // produced them, so taking them from an earlier page view would
+            // resurrect a stale error or a snippet list the server no longer
+            // sends.
+            if (typeof cachedGroup !== 'object' ||
+                cachedGroup === null ||
+                Array.isArray(cachedGroup)) {
+                return;
+            }
+            var freshGroup = json[group];
+            if (freshGroup === undefined || freshGroup === null) {
+                json[group] = cachedGroup;
+                return;
+            }
+            // Anything the server has just supplied as a non-object wins, and
+            // is not something values can be merged into.
+            if (typeof freshGroup !== 'object' || Array.isArray(freshGroup)) {
+                return;
+            }
+            for (var name in cachedGroup) {
+                // Reasons are carried with the value they describe, below, so
+                // that a cached reason is never left next to a value it did not
+                // arrive with.
+                if (endsWith(name, nullReasonSuffix)) {
+                    continue;
+                }
+                // A cached null says only that the earlier response could not
+                // answer either, so it is not worth losing the fresh value for.
+                if (cachedGroup[name] === null || cachedGroup[name] === undefined) {
+                    continue;
+                }
+                freshGroup[name] = cachedGroup[name];
+                var reasonName = name + nullReasonSuffix;
+                if (cachedGroup[reasonName] === undefined) {
+                    delete freshGroup[reasonName];
+                } else {
+                    freshGroup[reasonName] = cachedGroup[reasonName];
+                }
+            }
+        });
+        return json;
     }
 
     // Get stored values with the '51D_' prefix that have been added to the request
@@ -183,10 +262,13 @@ fiftyoneDegreesManager = function() {
     // the JavaScript property is added to session storage. The complete flag is
     // set to true when there is no further JavaScript to be processed.
     var processJsProperties = function(resolve, reject, jsProperties, ignoreDelayFlag) {
-        var executeCallback = true;
         var started = 0;
-        var cached = 0;
-        var toProcess = 0;
+        var cachedJson = getCachedJson();
+
+        // Held for the duration of the loop so that a snippet which invokes its
+        // callback synchronously cannot take the counter to zero, and dispatch a
+        // request, while snippets later in the list have not been run yet.
+        callbackCounter++;
 
         // If there is no cached response and there are JavaScript code snippets
         // then process them and perform any call-backs required.
@@ -208,16 +290,16 @@ fiftyoneDegreesManager = function() {
                 }
                 var body = getFromJson(name);
 
-                // If there is a body then this property should be processed.
-                if (body) {
-                    toProcess++;
-                }
-
-                var isCached = sessionStorage && sessionStorage.getItem(sessionKey + "_property_" + name);
+                var isCached = cachedJson &&
+                    sessionStorage.getItem(sessionKey + "_property_" + name);
 
                 // If the property has already been processed then skip it.
                 if (isCached) {
-                    cached++;
+                    // Record it as started so that hasJSFunctions agrees this
+                    // snippet will not run in this page view. If it disagreed,
+                    // loadParsedJSON would hand back to a call to process that
+                    // does nothing and returns to loadParsedJSON again.
+                    jsPropertiesStarted.push(name);
                     continue;
                 }
 
@@ -254,7 +336,6 @@ fiftyoneDegreesManager = function() {
                             "}"
                         );
                         func(completedCallback, resolve, reject);
-                        executeCallback = false;
                     } else {
                         func = new Function(
                             "try {\n" +
@@ -266,9 +347,12 @@ fiftyoneDegreesManager = function() {
                         func();
                     }
 
-                    if (sessionStorage) {
-                        sessionStorage.setItem(sessionKey + "_property_" + name, true)
-                    }
+                    // Held until the response this snippet feeds is cached.
+                    // Flagging it here instead would leave the flag behind when
+                    // the page is left before the request completes, and an
+                    // older cached payload would then validate it. Within this
+                    // page view jsPropertiesStarted already stops it re-running.
+                    jsPropertiesPending.push(name);
 
                     // If the property is `javascripthardwareprofile` then check if the
                     // profile has been set. If not then remove current property from
@@ -277,35 +361,45 @@ fiftyoneDegreesManager = function() {
                     if (name === "device.javascripthardwareprofile") {
                         var hrw = getFodSavedValues();
                         if (hrw && !hrw["51D_ProfileIds"]) {
-                            // find and remove name from jsPropertiesStarted
-                            var propIndex = jsPropertiesStarted.indexOf(name);
-                            if (propIndex > -1) {
-                                jsPropertiesStarted.splice(index, 1);
+                            // The snippet produced no profile, so it must not be
+                            // flagged when the response is cached. With the key
+                            // stable a flag would otherwise mark the property as
+                            // done for the rest of the tab session and it would
+                            // never be attempted again. The name stays in
+                            // jsPropertiesStarted so that only the next page
+                            // view retries it, not this one.
+                            var pendingIndex = jsPropertiesPending.indexOf(name);
+                            if (pendingIndex > -1) {
+                                jsPropertiesPending.splice(pendingIndex, 1);
                             }
                             started--;
-                            toProcess--;
                         }
                     }
                 }
             }
         }
 
-        if ((cached === toProcess || started === 0) && sessionStorage)  {
-            var cachedResponse = sessionStorage.getItem(sessionKey);
-            if (cachedResponse) {
-                loadJSON(resolve, reject, cachedResponse);
-                executeCallback = false;
-            }
-        }
-
         if (started === 0) {
-            executeCallback = false;
+            // Nothing started, so nothing in the loop incremented the counter.
+            // Release the hold without dispatching a request. This must stay
+            // ahead of loadParsedJSON, which can re-enter this function through
+            // process(): if the outer hold were still counted the nested round
+            // could never reach zero and would never dispatch.
+            callbackCounter--;
+
+            // A snippet that has run has evidence the cached payload cannot
+            // account for, which is why completing from the cache is confined
+            // to this branch: doing it after a snippet started would suppress
+            // the request that carries that evidence.
+            if (cachedJson) {
+                loadParsedJSON(resolve, reject, mergeCached(cachedJson));
+            }
+
             failed = false;
             completed = true;
-        }
-
-        if (executeCallback) {
-            callbackCounter = 1;
+        } else {
+            // Release the hold. If every snippet that started has already called
+            // back this dispatches now; otherwise the last callback to arrive does.
             completedCallback(resolve, reject);
         }
     };
@@ -343,13 +437,27 @@ fiftyoneDegreesManager = function() {
 {{/_supportsFetch}}
 {{/_updateEnabled}}
 
-    // Check if the JSON object still has any JavaScript snippets to run.
+    // Check if the JSON object still has any JavaScript snippets to run. The
+    // conditions here must match the ones processJsProperties runs a snippet
+    // under: if this says yes and processJsProperties then does nothing,
+    // loadParsedJSON calls process and is called back into forever.
     var hasJSFunctions = function() {
-        for (var i = i; i < json.javascriptProperties; i++) {
-            var body = getFromJson(json.javascriptProperties[i]);
-            if (body !== undefined && body.length > 0) {
+        var jsProperties = json.javascriptProperties;
+        if (jsProperties === undefined || jsProperties === null) {
+            return false;
+        }
+        for (var i = 0; i < jsProperties.length; i++) {
+            var name = jsProperties[i];
+            if (jsPropertiesStarted.indexOf(name) !== -1) {
+                continue;
+            }
+            if (getFromJson(name + 'delayexecution', false, true) === true) {
+                continue;
+            }
+            var body = getFromJson(name);
+            if (typeof body === "string" && body.length > 0) {
                 return true;
-                }
+            }
         }
         return false;
     }
@@ -368,16 +476,12 @@ fiftyoneDegreesManager = function() {
         }
     }
 
-{{#_updateEnabled}}
-    // Process the response as json and call the resolve method.
-    var loadJSON = function(resolve, reject, responseText) {
-        try {
-            json = JSON.parse(responseText);
-        } catch(err) {
-            clearCache();
-            reject(new Error("Invalid JSON - the endpoint is likely setup incorrectly", { cause: err }));
-            return;
-        }
+    // Continues with an already parsed payload. Defined outside the update
+    // section because the cached branch of processJsProperties calls it, and
+    // with the key no longer carrying the session id a payload cached by an
+    // update-enabled render can still be present when this one is rendered.
+    var loadParsedJSON = function(resolve, reject, newJson) {
+        json = newJson;
 
         if (hasJSFunctions()) {
             // json updated so fire 'on change' functions
@@ -396,6 +500,20 @@ fiftyoneDegreesManager = function() {
         }
     }
 
+{{#_updateEnabled}}
+    // Process the response as json and call the resolve method.
+    var loadJSON = function(resolve, reject, responseText) {
+        var newJson;
+        try {
+            newJson = JSON.parse(responseText);
+        } catch(err) {
+            clearCache();
+            reject(new Error("Invalid JSON - the endpoint is likely setup incorrectly", { cause: err }));
+            return;
+        }
+        loadParsedJSON(resolve, reject, newJson);
+    }
+
     // Sends a POST request to the call-back URL to retrieve and updated
     // JSON payload from the cloud service. A POST request is used so that
     // parameters can be passed in the request body, this is to get around
@@ -410,7 +528,11 @@ fiftyoneDegreesManager = function() {
     // returned with a success status code. If there was a problem then the
     // session storage items are invalidated and reject is called.
     var processRequest = function(resolve, reject){
-        loadParameters();
+        // parameters is rendered from this page view's own query evidence, so
+        // it is already what the refresh should report and nothing from an
+        // earlier page view belongs in it. The values the snippets produce are
+        // the one thing that does carry over, and they come from their own
+        // storage below rather than from a stored copy of this object.
 
         // Get additional parameters in case they are not sent
         // by the browser.
@@ -420,12 +542,21 @@ fiftyoneDegreesManager = function() {
             parameters[parts[0]] = parts[1];
         }
 
-        saveParameters();
-
         var params = [];
         for (var param in parameters) {
             if (parameters.hasOwnProperty(param)) {
                 params.push(param+"="+parameters[param])
+            }
+        }
+
+        // Additional evidence provided by the page. Sent in the request
+        // body only and never stored.
+        var pageEvidence = window["{{_objName}}Evidence"];
+        if (pageEvidence && typeof pageEvidence === "object") {
+            for (var evidenceKey in pageEvidence) {
+                if (Object.prototype.hasOwnProperty.call(pageEvidence, evidenceKey)) {
+                    params.push(encodeURIComponent(evidenceKey) + "=" + encodeURIComponent(pageEvidence[evidenceKey]));
+                }
             }
         }
 
@@ -452,6 +583,9 @@ fiftyoneDegreesManager = function() {
             body: postBody
         })
         .then(response => {
+            if (!response.ok) {
+                throw new Error('Request failed with status ' + response.status);
+            }
             return response.text();
         })
         .then(responseText => {
@@ -473,14 +607,30 @@ fiftyoneDegreesManager = function() {
 
         xhr.onload = function () {
 
+            // An error status still reaches onload, and error details come back
+            // as a JSON body, so they must not be treated as data or cached.
+            if (xhr.status < 200 || xhr.status > 299) {
+                clearCache();
+                reject(new Error('Request failed with status ' + xhr.status));
+                return;
+            }
+
             // Get the response body from the request.
             var responseText = xhr.responseText;
 
 {{/_supportsFetch}}
-            // Cache the response text.
+            // Cache the response text, and flag the snippets it accounts for at
+            // the same moment, so that the two cannot disagree. Cleared before
+            // loadJSON, which can re-enter processJsProperties and queue names
+            // for the next request.
             if (sessionStorage) {
                 sessionStorage.setItem(sessionKey, responseText);
+                for (var pending = 0; pending < jsPropertiesPending.length; pending++) {
+                    sessionStorage.setItem(
+                        sessionKey + "_property_" + jsPropertiesPending[pending], true);
+                }
             }
+            jsPropertiesPending = [];
             // Load the JSON object from the response text
             loadJSON(resolve, reject, responseText);
             // Increment the sequence on a successful request
@@ -581,7 +731,7 @@ fiftyoneDegreesManager = function() {
     // Get all values in any 'evidenceproperty' fields on this object
     // or sub-objects.
     var getEvidencePropertiesFromObject = function (dataObject) {
-        evidenceProperties = [];
+        var evidenceProperties = [];
 
         for (var prop in dataObject) {
             if (dataObject.hasOwnProperty(prop)) {
@@ -620,6 +770,15 @@ fiftyoneDegreesManager = function() {
 
 	this.onChange = function(resolve) {
 		changeFuncs.push(resolve);
+		// A page view served from the session storage cache finishes inside
+		// the constructor, before page code can get here, so a handler
+		// registered afterwards would never hear about a change that has
+		// already happened. Catching it up is what 'complete' already does.
+		if ((completed || failed) &&
+			typeof resolve === 'function' &&
+			resolve.length === 1) {
+			resolve(json);
+		}
 	}
 
     this.complete = function(resolve, properties) {
