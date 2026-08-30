@@ -102,6 +102,57 @@ try {
             $case.Name, $body.Length, $listed, `
             $(if ($runnable.Count) { $runnable -join ',' } else { 'NONE' }))
     }
+    # Second half of the diagnostic: drive the real browser through a
+    # proxy that keeps what it served, so the include the browser
+    # received can be counted rather than inferred from curl.
+    Write-Host "  ----- browser leg -----"
+    $includeFile = Join-Path (Get-Location) "diag-include.js"
+    # The proxy reports and exits after this long, which has to outlast
+    # the browser run below.
+    $env:DIAG_WAIT_MS = 30000
+    $proxy = Start-Process -FilePath "node" `
+        -ArgumentList @("ci/diag-browser.js", "$env:PORT", "8099", "$includeFile") `
+        -NoNewWindow -PassThru -RedirectStandardOutput "diag-proxy.log" `
+        -RedirectStandardError "diag-proxy.err"
+    Start-Sleep -Seconds 2
+
+    $chrome = (Get-Command google-chrome -ErrorAction SilentlyContinue).Source
+    if ($chrome) {
+        $dom = & $chrome --headless=new --disable-gpu --no-sandbox `
+            --virtual-time-budget=15000 `
+            --user-data-dir="$(Join-Path (Get-Location) 'diag-chrome')" `
+            --dump-dom "http://localhost:8099/page1" 2>$null
+        $domText = $dom -join "`n"
+        if ($domText -match 'data-state="([a-z-]+)"') {
+            Write-Host "  page state: $($Matches[1])"
+        }
+        if ($domText -match '<td id="deviceid">([^<]*)</td>') {
+            Write-Host "  device id rendered: '$($Matches[1])'"
+        }
+    } else {
+        Write-Host "  google-chrome not found, browser leg skipped"
+    }
+
+    # Let the proxy reach its reporting timeout, then show what it saw.
+    $proxy.WaitForExit(40000) | Out-Null
+    Get-Content "diag-proxy.log" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+
+    if (Test-Path $includeFile) {
+        $served = Get-Content $includeFile -Raw
+        $runnable = @()
+        foreach ($name in @('javascriptgethighentropyvalues',
+                            'javascripthardwareprofile',
+                            'screenpixelswidthjavascript',
+                            'screenpixelsheightjavascript')) {
+            if ($served -match ($name + '":\s*"')) { $runnable += $name }
+        }
+        Write-Host ("  include as delivered to the browser: bytes={0} runnable={1}" -f `
+            $served.Length,
+            $(if ($runnable.Count) { $runnable -join ',' } else { 'NONE' }))
+    } else {
+        Write-Host "  the browser never fetched the include"
+    }
+
     Write-Host "===== end diagnostic ====="
 
     $env:CLOUD_ROOT_URL = "https://cloud.51degrees.com/"
