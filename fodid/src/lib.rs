@@ -66,10 +66,19 @@
 //! |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
 //! |      5 |     16 | Value: GUID (Random)                               |
 //!
+//! An identifier carrying a creator context is longer than this base, with a
+//! section after the value that only the issuing cloud can read. The reader
+//! accepts it as it accepts any payload of at least the base length.
+//!
 //! [`FodId`] [`Deref`](std::ops::Deref)s to the underlying [`owid::Owid`], so
 //! a `FodId` can be used directly for all OWID level concerns (domain, date,
 //! payload bytes, signature, base64 round tripping and signature
 //! verification) and adds typed accessors for the payload fields on top.
+//!
+//! [`FodId::from_base64`] reads either base64 alphabet, the standard one the
+//! cloud issues and the URL-safe one a page uses in a link, and
+//! [`FodId::as_base64_url`] produces the URL-safe form for a URL.
+//! [`FodId::date_minutes`] is the envelope date as the wire format stores it.
 //!
 //! ## Example
 //!
@@ -93,17 +102,31 @@
 //! # }
 //! ```
 //!
+//! ## Verifying on your server (the `cloud` feature)
+//!
+//! The `cloud` feature adds the `client` module and its `DidClient`, which
+//! handles every manipulation of a 51Did a server needs beyond reading it,
+//! being fetching the signing public keys
+//! and picking the one in force when an identifier was created, verifying a
+//! signature offline against that key, verifying through the cloud's verify
+//! endpoint, and redeeming a sealed creator context result with the licence
+//! key. Creating a 51Did is not part of it, and the `verify-context` and
+//! `verify-full` endpoints are browser calls because the context describes
+//! the browser's own connection.
+//!
 //! ## Non goals
 //!
 //! - **Signature verification on construction.** Building a [`FodId`] does not
 //!   check the signature. Call [`verify_with_public_key`](owid::Owid::verify_with_public_key)
 //!   (inherited from [`owid::Owid`] through [`Deref`](std::ops::Deref)) when
-//!   needed.
+//!   needed, or let the client pick the key when the `cloud` feature is on.
 //! - **Construction of new 51Dids.** This is a reader. New 51Dids are issued
 //!   by the 51Degrees cloud, which alone holds the signing key.
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "cloud")]
+pub mod client;
 mod error;
 mod fodid;
 

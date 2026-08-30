@@ -23,6 +23,7 @@
 //! Behavioral tests for the 51Did reader, covering parsing, construction and
 //! the guard paths.
 
+use chrono::{DateTime, Utc};
 use fodid::{Error, FodId, IdType};
 use owid::{Creator, Crypto, Owid};
 
@@ -300,6 +301,55 @@ fn constructor_payload_larger_than_spec_uses_first_37_bytes() {
 }
 
 #[test]
+fn constructor_accepts_a_long_creator_domain_and_a_long_context_section() {
+    // The creator domain is a deployment parameter, so a self-hosted service
+    // may sign with a longer one, and a later version of the creator context
+    // may add to the section after the value. Both must still read back.
+    let mut payload = vec![0xCCu8; 200];
+    payload[..fodid::PAYLOAD_LENGTH].copy_from_slice(&canonical_payload());
+    let domain = format!("{}.example.com", "a".repeat(120));
+    let creator = Creator::new(&domain, Crypto::new()).expect("create creator");
+    let owid = creator.sign_bytes(payload).expect("sign payload");
+
+    let fod_id = FodId::from_base64(&owid.as_base64().unwrap()).unwrap();
+
+    assert_eq!(domain, fod_id.domain);
+    assert_eq!(CANONICAL_FLAGS, fod_id.flags());
+    assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id());
+    assert_eq!(&canonical_hash(), fod_id.hash());
+}
+
+#[test]
+fn from_base64_ignores_surrounding_whitespace() {
+    let fixture = Fixture::new();
+    // A payload chosen so the encoding needs padding, which the URL-safe
+    // form leaves out and the reader works back from the stripped length.
+    let mut payload = canonical_payload();
+    for (i, b) in payload[fodid::HASH_OFFSET..].iter_mut().enumerate() {
+        *b = 0xFB + (i as u8 % 5);
+    }
+    let standard = fixture.signed_owid_base64(payload);
+    assert!(standard.ends_with('='));
+    let url_safe = standard
+        .replace('+', "-")
+        .replace('/', "_")
+        .trim_end_matches('=')
+        .to_owned();
+
+    let expected = FodId::from_base64(&standard).unwrap();
+    for clean in [&standard, &url_safe] {
+        for spaced in [
+            format!("{clean}\n"),
+            format!(" {clean}"),
+            format!("{clean} "),
+            format!("\r\n\t {clean} \t\r\n"),
+        ] {
+            assert_eq!(FodId::from_base64(&spaced).unwrap(), expected);
+        }
+    }
+}
+
+#[test]
 fn fod_id_is_cryptographically_verifiable() {
     let fixture = Fixture::new();
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload())).unwrap();
@@ -307,6 +357,81 @@ fn fod_id_is_cryptographically_verifiable() {
     assert!(fod_id
         .verify_with_public_key(&fixture.public_pem, &[])
         .unwrap());
+}
+
+#[test]
+fn from_base64_accepts_both_alphabets_with_or_without_padding() {
+    let fixture = Fixture::new();
+    // A payload chosen so the encoding carries both `+` and `/` and needs
+    // padding, which the assertions below check rather than assume.
+    let mut payload = canonical_payload();
+    for (i, b) in payload[fodid::HASH_OFFSET..].iter_mut().enumerate() {
+        *b = 0xFB + (i as u8 % 5);
+    }
+    let standard = fixture.signed_owid_base64(payload);
+    assert!(standard.contains('+') || standard.contains('/'));
+    assert!(standard.ends_with('='));
+
+    let url_safe_padded = standard.replace('+', "-").replace('/', "_");
+    let url_safe = url_safe_padded.trim_end_matches('=').to_owned();
+    assert_ne!(url_safe, standard);
+
+    let expected = FodId::from_base64(&standard).unwrap();
+    assert_eq!(FodId::from_base64(&url_safe_padded).unwrap(), expected);
+    assert_eq!(FodId::from_base64(&url_safe).unwrap(), expected);
+    // Padding stripped from the standard alphabet is restored too.
+    assert_eq!(
+        FodId::from_base64(standard.trim_end_matches('=')).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn as_base64_url_round_trips_and_carries_no_padding_or_standard_symbols() {
+    let fixture = Fixture::new();
+    let mut payload = canonical_payload();
+    for (i, b) in payload[fodid::HASH_OFFSET..].iter_mut().enumerate() {
+        *b = 0xFB + (i as u8 % 5);
+    }
+    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+
+    let url_safe = fod_id.as_base64_url().unwrap();
+    assert!(!url_safe.contains('+'));
+    assert!(!url_safe.contains('/'));
+    assert!(!url_safe.contains('='));
+    assert_eq!(
+        url_safe,
+        fod_id
+            .as_base64()
+            .unwrap()
+            .replace('+', "-")
+            .replace('/', "_")
+            .trim_end_matches('=')
+    );
+    assert_eq!(FodId::from_base64(&url_safe).unwrap(), fod_id);
+}
+
+#[test]
+fn date_minutes_is_the_envelope_date_field() {
+    // 3,500,000 minutes after 2020-01-01T00:00:00Z is 2026-08-27T13:20:00Z.
+    let minutes: u32 = 3_500_000;
+    let date = DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc)
+        + chrono::Duration::minutes(i64::from(minutes));
+    assert_eq!(date.to_rfc3339(), "2026-08-27T13:20:00+00:00");
+
+    // The reader does not verify, so an unsigned envelope with a chosen date
+    // is enough. The wire format stores the date as this minute count, and
+    // the value must survive a round trip through the bytes.
+    let mut owid = Owid::new(TEST_DOMAIN, date, canonical_payload());
+    owid.signature = vec![0u8; owid::SIGNATURE_LENGTH];
+    let fod_id = FodId::from_owid(owid.clone()).unwrap();
+    assert_eq!(fod_id.date_minutes(), minutes);
+
+    let reread = FodId::from_byte_array(&owid.as_byte_array().unwrap()).unwrap();
+    assert_eq!(reread.date_minutes(), minutes);
+    assert_eq!(reread.date, date);
 }
 
 #[test]

@@ -60,6 +60,10 @@ pub const RANDOM_PAYLOAD_LENGTH: usize = HEADER_LENGTH + GUID_LENGTH;
 /// [`RANDOM_PAYLOAD_LENGTH`].
 pub const PAYLOAD_LENGTH: usize = HASH_OFFSET + HASH_LENGTH;
 
+/// Unix time of the OWID base date, 2020-01-01T00:00:00Z, from which the
+/// envelope's date is counted in minutes on the wire.
+const OWID_BASE_DATE_UNIX_SECONDS: i64 = 1_577_836_800;
+
 /// The identifier type carried in bits 6-7 of the 51Did flags byte.
 ///
 /// Existing identifiers were issued with those bits zeroed, so they decode as
@@ -107,6 +111,10 @@ impl IdType {
 /// |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
 /// |      5 |     16 | Value: GUID (Random)                               |
 ///
+/// An identifier carrying a creator context is longer than this base, with a
+/// section after the value that only the issuing cloud can read. The reader
+/// accepts it as it accepts any payload of at least the base length.
+///
 /// The value bytes are read through [`hash`](FodId::hash). The name is kept for
 /// continuity (a probabilistic value is a SHA-256), but for a [`IdType::Random`]
 /// identifier the value is a GUID, not a hash.
@@ -127,16 +135,28 @@ pub struct FodId {
 }
 
 impl FodId {
-    /// Parses a 51Did from its base64 encoded OWID string, as produced by the
-    /// 51Degrees cloud service.
+    /// Parses a 51Did from its base64 encoded OWID string.
+    ///
+    /// Both base64 alphabets are accepted: the standard one with padding, as
+    /// the 51Degrees cloud issues it, and the URL-safe one (`-` and `_` in
+    /// place of `+` and `/`, padding optional) that a page uses when it puts
+    /// the identifier in a link. Either form decodes to the same envelope,
+    /// and [`as_base64_url`](FodId::as_base64_url) produces the URL-safe
+    /// form again.
+    ///
+    /// Leading and trailing whitespace is stripped before anything else, so a
+    /// value carrying a trailing newline from a file, a header or a copied
+    /// link reads back to the same envelope as the clean form. The padding
+    /// the URL-safe alphabet leaves out is worked out from the stripped
+    /// length.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Owid`] if the string is not a valid OWID envelope, or
-    /// [`Error::PayloadTooShort`] if the payload is shorter than the minimum for
-    /// its identifier type.
+    /// [`Error::PayloadTooShort`] if the payload is shorter than the minimum
+    /// for its identifier type.
     pub fn from_base64(base64: &str) -> Result<Self> {
-        Self::from_owid(Owid::from_base64(base64)?)
+        Self::from_owid(Owid::from_base64(&from_base64_url(base64.trim()))?)
     }
 
     /// Parses a 51Did from the raw bytes of an OWID envelope.
@@ -144,8 +164,8 @@ impl FodId {
     /// # Errors
     ///
     /// Returns [`Error::Owid`] if the bytes are not a valid OWID envelope, or
-    /// [`Error::PayloadTooShort`] if the payload is shorter than the minimum for
-    /// its identifier type.
+    /// [`Error::PayloadTooShort`] if the payload is shorter than the minimum
+    /// for its identifier type.
     pub fn from_byte_array(buffer: &[u8]) -> Result<Self> {
         Self::from_owid(Owid::from_byte_array(buffer)?)
     }
@@ -159,6 +179,9 @@ impl FodId {
     /// Returns [`Error::PayloadTooShort`] if the OWID payload is shorter than the
     /// minimum for its identifier type (the [`HEADER_LENGTH`] byte header, plus
     /// the value length the type requires).
+    ///
+    /// Anything beyond the base is a creator context section, whose exact
+    /// lengths belong to the cloud, so any longer payload is accepted here.
     pub fn from_owid(owid: Owid) -> Result<Self> {
         if owid.payload.len() < HEADER_LENGTH {
             return Err(Error::PayloadTooShort {
@@ -207,7 +230,12 @@ impl FodId {
         IdType::from_flags(self.flags)
     }
 
-    /// The 4-byte little endian License Id from the payload.
+    /// The 4-byte little endian License Id field from the payload.
+    ///
+    /// On an identifier carrying a creator context these four bytes hold an
+    /// encrypted value that only 51Degrees can turn back into a licence
+    /// identifier, so this is the field's raw value and identifies nothing
+    /// outside 51Degrees. The name is kept for continuity with the layout.
     pub fn license_id(&self) -> u32 {
         self.license_id
     }
@@ -232,6 +260,55 @@ impl FodId {
     pub fn into_owid(self) -> Owid {
         self.owid
     }
+
+    /// The identifier in the URL-safe base64 alphabet without padding, the
+    /// form to put in a URL without any further encoding. It is the inverse
+    /// of the normalisation [`from_base64`](FodId::from_base64) applies, so
+    /// the value reads back to the same envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Owid`] if the envelope cannot be encoded, which only
+    /// happens to an envelope that has never been signed.
+    pub fn as_base64_url(&self) -> Result<String> {
+        Ok(to_base64_url(&self.owid.as_base64()?))
+    }
+
+    /// The envelope's own date as the count of whole minutes since
+    /// 2020-01-01T00:00:00Z, which is how the OWID wire format stores it and
+    /// the value the OWID `public-key?date=` parameter takes. Callers
+    /// comparing creation times want this integer rather than a converted
+    /// date. Saturates at zero and `u32::MAX`, neither of which a date read
+    /// from the wire can reach.
+    pub fn date_minutes(&self) -> u32 {
+        let minutes = (self.owid.date.timestamp() - OWID_BASE_DATE_UNIX_SECONDS).div_euclid(60);
+        u32::try_from(minutes.max(0)).unwrap_or(u32::MAX)
+    }
+}
+
+/// Restores a string in the URL-safe base64 alphabet to the standard alphabet
+/// with padding. `-` becomes `+`, `_` becomes `/`, and `==` or `=` is added
+/// when the length modulo 4 is 2 or 3. A value already in the standard
+/// alphabet with padding passes through unchanged. The caller strips
+/// surrounding whitespace first, because the padding is worked out from the
+/// length.
+pub(crate) fn from_base64_url(value: &str) -> String {
+    let mut standard = value.replace('-', "+").replace('_', "/");
+    match standard.len() % 4 {
+        2 => standard.push_str("=="),
+        3 => standard.push('='),
+        _ => {}
+    }
+    standard
+}
+
+/// The inverse of [`from_base64_url`]: the URL-safe alphabet without padding.
+pub(crate) fn to_base64_url(standard: &str) -> String {
+    standard
+        .replace('+', "-")
+        .replace('/', "_")
+        .trim_end_matches('=')
+        .to_owned()
 }
 
 impl Deref for FodId {
