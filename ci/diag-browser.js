@@ -41,6 +41,17 @@ const server = http.createServer((req, res) => {
   }
   if (path === '/51Degrees.core.js' || path === '/51dpipeline/json') {
     const headers = Object.assign({}, req.headers);
+    if (path === '/51Degrees.core.js') {
+      // The browser gets a payload with no JavaScript to run while curl,
+      // sending a user agent and client hints by hand, gets three
+      // bodies. So what the browser sends differs from what was guessed,
+      // and only the real headers say how.
+      log.push('  headers on the include request:');
+      for (const name of Object.keys(headers).sort()) {
+        if (name === 'cookie') { continue; }
+        log.push('    ' + name + ': ' + headers[name]);
+      }
+    }
     const up = http.request(
       { host: '127.0.0.1', port: APP_PORT, path: req.url, method: req.method, headers },
       (proxied) => {
