@@ -43,6 +43,67 @@ try {
     # builds, so a bad key or unreachable cloud surfaces here.
     curl -sS -o $(if ($IsWindows) { 'NUL' } else { '/dev/null' }) --retry 10 --retry-connrefused "http://localhost:$env:PORT"
 
+    # ---------------------------------------------------------------
+    # TEMPORARY DIAGNOSTIC, see 51Degrees/rust issue 24. Remove with the
+    # branch that added it.
+    #
+    # SessionStorageCache_Chrome fails in CI on "the first page must call
+    # the json endpoint at least once", while the same suite, the same
+    # key and the same branch pass that assertion on a Windows
+    # workstation. The client only posts when the served payload carries
+    # a JavaScript property with a body to run, so this prints what the
+    # cloud returns to this runner for the header sets the browser could
+    # be sending. No resource key is printed, because the key lives in
+    # the example rather than in these requests.
+    Write-Host "===== diagnostic: browser and payload ====="
+    if (Get-Command google-chrome -ErrorAction SilentlyContinue) {
+        Write-Host "chrome: $(google-chrome --version)"
+    }
+    if (Get-Command chromedriver -ErrorAction SilentlyContinue) {
+        Write-Host "chromedriver: $(chromedriver --version)"
+    }
+
+    $chromeUa = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+    $headlessUa = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+    $hints = @(
+        'sec-ch-ua: "Chromium";v="151", "Not?A_Brand";v="24", "Google Chrome";v="151"',
+        'sec-ch-ua-mobile: ?0',
+        'sec-ch-ua-platform: "Linux"')
+
+    $cases = @(
+        @{ Name = 'plain Chrome user agent';      Ua = $chromeUa;   Hints = $false },
+        @{ Name = 'HeadlessChrome, no hints';     Ua = $headlessUa; Hints = $false },
+        @{ Name = 'HeadlessChrome, with hints';   Ua = $headlessUa; Hints = $true  }
+    )
+
+    foreach ($case in $cases) {
+        $curlArgs = @('-sS', '-H', "User-Agent: $($case.Ua)")
+        if ($case.Hints) { foreach ($h in $hints) { $curlArgs += @('-H', $h) } }
+        $curlArgs += "http://localhost:$env:PORT/51Degrees.core.js"
+        # curl returns one array element per line, so join before
+        # measuring or the length is a line count.
+        $body = (& curl @curlArgs) -join "`n"
+
+        # A property with a body appears as `"name": "<script>"`. A
+        # property with no body is absent or null, and then the client
+        # has nothing to run and never posts.
+        $runnable = @()
+        foreach ($name in @('javascriptgethighentropyvalues',
+                            'javascripthardwareprofile',
+                            'screenpixelswidthjavascript',
+                            'screenpixelsheightjavascript')) {
+            if ($body -match ($name + '":\s*"')) { $runnable += $name }
+        }
+        $listed = if ($body -match '"javascriptProperties"') { 'yes' } else { 'no' }
+
+        Write-Host ("  {0,-28} bytes={1,-7} list={2,-5} runnable={3}" -f `
+            $case.Name, $body.Length, $listed, `
+            $(if ($runnable.Count) { $runnable -join ',' } else { 'NONE' }))
+    }
+    Write-Host "===== end diagnostic ====="
+
     $env:CLOUD_ROOT_URL = "https://cloud.51degrees.com/"
     $env:PAID_RESOURCE_KEY = $TestResourceKey
     $env:EXAMPLE_URL = "http://localhost:$env:PORT"
