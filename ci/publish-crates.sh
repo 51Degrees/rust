@@ -7,9 +7,13 @@
 # After publishing a crate the script waits for the new version to appear on the
 # index so the next, dependent crate resolves it.
 #
-# `fodid` and `fiftyone-fodid-cloud` depend on `owid`, which is consumed from
-# crates.io (the workspace `owid` dependency is a published version, not git), so
-# they are publishable and included below in dependency order.
+# `fodid` and `fiftyone-fodid-cloud` depend on `owid`. crates.io refuses git
+# dependencies, so they are publishable only while the workspace `owid`
+# dependency is a crates.io release. The workspace currently pins `owid` to a
+# git revision of the hardened 2.0 implementation (see the root Cargo.toml),
+# because no 2.x release is on crates.io yet, so a version bump merged to main
+# will stop at `fodid` until that release exists. They stay in the list below in
+# dependency order for when it does.
 set -euo pipefail
 
 # Publishing needs a crates.io token. When it is absent (for example a normal

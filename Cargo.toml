@@ -48,11 +48,18 @@ repository = "https://github.com/51Degrees/rust"
 homepage = "https://51degrees.com"
 
 [workspace.dependencies]
-# The OWID envelope library every 51Did builds on. Consumed from crates.io so
-# the fodid crates are publishable (crates.io forbids git dependencies). The
-# source lives in the SWAN community repository
-# (https://github.com/SWAN-community/owid-rust).
-owid = "1.0.0"
+# The OWID envelope library every 51Did builds on. The source lives in the
+# SWAN community repository (https://github.com/SWAN-community/owid-rust).
+#
+# Pinned to a git revision for now. The crates.io release is 1.0.0, from
+# before the OWID implementation was hardened, and the hardened branch is
+# version 2.0.0, so a `[patch.crates-io]` entry cannot stand in for the
+# release (a patch must share the major version). Until a 2.x owid crate is
+# on crates.io the fodid crates build only from git and cannot themselves be
+# published, because crates.io refuses git dependencies. The revision below
+# is the tip of the hardening branch and will move to the merged commit on
+# the owid-rust main branch.
+owid = { git = "https://github.com/SWAN-community/owid-rust", rev = "bba456afad3b08b9e1e94205596bd16ae7507780" }
 
 # Shared third-party dependencies pinned once here and inherited by members
 # through `<dep>.workspace = true`. The reqwest blocking client used by the

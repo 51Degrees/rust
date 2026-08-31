@@ -26,7 +26,7 @@ once_cell.workspace = true
 reqwest-client = ["fiftyone-cloud-request-engine/reqwest-client"]
 
 [dev-dependencies]
-# Used by the integration test to mint a real signed 51Did envelope, so the
+# Used by the tests to create a real signed 51Did envelope, so the
 # parsed-identifier path is exercised end-to-end.
 owid.workspace = true
 

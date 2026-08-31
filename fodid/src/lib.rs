@@ -66,17 +66,74 @@
 //! |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
 //! |      5 |     16 | Value: GUID (Random)                               |
 //!
+//! These lengths are lower bounds. The payload must hold the 5 byte header
+//! before the type can be read, and then the value the type requires, being
+//! 16 GUID bytes for a random identifier and 32 hash bytes for a
+//! probabilistic or hashed email one. A payload may carry more bytes after
+//! the value, and this crate accepts them and leaves them in place. There
+//! is no upper bound on a 51Did in this crate, so a reader built today keeps
+//! reading identifiers issued in a newer, longer shape.
+//!
 //! [`FodId`] [`Deref`](std::ops::Deref)s to the underlying [`owid::Owid`], so
 //! a `FodId` can be used directly for all OWID level concerns (domain, date,
 //! payload bytes, signature, base64 round tripping and signature
 //! verification) and adds typed accessors for the payload fields on top.
 //!
+//! ## Reading and verifying are two separate questions
+//!
+//! [`FodId::from_base64`] and [`FodId::from_byte_array`] answer one question,
+//! which is whether the input is a 51Did. They never touch a key. A `FodId`
+//! that comes back from either is therefore **not necessarily
+//! cryptographically valid**, and the second question, whether its signature
+//! is genuine, is answered separately by
+//! [`verify_status_with_public_key`](owid::Owid::verify_status_with_public_key)
+//! on the parsed value. That answer is a [`SignatureStatus`], and only
+//! [`SignatureStatus::Invalid`] means the identifier should be distrusted.
+//! A key that could not be obtained or read is
+//! [`SignatureStatus::KeyUnavailable`] or [`SignatureStatus::InvalidKey`],
+//! never `Invalid`, so an outage is not reported as a forgery.
+//!
+//! ## Why a read can fail
+//!
+//! Malformed input is expected, because a 51Did arrives from a cookie, a
+//! link or a response body that anyone could have written, so a failed read
+//! is an ordinary [`Err`] naming the reason rather than a panic. Every
+//! result carries the same three facts: whether the read succeeded
+//! (`is_ok()`), the value (present only on success, never a partly read
+//! `FodId`), and the status, which is the [`Error`] variant on failure and
+//! "parsed" on success. The status vocabulary is the OWID one plus two
+//! 51Did statuses, checked in this order:
+//!
+//! | Status | Meaning |
+//! |---|---|
+//! | [`Error::Parse`] | The bytes are not an OWID envelope. The OWID reason is kept unchanged inside, read with [`owid::ParseError::status`], for example [`ParseStatus::MissingInput`], [`ParseStatus::InvalidBase64`], [`ParseStatus::UnexpectedEnd`] or [`ParseStatus::ByteCountMismatch`]. |
+//! | [`Error::PayloadTooShort`] | The envelope is fine, but the payload cannot hold the 5 byte 51Did header, so the identifier type cannot be read. |
+//! | [`Error::InvalidTypePayloadLength`] | The header was read, and the payload is shorter than the value the identifier type requires (21 bytes in all for random, 37 for probabilistic and hashed email). |
+//!
+//! All three are data results, meaning the input was not a 51Did and the
+//! caller decides what to do with that. [`Error::Owid`] is the one
+//! exceptional variant. No read produces it. It appears only when a caller
+//! uses `?` on an OWID operation of a parsed value, such as serialising it
+//! again or verifying with a key that cannot be read.
+//!
+//! Every reading route, being the two functions above, [`FodId::from_owid`],
+//! [`FromStr`](std::str::FromStr), [`TryFrom<&[u8]>`] and
+//! [`TryFrom<Owid>`], makes the same checks in the same order, so there is
+//! one walk of the payload and not several.
+//!
+//! This crate applies no size limit to its input. Where an application
+//! needs one, for example to bound what a public end point will accept, the
+//! limit belongs at that application's own boundary, before the input reaches
+//! this crate, and is that application's policy rather than a property of
+//! the 51Did format.
+//!
 //! ## Example
 //!
 //! ```no_run
-//! use fodid::FodId;
+//! use fodid::{FodId, SignatureStatus};
 //!
 //! # fn run(base64_from_cloud: &str, public_pem: &str) -> Result<(), fodid::Error> {
+//! // Reading answers whether the input is a 51Did, and nothing more.
 //! let fod_id = FodId::from_base64(base64_from_cloud)?;
 //!
 //! let flags: u8 = fod_id.flags();
@@ -85,18 +142,81 @@
 //! let value: &[u8] = fod_id.hash(); // the value to compare (32 or 16 bytes)
 //!
 //! // Inherited OWID level fields and operations, available through Deref.
-//! let domain = &fod_id.domain;
-//! let verified = fod_id.verify_with_public_key(public_pem, &[])?;
+//! let domain = fod_id.domain();
 //! let round_trip = fod_id.as_base64()?;
-//! # let _ = (flags, id_type, license_id, value, domain, verified, round_trip);
+//!
+//! // Verifying is the second question, asked of the parsed value.
+//! let status = fod_id.verify_status_with_public_key(public_pem, &[]);
+//! let genuine = status == SignatureStatus::Valid;
+//! # let _ = (flags, id_type, license_id, value, domain, round_trip, genuine);
 //! # Ok(())
 //! # }
 //! ```
 //!
+//! Branching on the reason a read failed, without matching on message text:
+//!
+//! ```
+//! use fodid::{Error, FodId, ParseStatus};
+//!
+//! let result = FodId::from_base64("not base 64!");
+//! assert!(result.is_err());
+//! match result.unwrap_err() {
+//!     Error::Parse(e) => assert_eq!(e.status(), ParseStatus::InvalidBase64),
+//!     Error::PayloadTooShort { .. } => unreachable!("the envelope never formed"),
+//!     Error::InvalidTypePayloadLength { .. } => unreachable!("the envelope never formed"),
+//!     other => unreachable!("a read never produces {other:?}"),
+//! }
+//! ```
+//!
+//! ## Migrating from the crates.io `owid` 1.0 surface
+//!
+//! Callers who reached the OWID envelope through this crate will find three
+//! changes after the hardening of the OWID implementation.
+//!
+//! The envelope fields are read through accessors rather than public fields,
+//! so an OWID can no longer be altered after it was read or signed.
+//!
+//! ```text
+//! // Before                                // After
+//! let domain = &fod_id.domain;             let domain = fod_id.domain();
+//! let issued = fod_id.date;                let issued = fod_id.date();
+//! let bytes = &fod_id.payload;             let bytes = fod_id.payload();
+//! let sig = &fod_id.signature;             let sig = fod_id.signature();
+//! ```
+//!
+//! A failed read is [`Error::Parse`] carrying an [`owid::ParseError`] with a
+//! named status, where it used to be `Error::Owid` carrying an
+//! [`owid::Error`] whose only detail was its message.
+//!
+//! ```text
+//! // Before
+//! match FodId::from_base64(input) {
+//!     Err(fodid::Error::Owid(e)) => log(e.to_string()),
+//!     ..
+//! }
+//! // After
+//! match FodId::from_base64(input) {
+//!     Err(fodid::Error::Parse(e)) => log(e.status()),
+//!     ..
+//! }
+//! ```
+//!
+//! Code that built a signed envelope in a test used `Creator::sign_bytes`,
+//! which is now [`owid::Creator::create`]. Nothing can construct an
+//! [`owid::Owid`] directly any more, and there is no unsigned state, so a
+//! `FodId` only ever wraps an envelope that came from a successful read or
+//! from a creator that signed it.
+//!
+//! ```text
+//! // Before                                // After
+//! creator.sign_bytes(payload)?             creator.create(payload)?
+//! ```
+//!
 //! ## Non goals
 //!
-//! - **Signature verification on construction.** Building a [`FodId`] does not
-//!   check the signature. Call [`verify_with_public_key`](owid::Owid::verify_with_public_key)
+//! - **Signature verification on construction.** Reading a [`FodId`] does not
+//!   check the signature. Call
+//!   [`verify_status_with_public_key`](owid::Owid::verify_status_with_public_key)
 //!   (inherited from [`owid::Owid`] through [`Deref`](std::ops::Deref)) when
 //!   needed.
 //! - **Construction of new 51Dids.** This is a reader. New 51Dids are issued
@@ -113,6 +233,7 @@ pub use fodid::{
     LICENSE_ID_LENGTH, LICENSE_ID_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
 };
 
-// Re-exported so callers can reach the OWID envelope type without adding a
-// direct dependency on the `owid` crate.
-pub use owid::Owid;
+// Re-exported so callers can reach the OWID envelope type, the reason a read
+// failed and the outcome of a signature check without adding a direct
+// dependency on the `owid` crate.
+pub use owid::{Owid, ParseError, ParseStatus, SignatureStatus};
