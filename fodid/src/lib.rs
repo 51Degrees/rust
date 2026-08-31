@@ -237,3 +237,9 @@ pub use fodid::{
 // failed and the outcome of a signature check without adding a direct
 // dependency on the `owid` crate.
 pub use owid::{Owid, ParseError, ParseStatus, SignatureStatus};
+
+/// The examples in the README are compiled and run as documentation tests,
+/// so the documented way to use this crate cannot quietly stop working.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeExamples;
