@@ -596,6 +596,45 @@ fn unsupported_version_is_the_owid_unsupported_version_status() {
 }
 
 #[test]
+fn date_past_the_year_9999_reads_as_15_february_10186() {
+    // The four byte minute count of the wire format runs to 0xFFFFFFFF,
+    // which is 04:15 on 15 February 10186. Runtimes whose date type stops
+    // at the end of the year 9999 (.NET and Python) refuse such a count
+    // with ImplementationCapacityExceeded, whereas chrono's range reaches
+    // the year 262142, so here the same bytes read fine and the date is
+    // the one the sender wrote. The bytes are changed after signing, which
+    // is fine because reading never looks at the signature.
+    use base64::Engine as _;
+    use chrono::{Datelike as _, Timelike as _};
+
+    let fixture = Fixture::new();
+    let mut bytes = fixture
+        .signed_owid(canonical_payload())
+        .as_byte_array()
+        .unwrap();
+    // The four little endian date bytes sit after the version byte, the
+    // domain and its terminator.
+    let at = 1 + TEST_DOMAIN.len() + 1;
+    bytes[at..at + 4].copy_from_slice(&[0xFF; 4]);
+    let base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+    let result = FodId::from_base64(&base64);
+    let fod_id = assert_parsed(&result);
+    let date = fod_id.date();
+    assert_eq!(
+        (
+            date.year(),
+            date.month(),
+            date.day(),
+            date.hour(),
+            date.minute()
+        ),
+        (10186, 2, 15, 4, 15)
+    );
+    assert_eq!(fod_id.match_key(), &canonical_hash());
+}
+
+#[test]
 fn error_display_names_the_status_and_keeps_the_owid_source() {
     use std::error::Error as _;
 
