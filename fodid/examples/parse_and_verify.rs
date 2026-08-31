@@ -25,8 +25,7 @@
 //!
 //! Run with: `cargo run --example parse_and_verify`
 
-use fodid::FodId;
-use owid::{Creator, Crypto};
+use fodid::{Creator, Crypto, FodId, SignatureStatus};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The cloud holds an ECDSA P-256 key and signs every 51Did it issues.
@@ -42,27 +41,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         *b = 0x20 + i as u8; // a stable, recognizable hash
     }
 
-    // The cloud signs and base64 encodes the envelope; that string is the
-    // 51Did the caller receives.
-    let signed = creator.sign_bytes(payload)?;
+    // The cloud creates, signs and base64 encodes the envelope in one step;
+    // that string is the 51Did the caller receives.
+    let signed = creator.create(payload)?;
     let base64 = signed.as_base64()?;
     println!("51Did (base64): {base64}");
 
-    // The recipient reads it back.
+    // The recipient reads it back. Reading answers only whether the string
+    // is a 51Did, and says nothing about the signature.
     let fod_id = FodId::from_base64(&base64)?;
     println!("flags     : {:#010b}", fod_id.flags());
     println!("license_id: {:#010x}", fod_id.license_id());
     println!("hash      : {}", hex(fod_id.hash()));
 
     // OWID level fields are reachable directly through Deref.
-    println!("domain    : {}", fod_id.domain);
-    println!("date      : {}", fod_id.date);
+    println!("domain    : {}", fod_id.domain());
+    println!("date      : {}", fod_id.date());
 
-    // Verify the signature in process against the issuer public key.
+    // Verify the signature in process against the issuer public key. Only
+    // SignatureStatus::Invalid would mean the identifier should be
+    // distrusted; a key that cannot be read is reported as a key fault.
     let public_pem = crypto.public_key_pem()?;
-    let verified = fod_id.verify_with_public_key(&public_pem, &[])?;
-    println!("verified  : {verified}");
-    assert!(verified);
+    let status = fod_id.verify_status_with_public_key(&public_pem, &[]);
+    println!("signature : {status}");
+    assert_eq!(status, SignatureStatus::Valid);
 
     Ok(())
 }

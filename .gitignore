@@ -21,3 +21,8 @@ Thumbs.db
 .codeium/
 .gemini/
 .opencode/
+
+# The OWID source that ci/copy-owid-source.ps1 copies into the fodid crate
+# before a build. The owid-rust submodule is the only copy that belongs in
+# the repository.
+/fodid/src/owid/

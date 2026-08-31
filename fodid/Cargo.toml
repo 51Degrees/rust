@@ -10,15 +10,49 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+# The OWID source under src/owid is ignored by git, because
+# ci/copy-owid-source.ps1 copies it from the owid-rust submodule before a
+# build, and cargo leaves an ignored directory out of a package unless the
+# manifest lists it. Listing the contents explicitly puts the whole of src,
+# the copied NOTICE and LICENSE included, the tests, the examples and the
+# README into the published crate.
+include = ["src/**", "tests/**", "examples/**", "README.md"]
+
+[features]
+# The OWID types that create and sign a new envelope, `Creator` and
+# `Configuration`. Reading a 51Did never needs them, so they are off by
+# default. The tests and the parse_and_verify example turn them on to stand
+# in for the cloud, through the dev-dependency on this crate below.
+creator = []
 
 [dependencies]
-owid.workspace = true
+# These are the dependencies of the OWID library, which is compiled into this
+# crate as the private module `owid` from the owid-rust submodule
+# (https://github.com/51Degrees/owid-rust, see ci/copy-owid-source.ps1), so
+# that no OWID crate has to exist on any registry. The library's `fetch`
+# (ureq) and `endpoints` (serde) features are not compiled in, so nothing
+# here reaches the network and the crate still builds for wasm32-wasip1.
+base64.workspace = true
+chrono.workspace = true
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
+# This crate depends on itself here only to turn the `creator` feature on
+# for its own tests and examples. Cargo drops a path dependency without a
+# version from the published manifest, so the release carries no such entry.
+fodid = { path = ".", features = ["creator"] }
 # Used only by the live cloud integration test (tests/cloud_51did.rs) to call
 # the 51Degrees cloud JSON endpoint and read its response.
 ureq = "2"
 serde_json = "1"
+
+[lints.rust]
+# The OWID module keeps the library's `fetch` and `endpoints` feature gates,
+# which this crate does not declare and never turns on. Naming them here tells
+# the compiler they are expected, so the checked cfg lint stays on for every
+# other name instead of being switched off for the module.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("endpoints", "fetch"))'] }
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the

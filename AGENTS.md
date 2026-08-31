@@ -27,7 +27,16 @@ build without any submodule checkout.
 
 ## Building and testing
 
-From the repository root:
+Once per clone, and again whenever the `owid-rust` submodule moves, place the
+OWID source that `fodid` compiles in (see "Releasing to crates.io" below for
+why it is carried this way):
+
+```
+git submodule update --init
+pwsh ./ci/copy-owid-source.ps1
+```
+
+Then, from the repository root:
 
 ```
 cargo build --workspace --all-targets
@@ -83,9 +92,13 @@ exchanges the run's GitHub OIDC identity for a short-lived token, so no API
 token is stored. Each crate has this repository and `publish.yml` registered as
 a trusted publisher (one-time setup in `ci/setup-trusted-publishing.sh`).
 
-The `owid` dependency the `fodid` crates build on is consumed from crates.io
-(crates.io forbids git dependencies); its source lives in the SWAN community
-repository.
+The OWID library the `fodid` crates build on is not a crates.io dependency.
+Its source is compiled into `fodid` as a private module from the `owid-rust`
+submodule (https://github.com/51Degrees/owid-rust, a fork that follows the
+SWAN community repository) by `ci/copy-owid-source.ps1`, which every workflow
+runs before building, so no OWID crate has to exist on any registry. The
+copied directory `fodid/src/owid` is ignored by git and listed in the `fodid`
+manifest's `include`, so `cargo publish` packages it.
 
 ## CI gates
 

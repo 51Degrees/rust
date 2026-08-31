@@ -27,7 +27,7 @@
 //! representative `fodid` response is fed through and the resulting
 //! [`FodIdDataBase`] is asserted on, both as the raw base64 envelope and as the
 //! parsed [`FodId`]. The global identifier in the fixture is a genuinely signed
-//! OWID envelope, minted here with the `owid` library, so the parsed path is
+//! OWID envelope, created here with the `owid` library, so the parsed path is
 //! exercised against real bytes rather than a hand-rolled string.
 
 use std::sync::Arc;
@@ -38,7 +38,7 @@ use fiftyone_cloud_request_engine::{
     CloudHttpClient, CloudHttpRequest, CloudHttpResponse, CloudRequestEngine, HttpMethod,
 };
 use fiftyone_fodid_cloud::{FodIdCloudEngine, FodIdData, FODID_DATA_KEY};
-use owid::{Creator, Crypto, Owid};
+use fodid::{Creator, Crypto, Owid};
 
 /// A fake transport that answers the cloud endpoints from in-memory fixtures.
 struct FakeCloud {
@@ -82,7 +82,7 @@ fn canonical_payload() -> Vec<u8> {
     payload
 }
 
-/// Mint a genuinely signed 51Did envelope and return its base64 form together
+/// Create a genuinely signed 51Did envelope and return its base64 form together
 /// with the public key PEM, so the test can both parse and (optionally) verify.
 fn signed_global_id() -> (String, String) {
     let crypto = Crypto::new();
@@ -92,8 +92,8 @@ fn signed_global_id() -> (String, String) {
     let signer = Crypto::new_sign_only(&private_pem).expect("import private key");
     let creator = Creator::new(TEST_DOMAIN, signer).expect("create creator");
     let owid: Owid = creator
-        .sign_bytes(canonical_payload())
-        .expect("sign payload");
+        .create(canonical_payload())
+        .expect("create and sign the envelope");
     (owid.as_base64().expect("encode owid"), public_pem)
 }
 
@@ -184,9 +184,9 @@ fn unpacks_global_identifier_raw_and_parsed() {
     let fod_id = parsed.value().expect("the global identifier parses");
     assert_eq!(fod_id.flags(), FLAGS);
     assert_eq!(fod_id.license_id(), LICENSE_ID);
-    assert_eq!(fod_id.domain, TEST_DOMAIN);
+    assert_eq!(fod_id.domain(), TEST_DOMAIN);
 
-    // The minted envelope verifies against its own public key, proving the
+    // The created envelope verifies against its own public key, proving the
     // parsed value carries the full OWID envelope intact.
     assert!(fod_id
         .verify_with_public_key(&public_pem, &[])

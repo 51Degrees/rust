@@ -30,8 +30,16 @@ jobs:
       # short-lived crates.io token.
       id-token: write
     steps:
+      # The owid-rust submodule holds the OWID source that ci/copy-owid-source.ps1
+      # compiles into fodid. The copy is ignored by git and listed in the fodid
+      # manifest's include, so cargo publish packages it with the crate.
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: dtolnay/rust-toolchain@stable
+      - name: Copy the OWID source into fodid
+        shell: pwsh
+        run: ./ci/copy-owid-source.ps1
       - name: Authenticate to crates.io (Trusted Publishing)
         uses: rust-lang/crates-io-auth-action@v1
         id: auth

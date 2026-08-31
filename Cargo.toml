@@ -48,12 +48,6 @@ repository = "https://github.com/51Degrees/rust"
 homepage = "https://51degrees.com"
 
 [workspace.dependencies]
-# The OWID envelope library every 51Did builds on. Consumed from crates.io so
-# the fodid crates are publishable (crates.io forbids git dependencies). The
-# source lives in the SWAN community repository
-# (https://github.com/SWAN-community/owid-rust).
-owid = "1.0.0"
-
 # Shared third-party dependencies pinned once here and inherited by members
 # through `<dep>.workspace = true`. The reqwest blocking client used by the
 # data-update and usage-sharing background threads stays pinned in those crates
