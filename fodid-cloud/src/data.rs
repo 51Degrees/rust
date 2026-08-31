@@ -147,14 +147,15 @@ const WRONG_TYPE_MESSAGE: &str =
 /// accessor returns an
 /// [`AspectPropertyValue<T>`] so the caller can tell "the cloud issued an
 /// identifier" from "no identifier was available" (and, for the parsed form,
-/// from "the envelope could not be decoded") without losing the explanation.
+/// from "the value could not be read as a 51Did") without losing the
+/// explanation.
 pub trait FodIdData: AspectData {
     /// The globally-scoped 51Did as the raw base64 OWID envelope string, as the
     /// cloud sent it. Property name [`ID_PROB_GLOBAL_PROPERTY`].
     ///
     /// This value is unique across all callers observing the same device and
     /// network. Store or forward it unchanged; compare two identifiers by their
-    /// parsed [`FodId::hash`], not by the envelope string, which is reissued
+    /// parsed [`FodId::match_key`], not by the envelope string, which is reissued
     /// (with a fresh date and signature) on every call.
     fn id_prob_global(&self) -> AspectPropertyValue<String>;
 
@@ -166,11 +167,11 @@ pub trait FodIdData: AspectData {
     fn id_prob_lic(&self) -> AspectPropertyValue<String>;
 
     /// The globally-scoped 51Did parsed into a [`FodId`], unpacking the OWID
-    /// envelope and its payload (flags, license id, hash).
+    /// envelope and its payload (flags, license id, match key).
     ///
-    /// Returns a no-value if the identifier was absent, or if the base64
-    /// envelope could not be decoded (the no-value message then carries the
-    /// decode error).
+    /// Returns a no-value if the identifier was absent, or if the value could
+    /// not be read as a 51Did (the no-value message then carries the reason
+    /// the `fodid` reader gave). Reading does not verify the signature.
     fn id_prob_global_fod_id(&self) -> AspectPropertyValue<FodId>;
 
     /// The license-scoped 51Did parsed into a [`FodId`]. Behaves like
@@ -189,7 +190,7 @@ pub trait FodIdData: AspectData {
     fn id_rand_lic(&self) -> AspectPropertyValue<String>;
 
     /// The globally-scoped random 51Did parsed into a [`FodId`]. The parsed
-    /// value carries a 16-byte GUID rather than a 32-byte hash.
+    /// value carries a 16-byte GUID match key rather than a 32-byte SHA-256.
     fn id_rand_global_fod_id(&self) -> AspectPropertyValue<FodId>;
 
     /// The license-scoped random 51Did parsed into a [`FodId`].
@@ -298,16 +299,19 @@ impl FodIdDataBase {
 
     /// Read a base64 identifier property and parse it into a [`FodId`].
     ///
-    /// An absent property is a no-value with the standard absent message; a
-    /// present value that does not decode as a 51Did envelope is a no-value
-    /// carrying the decode error, so a malformed identifier never panics or
-    /// fails the whole result.
+    /// An absent property is a no-value with the standard absent message. A
+    /// present value that does not read as a 51Did is a no-value whose
+    /// message carries the reason the `fodid` reader gave (the OWID status,
+    /// or one of the two 51Did payload statuses), so a malformed identifier
+    /// never panics or fails the whole result. Reading does not verify the
+    /// signature, so a parsed value is not necessarily cryptographically
+    /// valid.
     fn parsed_property(&self, name: &str) -> AspectPropertyValue<FodId> {
         match self.string_property(name).into_value() {
             Ok(base64) => match FodId::from_base64(&base64) {
                 Ok(fod_id) => AspectPropertyValue::new(fod_id),
                 Err(error) => AspectPropertyValue::no_value(format!(
-                    "The 51Did value could not be decoded as an OWID envelope: {error}"
+                    "The 51Did value could not be read: {error}"
                 )),
             },
             // The string accessor already supplied the absent/wrong-type
@@ -464,7 +468,23 @@ mod tests {
         assert!(!parsed.has_value());
         assert!(parsed
             .no_value_message()
-            .is_some_and(|m| m.contains("could not be decoded")));
+            .is_some_and(|m| m.contains("could not be read") && m.contains("InvalidBase64")));
+    }
+
+    #[test]
+    fn short_payload_parses_to_a_no_value_naming_the_51did_status() {
+        // A well formed OWID whose payload is shorter than the 51Did header
+        // is not a 51Did. The no-value message names the 51Did status so the
+        // reason is not lost behind a generic decode failure.
+        let creator = fodid::Creator::new("51degrees.com", fodid::Crypto::new()).unwrap();
+        let envelope = creator.create(vec![0u8; 3]).unwrap().as_base64().unwrap();
+        let data = FodIdDataBase::new().set("IdProbGlobal", envelope.clone());
+        assert_eq!(data.id_prob_global().value().unwrap(), &envelope);
+        let parsed = data.id_prob_global_fod_id();
+        assert!(!parsed.has_value());
+        assert!(parsed
+            .no_value_message()
+            .is_some_and(|m| m.contains("PayloadTooShort")));
     }
 
     #[test]

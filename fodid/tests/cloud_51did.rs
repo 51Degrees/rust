@@ -151,13 +151,13 @@ fn assert_valid_51did(label: &str, base64: &str) {
         "{label}: hash length"
     );
     assert!(
-        fod_id.payload.len() >= fodid::PAYLOAD_LENGTH,
+        fod_id.payload().len() >= fodid::PAYLOAD_LENGTH,
         "{label}: payload length {} is below the {} byte minimum",
-        fod_id.payload.len(),
+        fod_id.payload().len(),
         fodid::PAYLOAD_LENGTH
     );
     assert!(
-        !fod_id.domain.is_empty(),
+        !fod_id.domain().is_empty(),
         "{label}: domain should not be empty"
     );
 
@@ -174,7 +174,7 @@ fn assert_valid_51did(label: &str, base64: &str) {
     let hash_hex: String = fod_id.match_key().iter().map(|b| format!("{b:02x}")).collect();
     println!(
         "{label}: domain={} flags={:#04x} license_id={:#010x} hash={hash_hex}",
-        fod_id.domain,
+        fod_id.domain(),
         fod_id.flags(),
         fod_id.license_id()
     );
