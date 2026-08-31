@@ -72,7 +72,12 @@ crate_version() {
 publish_crate() {
   local crate="$1" attempt out when target now wait
   for attempt in $(seq 1 40); do
-    if out="$(cargo publish -p "$crate" 2>&1)"; then
+    # --allow-dirty because the OWID source under fodid/src/owid is copied
+    # in by ci/copy-owid-source.ps1 and deliberately never committed, and
+    # cargo otherwise refuses to publish a package that includes files git
+    # does not track. The workflow starts from a clean checkout, so that
+    # copy is the only thing the flag lets through.
+    if out="$(cargo publish -p "$crate" --allow-dirty 2>&1)"; then
       echo "$out"
       return 0
     fi
