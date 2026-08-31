@@ -23,6 +23,7 @@
 use std::fmt;
 
 use crate::fodid::IdType;
+use crate::{OwidError, ParseError};
 
 /// Result type used throughout the crate.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -41,7 +42,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// A successful read says nothing about the signature. Whether the bytes
 /// are a 51Did and whether the signature is genuine are two questions with
 /// two answers, and the second is answered by
-/// [`verify_status_with_public_key`](owid::Owid::verify_status_with_public_key)
+/// [`verify_status_with_public_key`](crate::Owid::verify_status_with_public_key)
 /// on the parsed value, never by a read.
 ///
 /// The last variant, [`Error::Owid`], is the exceptional case. No read
@@ -53,10 +54,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     /// The text or bytes are not an OWID envelope, so there is no payload to
     /// read a 51Did from. Carries the OWID parse error unchanged, and
-    /// [`owid::ParseError::status`] names the OWID reason, for example
-    /// [`owid::ParseStatus::InvalidBase64`] or
-    /// [`owid::ParseStatus::ByteCountMismatch`].
-    Parse(owid::ParseError),
+    /// [`ParseError::status`] names the OWID reason, for example
+    /// [`ParseStatus::InvalidBase64`](crate::ParseStatus::InvalidBase64) or
+    /// [`ParseStatus::ByteCountMismatch`](crate::ParseStatus::ByteCountMismatch).
+    Parse(ParseError),
     /// The OWID envelope is well formed, but the payload is shorter than the
     /// 51Did header (the flags byte and the four byte licence id), so the
     /// identifier type cannot even be read.
@@ -81,11 +82,12 @@ pub enum Error {
         actual: usize,
     },
     /// An OWID operation other than a read failed, for example serialising
-    /// the envelope again or verifying its signature. Wraps the error from
-    /// the [`owid`] crate. A read never produces this variant, because the
-    /// OWID crate answers a read with [`owid::ParseError`], which is
-    /// [`Error::Parse`] here.
-    Owid(owid::Error),
+    /// the envelope again or verifying its signature. Wraps the error type of
+    /// the OWID library compiled into this crate, re-exported as
+    /// [`OwidError`]. A read never produces this variant, because the OWID
+    /// library answers a read with [`ParseError`], which is [`Error::Parse`]
+    /// here.
+    Owid(OwidError),
 }
 
 impl fmt::Display for Error {
@@ -121,19 +123,19 @@ impl std::error::Error for Error {
     }
 }
 
-impl From<owid::ParseError> for Error {
-    fn from(e: owid::ParseError) -> Self {
+impl From<ParseError> for Error {
+    fn from(e: ParseError) -> Self {
         Error::Parse(e)
     }
 }
 
-impl From<owid::Error> for Error {
+impl From<OwidError> for Error {
     /// A parse error that reached the OWID error type through the OWID
     /// crate's own conversion is unwrapped again, so a failed read has one
     /// representation here whichever route the caller's `?` took.
-    fn from(e: owid::Error) -> Self {
+    fn from(e: OwidError) -> Self {
         match e {
-            owid::Error::Parse(parse) => Error::Parse(parse),
+            OwidError::Parse(parse) => Error::Parse(parse),
             other => Error::Owid(other),
         }
     }

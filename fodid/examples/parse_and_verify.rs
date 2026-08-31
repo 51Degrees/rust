@@ -25,8 +25,7 @@
 //!
 //! Run with: `cargo run --example parse_and_verify`
 
-use fodid::{FodId, SignatureStatus};
-use owid::{Creator, Crypto};
+use fodid::{Creator, Crypto, FodId, SignatureStatus};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The cloud holds an ECDSA P-256 key and signs every 51Did it issues.

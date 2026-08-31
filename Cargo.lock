@@ -582,7 +582,6 @@ dependencies = [
  "fiftyone-pipeline-engines",
  "fodid",
  "once_cell",
- "owid",
  "serde_json",
 ]
 
@@ -768,7 +767,11 @@ dependencies = [
 name = "fodid"
 version = "4.5.2"
 dependencies = [
- "owid",
+ "base64",
+ "chrono",
+ "fodid",
+ "p256",
+ "rand_core 0.6.4",
  "serde_json",
  "ureq",
 ]
@@ -1510,17 +1513,6 @@ name = "outref"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
-
-[[package]]
-name = "owid"
-version = "2.0.0"
-source = "git+https://github.com/SWAN-community/owid-rust?rev=bba456afad3b08b9e1e94205596bd16ae7507780#bba456afad3b08b9e1e94205596bd16ae7507780"
-dependencies = [
- "base64",
- "chrono",
- "p256",
- "rand_core 0.6.4",
-]
 
 [[package]]
 name = "owo-colors"

@@ -38,7 +38,7 @@ use fiftyone_cloud_request_engine::{
     CloudHttpClient, CloudHttpRequest, CloudHttpResponse, CloudRequestEngine, HttpMethod,
 };
 use fiftyone_fodid_cloud::{FodIdCloudEngine, FodIdData, FODID_DATA_KEY};
-use owid::{Creator, Crypto, Owid};
+use fodid::{Creator, Crypto, Owid};
 
 /// A fake transport that answers the cloud endpoints from in-memory fixtures.
 struct FakeCloud {

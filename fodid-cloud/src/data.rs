@@ -476,7 +476,7 @@ mod tests {
         // A well formed OWID whose payload is shorter than the 51Did header
         // is not a 51Did. The no-value message names the 51Did status so the
         // reason is not lost behind a generic decode failure.
-        let creator = owid::Creator::new("51degrees.com", owid::Crypto::new()).unwrap();
+        let creator = fodid::Creator::new("51degrees.com", fodid::Crypto::new()).unwrap();
         let envelope = creator.create(vec![0u8; 3]).unwrap().as_base64().unwrap();
         let data = FodIdDataBase::new().set("IdProbGlobal", envelope.clone());
         assert_eq!(data.id_prob_global().value().unwrap(), &envelope);

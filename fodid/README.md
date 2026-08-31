@@ -168,11 +168,24 @@ fn same_browser(idprobglobal_a: &str, idprobglobal_b: &str) -> Result<bool, fodi
 Use `hash()` (the value, a 32-byte SHA-256 or 16-byte GUID) as the cache /
 dedup key.
 
-## Migrating from the crates.io `owid` 1.0 surface
+## Migrating from the `owid` 1.0 crate surface
 
 The OWID implementation this crate builds on was hardened so that an OWID
-reaches a caller only from a successful read or from a creator that signs it.
-Callers who reached the envelope through this crate will find three changes.
+reaches a caller only from a successful read or from a creator that signs it,
+and at the same time this crate stopped depending on an `owid` crate (see
+"Where the OWID code comes from" below). Callers who reached the envelope
+through this crate will find four changes.
+
+OWID types are named through `fodid` rather than through an `owid` crate,
+because there is no `owid` dependency to add any more. A test that signs an
+envelope turns on the `creator` feature of `fodid`.
+
+```text
+// Before                                // After
+use owid::{Owid, ParseStatus};           use fodid::{Owid, ParseStatus};
+use owid::{Creator, Crypto};             use fodid::{Creator, Crypto};
+                                         // with features = ["creator"]
+```
 
 The envelope fields are read through accessors rather than public fields, so
 an OWID can no longer be altered after it was read or signed.
@@ -185,9 +198,9 @@ let bytes = &fod_id.payload;             let bytes = fod_id.payload();
 let sig = &fod_id.signature;             let sig = fod_id.signature();
 ```
 
-A failed read is `Error::Parse` carrying an `owid::ParseError` with a named
-status, where it used to be `Error::Owid` carrying an `owid::Error` whose only
-detail was its message.
+A failed read is `Error::Parse` carrying a `ParseError` with a named status,
+where it used to be `Error::Owid` carrying the OWID error type (re-exported as
+`fodid::OwidError`) whose only detail was its message.
 
 ```text
 // Before
@@ -203,8 +216,8 @@ match FodId::from_base64(input) {
 ```
 
 Code that built a signed envelope in a test used `Creator::sign_bytes`, which
-is now `Creator::create`. Nothing can construct an `owid::Owid` directly any
-more, and there is no unsigned state.
+is now `Creator::create`. Nothing can construct an `Owid` directly any more,
+and there is no unsigned state.
 
 ```text
 // Before                                // After
@@ -215,14 +228,40 @@ creator.sign_bytes(payload)?             creator.create(payload)?
 
 - **Signature verification on construction.** Reading a `FodId` does not check
   the signature. Call `verify_status_with_public_key` (inherited from
-  `owid::Owid` through `Deref`) when needed.
+  `fodid::Owid` through `Deref`) when needed.
 - **Construction of new 51Dids.** This is a reader. New 51Dids are issued by
-  the 51Degrees cloud, which alone holds the signing key.
+  the 51Degrees cloud, which alone holds the signing key. The `creator`
+  feature exists so tests and tools can stand in for the cloud, and is off by
+  default.
+
+## Where the OWID code comes from
+
+This crate does not depend on an `owid` crate from crates.io or from git. The
+OWID library is compiled into `fodid` as a private module from the
+`owid-rust` submodule of this repository,
+[51Degrees/owid-rust](https://github.com/51Degrees/owid-rust), a fork that
+follows [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust).
+The script `ci/copy-owid-source.ps1` copies the source into `fodid/src/owid`
+before every build, together with a `NOTICE` naming the exact commit the copy
+came from and the library's own Apache 2.0 `LICENSE`, and the published crate
+carries that copy. No OWID package therefore has to exist on any registry for
+this crate to build, be published or be used.
+
+The OWID types a caller needs are re-exported from `fodid` itself: `Owid`,
+`ParseError`, `ParseStatus`, `SignatureStatus`, `Crypto`, `Version`,
+`ParseDetail`, `OwidError` and `SIGNATURE_LENGTH`. The two types that create
+and sign a new envelope, `Creator` and `Configuration`, are behind the
+`creator` feature.
+
+Working from a clone of the repository, run `git submodule update --init` and
+then `pwsh ./ci/copy-owid-source.ps1` once before `cargo build`. The copied
+directory is ignored by git, and the script can be run again at any time.
 
 ## See also
 
-- [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust) - the
-  OWID envelope library this crate builds on.
+- [51Degrees/owid-rust](https://github.com/51Degrees/owid-rust) - the OWID
+  envelope library compiled into this crate, following
+  [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust).
 - The [51Did inspector](https://51degrees.com/developers/51did-inspector?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=51did-inspector) for a
   visual breakdown of the same byte layout.
 

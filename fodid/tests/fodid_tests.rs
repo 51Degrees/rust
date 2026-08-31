@@ -28,8 +28,7 @@
 //! no value came back, and the status names the reason. Reading never
 //! touches a key, so none of the failure cases here constructs one.
 
-use fodid::{Error, FodId, IdType, ParseStatus, SignatureStatus};
-use owid::{Creator, Crypto, Owid};
+use fodid::{Creator, Crypto, Error, FodId, IdType, Owid, ParseStatus, SignatureStatus};
 
 const TEST_DOMAIN: &str = "51degrees.com";
 
@@ -648,13 +647,12 @@ fn a_cryptographically_invalid_51did_parses_and_then_verifies_as_invalid() {
     // whose payload was altered after signing reads successfully, with the
     // altered value, and only the signature check says it is not genuine.
     let fixture = Fixture::new();
-    let mut bytes = fixture
-        .signed_owid(canonical_payload())
-        .as_byte_array()
-        .unwrap();
-    // The payload is the 37 bytes before the 64 byte signature. Flip a bit
-    // in the hash without changing any length.
-    let hash_start = bytes.len() - owid::SIGNATURE_LENGTH - fodid::HASH_LENGTH;
+    let envelope = fixture.signed_owid(canonical_payload());
+    let signature_length = envelope.signature().len();
+    let mut bytes = envelope.as_byte_array().unwrap();
+    // The payload is the 37 bytes before the signature. Flip a bit in the
+    // hash without changing any length.
+    let hash_start = bytes.len() - signature_length - fodid::HASH_LENGTH;
     bytes[hash_start] ^= 0x01;
 
     let result = FodId::from_byte_array(&bytes);

@@ -74,7 +74,7 @@
 //! is no upper bound on a 51Did in this crate, so a reader built today keeps
 //! reading identifiers issued in a newer, longer shape.
 //!
-//! [`FodId`] [`Deref`](std::ops::Deref)s to the underlying [`owid::Owid`], so
+//! [`FodId`] [`Deref`](std::ops::Deref)s to the underlying [`Owid`], so
 //! a `FodId` can be used directly for all OWID level concerns (domain, date,
 //! payload bytes, signature, base64 round tripping and signature
 //! verification) and adds typed accessors for the payload fields on top.
@@ -86,7 +86,7 @@
 //! that comes back from either is therefore **not necessarily
 //! cryptographically valid**, and the second question, whether its signature
 //! is genuine, is answered separately by
-//! [`verify_status_with_public_key`](owid::Owid::verify_status_with_public_key)
+//! [`verify_status_with_public_key`](Owid::verify_status_with_public_key)
 //! on the parsed value. That answer is a [`SignatureStatus`], and only
 //! [`SignatureStatus::Invalid`] means the identifier should be distrusted.
 //! A key that could not be obtained or read is
@@ -106,7 +106,7 @@
 //!
 //! | Status | Meaning |
 //! |---|---|
-//! | [`Error::Parse`] | The bytes are not an OWID envelope. The OWID reason is kept unchanged inside, read with [`owid::ParseError::status`], for example [`ParseStatus::MissingInput`], [`ParseStatus::InvalidBase64`], [`ParseStatus::UnexpectedEnd`] or [`ParseStatus::ByteCountMismatch`]. |
+//! | [`Error::Parse`] | The bytes are not an OWID envelope. The OWID reason is kept unchanged inside, read with [`ParseError::status`], for example [`ParseStatus::MissingInput`], [`ParseStatus::InvalidBase64`], [`ParseStatus::UnexpectedEnd`] or [`ParseStatus::ByteCountMismatch`]. |
 //! | [`Error::PayloadTooShort`] | The envelope is fine, but the payload cannot hold the 5 byte 51Did header, so the identifier type cannot be read. |
 //! | [`Error::InvalidTypePayloadLength`] | The header was read, and the payload is shorter than the value the identifier type requires (21 bytes in all for random, 37 for probabilistic and hashed email). |
 //!
@@ -168,10 +168,22 @@
 //! }
 //! ```
 //!
-//! ## Migrating from the crates.io `owid` 1.0 surface
+//! ## Migrating from the `owid` 1.0 crate surface
 //!
-//! Callers who reached the OWID envelope through this crate will find three
-//! changes after the hardening of the OWID implementation.
+//! Callers who reached the OWID envelope through this crate will find four
+//! changes after the hardening of the OWID implementation, the first being
+//! that this crate no longer depends on an `owid` crate at all (see "Where
+//! the OWID code comes from" below).
+//!
+//! OWID types are named through `fodid` rather than through an `owid` crate.
+//! A test that signs an envelope turns on the `creator` feature of `fodid`.
+//!
+//! ```text
+//! // Before                                // After
+//! use owid::{Owid, ParseStatus};           use fodid::{Owid, ParseStatus};
+//! use owid::{Creator, Crypto};             use fodid::{Creator, Crypto};
+//!                                          // with features = ["creator"]
+//! ```
 //!
 //! The envelope fields are read through accessors rather than public fields,
 //! so an OWID can no longer be altered after it was read or signed.
@@ -184,9 +196,9 @@
 //! let sig = &fod_id.signature;             let sig = fod_id.signature();
 //! ```
 //!
-//! A failed read is [`Error::Parse`] carrying an [`owid::ParseError`] with a
-//! named status, where it used to be `Error::Owid` carrying an
-//! [`owid::Error`] whose only detail was its message.
+//! A failed read is [`Error::Parse`] carrying a [`ParseError`] with a named
+//! status, where it used to be `Error::Owid` carrying an [`OwidError`] whose
+//! only detail was its message.
 //!
 //! ```text
 //! // Before
@@ -202,8 +214,8 @@
 //! ```
 //!
 //! Code that built a signed envelope in a test used `Creator::sign_bytes`,
-//! which is now [`owid::Creator::create`]. Nothing can construct an
-//! [`owid::Owid`] directly any more, and there is no unsigned state, so a
+//! which is now `Creator::create`. Nothing can construct an
+//! [`Owid`] directly any more, and there is no unsigned state, so a
 //! `FodId` only ever wraps an envelope that came from a successful read or
 //! from a creator that signed it.
 //!
@@ -216,11 +228,31 @@
 //!
 //! - **Signature verification on construction.** Reading a [`FodId`] does not
 //!   check the signature. Call
-//!   [`verify_status_with_public_key`](owid::Owid::verify_status_with_public_key)
-//!   (inherited from [`owid::Owid`] through [`Deref`](std::ops::Deref)) when
+//!   [`verify_status_with_public_key`](Owid::verify_status_with_public_key)
+//!   (inherited from [`Owid`] through [`Deref`](std::ops::Deref)) when
 //!   needed.
 //! - **Construction of new 51Dids.** This is a reader. New 51Dids are issued
-//!   by the 51Degrees cloud, which alone holds the signing key.
+//!   by the 51Degrees cloud, which alone holds the signing key. The `creator`
+//!   feature exists so tests and tools can stand in for the cloud, and is
+//!   off by default.
+//!
+//! ## Where the OWID code comes from
+//!
+//! This crate does not depend on an `owid` crate from crates.io or from git.
+//! The OWID library is compiled into `fodid` as a private module from the
+//! `owid-rust` submodule of the repository,
+//! <https://github.com/51Degrees/owid-rust>, a fork that follows
+//! <https://github.com/SWAN-community/owid-rust>. The script
+//! `ci/copy-owid-source.ps1` copies the source into `fodid/src/owid` before
+//! every build, together with a `NOTICE` naming the exact commit the copy
+//! came from and the library's own Apache 2.0 `LICENSE`, and the published
+//! crate carries that copy. No OWID package therefore has to exist on any
+//! registry for this crate to build, be published or be used, and the OWID
+//! types a caller needs ([`Owid`], [`ParseError`], [`ParseStatus`],
+//! [`SignatureStatus`], [`Crypto`], [`Version`], [`ParseDetail`],
+//! [`OwidError`] and [`SIGNATURE_LENGTH`]) are re-exported from here. The
+//! two types that create and sign a new envelope, `Creator` and
+//! `Configuration`, are behind the `creator` feature.
 
 #![warn(missing_docs)]
 
@@ -233,10 +265,47 @@ pub use fodid::{
     LICENSE_ID_LENGTH, LICENSE_ID_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
 };
 
-// Re-exported so callers can reach the OWID envelope type, the reason a read
-// failed and the outcome of a signature check without adding a direct
-// dependency on the `owid` crate.
-pub use owid::{Owid, ParseError, ParseStatus, SignatureStatus};
+// The OWID library, compiled into this crate as a private module. The source
+// is copied from the owid-rust submodule (https://github.com/51Degrees/owid-rust)
+// into src/owid by ci/copy-owid-source.ps1 before a build, so that no OWID
+// crate has to exist on any registry for this crate to build or be
+// published. The copy is ignored by git, so a checkout that has not run the
+// script fails here with "file not found for module `owid`", and the fix is
+// to run the script.
+//
+// The module is compiled exactly as the library is written, so it carries
+// items this crate never calls, a file named owid.rs that becomes the module
+// owid::owid, the `fetch` and `endpoints` feature gates this crate does not
+// declare (both stay off, so nothing in the module reaches the network, and
+// Cargo.toml names them as expected cfgs), and documentation links between
+// its own items, none of which are faults in this crate.
+#[allow(
+    dead_code,
+    unused_imports,
+    clippy::module_inception,
+    rustdoc::private_intra_doc_links
+)]
+mod owid;
+
+// Re-exported so callers can name every OWID type this crate's public
+// surface returns or accepts, because the OWID module itself is private.
+// `Owid` is the `Deref` target of `FodId`, `ParseError` and `ParseStatus`
+// name the reason a read failed, `SignatureStatus` is the outcome of a
+// signature check, `Crypto` carries the public key `verify_status_with_crypto`
+// checks against, `Version` and `ParseDetail` come back from `Owid::version`
+// and `ParseError::detail`, `SIGNATURE_LENGTH` is the fixed length of the
+// signature every envelope ends with, and `OwidError` is what `Error::Owid`
+// carries.
+pub use owid::{
+    Crypto, Error as OwidError, Owid, ParseDetail, ParseError, ParseStatus, SignatureStatus,
+    Version, SIGNATURE_LENGTH,
+};
+
+// Creating a signed envelope is not something a reader needs, so the OWID
+// creator types are available only with the `creator` feature, which the
+// tests and the parse_and_verify example turn on to stand in for the cloud.
+#[cfg(feature = "creator")]
+pub use owid::{Configuration, Creator};
 
 /// The examples in the README are compiled and run as documentation tests,
 /// so the documented way to use this crate cannot quietly stop working.

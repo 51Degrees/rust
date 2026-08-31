@@ -23,7 +23,7 @@
 use std::ops::Deref;
 use std::str::FromStr;
 
-use owid::Owid;
+use crate::owid::Owid;
 
 use crate::error::{Error, Result};
 
@@ -150,7 +150,7 @@ impl FodId {
     ///
     /// Returns [`Error::Parse`] carrying the OWID status if the string is not
     /// a valid OWID envelope (for example
-    /// [`owid::ParseStatus::InvalidBase64`]), [`Error::PayloadTooShort`] if
+    /// [`ParseStatus::InvalidBase64`](crate::ParseStatus::InvalidBase64)), [`Error::PayloadTooShort`] if
     /// the payload cannot hold the 51Did header, or
     /// [`Error::InvalidTypePayloadLength`] if the payload is shorter than
     /// the minimum for its identifier type.
