@@ -42,15 +42,15 @@
 //!   holding the version, domain, date, payload and signature. It changes
 //!   byte for byte every time the cloud issues one, even for the same inputs,
 //!   because the date and signature change with each call.
-//! - The **value** is the part of the envelope that is stable and comparable.
-//!   It is the [`FodId::hash`] field inside the payload. Two 51Dids for the
-//!   same inputs share the same value even though their envelopes differ.
-//!   Compare values, never envelopes.
+//! - The **match key** is the part of the envelope that is stable and
+//!   comparable. It is the [`FodId::match_key`] field inside the payload.
+//!   Two 51Dids for the same inputs share the same match key even though
+//!   their envelopes differ. Compare match keys, never envelopes.
 //!
 //! ## Identifier types
 //!
 //! Bits 6-7 of the flags byte select the [`IdType`], which determines the
-//! length and meaning of the value:
+//! length and meaning of the match key:
 //!
 //! - [`IdType::Probabilistic`] (the default; legacy identifiers decode as this)
 //!   and [`IdType::HashedEmail`] carry a 32-byte SHA-256.
@@ -139,7 +139,7 @@
 //! let flags: u8 = fod_id.flags();
 //! let id_type = fod_id.id_type();
 //! let license_id: u32 = fod_id.license_id();
-//! let value: &[u8] = fod_id.hash(); // the value to compare (32 or 16 bytes)
+//! let match_key: &[u8] = fod_id.match_key(); // the match key to compare (32 or 16 bytes)
 //!
 //! // Inherited OWID level fields and operations, available through Deref.
 //! let domain = fod_id.domain();
@@ -148,7 +148,7 @@
 //! // Verifying is the second question, asked of the parsed value.
 //! let status = fod_id.verify_status_with_public_key(public_pem, &[]);
 //! let genuine = status == SignatureStatus::Valid;
-//! # let _ = (flags, id_type, license_id, value, domain, round_trip, genuine);
+//! # let _ = (flags, id_type, license_id, match_key, domain, round_trip, genuine);
 //! # Ok(())
 //! # }
 //! ```

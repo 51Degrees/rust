@@ -192,8 +192,17 @@ fn constructor_from_base64_unpacks_all_three_fields() {
 
     assert_eq!(CANONICAL_FLAGS, fod_id.flags());
     assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id());
-    assert_eq!(&canonical_hash(), fod_id.hash());
+    assert_eq!(&canonical_hash(), fod_id.match_key());
     assert_eq!(TEST_DOMAIN, fod_id.domain());
+}
+
+#[test]
+#[allow(deprecated)]
+fn obsolete_hash_returns_match_key() {
+    let fixture = Fixture::new();
+    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload())).unwrap();
+
+    assert_eq!(fod_id.match_key(), fod_id.hash());
 }
 
 #[test]
@@ -209,7 +218,7 @@ fn constructor_from_bytes_unpacks_all_three_fields() {
 
     assert_eq!(CANONICAL_FLAGS, fod_id.flags());
     assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id());
-    assert_eq!(&canonical_hash(), fod_id.hash());
+    assert_eq!(&canonical_hash(), fod_id.match_key());
     assert_eq!(TEST_DOMAIN, fod_id.domain());
 }
 
@@ -224,7 +233,7 @@ fn constructor_from_owid_unpacks_all_three_fields() {
 
     assert_eq!(CANONICAL_FLAGS, fod_id.flags());
     assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id());
-    assert_eq!(&canonical_hash(), fod_id.hash());
+    assert_eq!(&canonical_hash(), fod_id.match_key());
     assert_eq!(expected.domain(), fod_id.domain());
     assert_eq!(expected.date(), fod_id.date());
     assert_eq!(expected.version(), fod_id.version());
@@ -298,7 +307,7 @@ fn hash_is_independent_of_payload() {
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload())).unwrap();
 
     // The hash is an owned copy; the payload it was unpacked from is intact.
-    assert_eq!(&canonical_hash(), fod_id.hash());
+    assert_eq!(&canonical_hash(), fod_id.match_key());
     assert_eq!(canonical_hash()[0], fod_id.payload()[fodid::HASH_OFFSET]);
     assert_eq!(
         canonical_hash()[fodid::HASH_LENGTH - 1],
@@ -321,7 +330,7 @@ fn longer_self_hosted_creator_domain_is_accepted() {
     let fod_id = assert_parsed(&result);
 
     assert_eq!(fod_id.domain(), domain);
-    assert_eq!(&canonical_hash(), fod_id.hash());
+    assert_eq!(&canonical_hash(), fod_id.match_key());
     assert_eq!(
         fod_id.verify_status_with_public_key(&fixture.public_pem, &[]),
         SignatureStatus::Valid
@@ -346,8 +355,12 @@ fn longer_payload_is_accepted_and_the_value_still_read() {
 
         assert_eq!(CANONICAL_FLAGS, fod_id.flags(), "extra {extra}");
         assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id(), "extra {extra}");
-        assert_eq!(&canonical_hash(), fod_id.hash(), "extra {extra}");
-        assert_eq!(fodid::HASH_LENGTH, fod_id.hash().len(), "extra {extra}");
+        assert_eq!(&canonical_hash(), fod_id.match_key(), "extra {extra}");
+        assert_eq!(
+            fodid::HASH_LENGTH,
+            fod_id.match_key().len(),
+            "extra {extra}"
+        );
         assert_eq!(
             fod_id.payload(),
             expected_payload.as_slice(),
@@ -376,8 +389,8 @@ fn longer_payload_is_accepted_for_every_identifier_type() {
         let result = FodId::from_base64(&fixture.signed_owid_base64(payload));
         let fod_id = assert_parsed(&result);
         assert_eq!(fod_id.id_type(), id_type);
-        assert_eq!(fod_id.hash().len(), value_len, "{id_type:?}");
-        assert_eq!(fod_id.hash()[0], 0x50, "{id_type:?}");
+        assert_eq!(fod_id.match_key().len(), value_len, "{id_type:?}");
+        assert_eq!(fod_id.match_key()[0], 0x50, "{id_type:?}");
         assert_eq!(
             fod_id.payload().len(),
             fodid::HEADER_LENGTH + value_len + 40
@@ -657,7 +670,7 @@ fn a_cryptographically_invalid_51did_parses_and_then_verifies_as_invalid() {
 
     let result = FodId::from_byte_array(&bytes);
     let fod_id = assert_parsed(&result);
-    assert_ne!(fod_id.hash(), &canonical_hash());
+    assert_ne!(fod_id.match_key(), &canonical_hash());
 
     assert_eq!(
         fod_id.verify_status_with_public_key(&fixture.public_pem, &[]),
@@ -714,7 +727,7 @@ fn base64_roundtrip_preserves_all_fields() {
 
     assert_eq!(fod_id1.flags(), fod_id2.flags());
     assert_eq!(fod_id1.license_id(), fod_id2.license_id());
-    assert_eq!(fod_id1.hash(), fod_id2.hash());
+    assert_eq!(fod_id1.match_key(), fod_id2.match_key());
     assert_eq!(fod_id1.domain(), fod_id2.domain());
     assert_eq!(fod_id1.owid(), fod_id2.owid());
 }
@@ -736,7 +749,7 @@ fn id_type_decodes_from_flag_bits_6_and_7() {
         let payload = typed_payload(flags, value_len);
         let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
         assert_eq!(fod_id.id_type(), expected_type, "flags {flags:#010b}");
-        assert_eq!(fod_id.hash().len(), value_len);
+        assert_eq!(fod_id.match_key().len(), value_len);
         assert_eq!(fod_id.license_id(), CANONICAL_LICENSE_ID);
     }
 }
@@ -748,9 +761,9 @@ fn random_identifier_carries_a_16_byte_guid() {
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
 
     assert_eq!(fod_id.id_type(), IdType::Random);
-    assert_eq!(fod_id.hash().len(), fodid::GUID_LENGTH);
-    assert_eq!(fod_id.hash()[0], 0x50);
-    assert_eq!(fod_id.hash()[fodid::GUID_LENGTH - 1], 0x50 + 15);
+    assert_eq!(fod_id.match_key().len(), fodid::GUID_LENGTH);
+    assert_eq!(fod_id.match_key()[0], 0x50);
+    assert_eq!(fod_id.match_key()[fodid::GUID_LENGTH - 1], 0x50 + 15);
 }
 
 #[test]
@@ -761,13 +774,13 @@ fn reserved_type_exposes_remaining_payload_best_effort() {
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
 
     assert_eq!(fod_id.id_type(), IdType::Reserved);
-    assert_eq!(fod_id.hash().len(), 8);
-    assert_eq!(fod_id.hash()[0], 0x50);
+    assert_eq!(fod_id.match_key().len(), 8);
+    assert_eq!(fod_id.match_key()[0], 0x50);
 
     // A reserved payload holding only the header has an empty value, which
     // is the documented best effort answer rather than a failure.
     let payload = typed_payload(RESERVED_FLAGS, 0);
     let result = FodId::from_base64(&fixture.signed_owid_base64(payload));
     let fod_id = assert_parsed(&result);
-    assert!(fod_id.hash().is_empty());
+    assert!(fod_id.match_key().is_empty());
 }

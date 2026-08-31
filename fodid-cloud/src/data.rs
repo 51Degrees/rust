@@ -155,7 +155,7 @@ pub trait FodIdData: AspectData {
     ///
     /// This value is unique across all callers observing the same device and
     /// network. Store or forward it unchanged; compare two identifiers by their
-    /// parsed [`FodId::hash`], not by the envelope string, which is reissued
+    /// parsed [`FodId::match_key`], not by the envelope string, which is reissued
     /// (with a fresh date and signature) on every call.
     fn id_prob_global(&self) -> AspectPropertyValue<String>;
 
@@ -167,7 +167,7 @@ pub trait FodIdData: AspectData {
     fn id_prob_lic(&self) -> AspectPropertyValue<String>;
 
     /// The globally-scoped 51Did parsed into a [`FodId`], unpacking the OWID
-    /// envelope and its payload (flags, license id, hash).
+    /// envelope and its payload (flags, license id, match key).
     ///
     /// Returns a no-value if the identifier was absent, or if the value could
     /// not be read as a 51Did (the no-value message then carries the reason
@@ -190,7 +190,7 @@ pub trait FodIdData: AspectData {
     fn id_rand_lic(&self) -> AspectPropertyValue<String>;
 
     /// The globally-scoped random 51Did parsed into a [`FodId`]. The parsed
-    /// value carries a 16-byte GUID rather than a 32-byte hash.
+    /// value carries a 16-byte GUID match key rather than a 32-byte SHA-256.
     fn id_rand_global_fod_id(&self) -> AspectPropertyValue<FodId>;
 
     /// The license-scoped random 51Did parsed into a [`FodId`].

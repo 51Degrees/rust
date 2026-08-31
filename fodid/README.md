@@ -33,15 +33,16 @@ A 51Did is described at three levels, and this crate keeps them distinct.
   the version, domain, date, payload and signature. It changes byte for byte
   every time the cloud issues one, even for the same inputs, because the date
   and signature change with each call.
-- The **value** is the part of the envelope that is stable and comparable. It
-  is the payload bytes after the flags and license fields, read through
-  `FodId::hash`. Two 51Dids for the same inputs share the same value even
-  though their envelopes differ. Compare values, never envelopes.
+- The **match key** is the part of the envelope that is stable and
+  comparable. It is the payload bytes after the flags and license fields,
+  read through `FodId::match_key`. Two 51Dids for the same inputs share the
+  same match key even though their envelopes differ. Compare match keys,
+  never envelopes.
 
 ## Identifier types
 
 Bits 6-7 of the flags byte select the `IdType`, which determines the length
-and meaning of the value:
+and meaning of the match key:
 
 - `IdType::Probabilistic` (the default; legacy identifiers decode as this)
   and `IdType::HashedEmail` carry a 32-byte SHA-256.
@@ -86,7 +87,7 @@ fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::
 
     let flags = fod_id.flags();          // u8
     let license_id = fod_id.license_id(); // u32
-    let hash = fod_id.hash();            // the value bytes (SHA-256 or GUID)
+    let match_key = fod_id.match_key();  // the match key bytes (SHA-256 or GUID)
 
     // Inherited OWID level fields and operations, available through Deref.
     let domain = fod_id.domain();
@@ -96,7 +97,7 @@ fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::
     let genuine = fod_id.verify_status_with_public_key(public_pem, &[])
         == SignatureStatus::Valid;
 
-    let _ = (flags, license_id, hash, domain, round_trip, genuine);
+    let _ = (flags, license_id, match_key, domain, round_trip, genuine);
     Ok(())
 }
 ```
@@ -148,9 +149,9 @@ format.
 
 Two 51Dids issued for the same device + IP + usage differ at the byte level
 because the envelope embeds a fresh timestamp and signature on each call. The
-byte-level difference is in the **envelope**. The **value** carried inside is
-stable. To decide whether two 51Dids refer to the same browser instance,
-compare the values, never the full base64 envelopes.
+byte-level difference is in the **envelope**. The **match key** carried inside
+is stable. To decide whether two 51Dids refer to the same browser instance,
+compare the match keys, never the full base64 envelopes.
 
 ```rust
 use fodid::FodId;
@@ -160,12 +161,12 @@ fn same_browser(idprobglobal_a: &str, idprobglobal_b: &str) -> Result<bool, fodi
     let b = FodId::from_base64(idprobglobal_b)?;
 
     // a.date() and a.signature() differ from b's on every issue, because the
-    // envelope is fresh each time. The value is what stays the same.
-    Ok(a.hash() == b.hash())
+    // envelope is fresh each time. The match key is what stays the same.
+    Ok(a.match_key() == b.match_key())
 }
 ```
 
-Use `hash()` (the value, a 32-byte SHA-256 or 16-byte GUID) as the cache /
+Use `match_key()` (a 32-byte SHA-256 or 16-byte GUID) as the cache /
 dedup key.
 
 ## Migrating from the `owid` 1.0 crate surface

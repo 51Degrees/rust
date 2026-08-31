@@ -68,8 +68,8 @@ pub enum Error {
         /// The number of payload bytes actually present.
         actual: usize,
     },
-    /// The header was read, and the payload is shorter than the value the
-    /// identifier type requires after the header, being 16 GUID bytes for
+    /// The header was read, and the payload is shorter than the match key
+    /// the identifier type requires after the header, being 16 GUID bytes for
     /// [`IdType::Random`] and 32 hash bytes for [`IdType::Probabilistic`]
     /// and [`IdType::HashedEmail`].
     InvalidTypePayloadLength {

@@ -36,12 +36,12 @@ pub const LICENSE_ID_OFFSET: usize = 1;
 /// Byte length of the License Id field.
 pub const LICENSE_ID_LENGTH: usize = 4;
 
-/// Byte offset of the value field within the payload (the byte after the
+/// Byte offset of the match key within the payload (the byte after the
 /// header). For a probabilistic or hashed-email identifier this is the start of
 /// the SHA-256 hash; for a random identifier it is the start of the GUID.
 pub const HASH_OFFSET: usize = 5;
 
-/// Byte length of the value carried by probabilistic and hashed-email
+/// Byte length of the match key carried by probabilistic and hashed-email
 /// identifiers (a SHA-256 hash).
 pub const HASH_LENGTH: usize = 32;
 
@@ -50,7 +50,7 @@ pub const HASH_LENGTH: usize = 32;
 /// [`Error::PayloadTooShort`].
 pub const HEADER_LENGTH: usize = HASH_OFFSET;
 
-/// Byte length of the GUID value carried by [`IdType::Random`] identifiers.
+/// Byte length of the GUID match key carried by [`IdType::Random`] identifiers.
 pub const GUID_LENGTH: usize = 16;
 
 /// Minimum byte length of a [`IdType::Random`] 51Did payload (header + GUID).
@@ -102,21 +102,20 @@ impl IdType {
 /// The payload starts with a fixed header: a 1-byte usage [`flags`](FodId::flags)
 /// bit mask and a 4-byte little endian [`license_id`](FodId::license_id). Bits
 /// 6-7 of the flags select the [`id_type`](FodId::id_type), which in turn
-/// determines the length and meaning of the value bytes that follow:
+/// determines the length and meaning of the match key bytes that follow:
 ///
 /// | Offset | Length | Field                                              |
 /// |-------:|-------:|----------------------------------------------------|
 /// |      0 |      1 | Flags (bits 0-2 usage, bits 6-7 type)              |
 /// |      1 |      4 | LicenseId (`u32` little endian)                    |
-/// |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
-/// |      5 |     16 | Value: GUID (Random)                               |
+/// |      5 |     32 | Match key: SHA-256 (Probabilistic, HashedEmail)    |
+/// |      5 |     16 | Match key: GUID (Random)                           |
 ///
-/// The value bytes are read through [`hash`](FodId::hash). The name is kept for
-/// continuity (a probabilistic value is a SHA-256), but for a [`IdType::Random`]
-/// identifier the value is a GUID, not a hash.
+/// The match key is read through [`match_key`](FodId::match_key). For a
+/// [`IdType::Random`] identifier it is a GUID, otherwise a SHA-256.
 ///
 /// The lengths in the table are minimums. A payload may carry more bytes
-/// after the value, which this reader accepts and leaves in place, reachable
+/// after the match key, which this reader accepts and leaves in place, reachable
 /// through [`payload`](Owid::payload). There is no upper bound in this crate.
 ///
 /// `FodId` [`Deref`]s to [`Owid`], so the OWID level fields and operations
@@ -133,7 +132,7 @@ pub struct FodId {
     owid: Owid,
     flags: u8,
     license_id: u32,
-    value: Vec<u8>,
+    match_key: Vec<u8>,
 }
 
 impl FodId {
@@ -218,12 +217,12 @@ impl FodId {
                 actual: payload.len(),
             });
         }
-        let value = payload[HASH_OFFSET..HASH_OFFSET + value_length].to_vec();
+        let match_key = payload[HASH_OFFSET..HASH_OFFSET + value_length].to_vec();
         Ok(FodId {
             owid,
             flags,
             license_id,
-            value,
+            match_key,
         })
     }
 
@@ -244,15 +243,23 @@ impl FodId {
         self.license_id
     }
 
-    /// The value bytes from the payload: a 32-byte SHA-256 for
+    /// The match key from the payload: a 32-byte SHA-256 for
     /// [`IdType::Probabilistic`] and [`IdType::HashedEmail`] identifiers, 16 GUID
     /// bytes for [`IdType::Random`] ones.
     ///
     /// This is the stable field for comparing two 51Dids: two identifiers for
-    /// the same inputs share the same value even though their wrapping envelopes
-    /// (date, signature) differ on every issue. Compare values, never envelopes.
+    /// the same inputs share the same match key even though their wrapping
+    /// envelopes (date, signature) differ on every issue. Compare match keys,
+    /// never envelopes.
+    pub fn match_key(&self) -> &[u8] {
+        &self.match_key
+    }
+
+    /// Obsolete alias for [`match_key`](FodId::match_key). The stable,
+    /// comparable part of a 51Did is now called the match key.
+    #[deprecated(note = "renamed to match_key")]
     pub fn hash(&self) -> &[u8] {
-        &self.value
+        self.match_key()
     }
 
     /// A reference to the underlying OWID envelope.
