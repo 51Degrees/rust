@@ -200,8 +200,7 @@ fn constructor_from_base64_unpacks_all_three_fields() {
 #[allow(deprecated)]
 fn obsolete_hash_returns_match_key() {
     let fixture = Fixture::new();
-    let fod_id =
-        FodId::from_base64(&fixture.signed_owid_base64(canonical_payload())).unwrap();
+    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload())).unwrap();
 
     assert_eq!(fod_id.match_key(), fod_id.hash());
 }
@@ -357,7 +356,11 @@ fn longer_payload_is_accepted_and_the_value_still_read() {
         assert_eq!(CANONICAL_FLAGS, fod_id.flags(), "extra {extra}");
         assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id(), "extra {extra}");
         assert_eq!(&canonical_hash(), fod_id.match_key(), "extra {extra}");
-        assert_eq!(fodid::HASH_LENGTH, fod_id.match_key().len(), "extra {extra}");
+        assert_eq!(
+            fodid::HASH_LENGTH,
+            fod_id.match_key().len(),
+            "extra {extra}"
+        );
         assert_eq!(
             fod_id.payload(),
             expected_payload.as_slice(),

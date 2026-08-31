@@ -171,7 +171,11 @@ fn assert_valid_51did(label: &str, base64: &str) {
         "{label}: hash should survive a base64 round trip"
     );
 
-    let hash_hex: String = fod_id.match_key().iter().map(|b| format!("{b:02x}")).collect();
+    let hash_hex: String = fod_id
+        .match_key()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     println!(
         "{label}: domain={} flags={:#04x} license_id={:#010x} hash={hash_hex}",
         fod_id.domain(),
