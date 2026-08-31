@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "fiftyone-fodid-cloud"
-version = "4.5.2"
+version = "4.5.3"
 dependencies = [
  "fiftyone-cloud-request-engine",
  "fiftyone-pipeline-core",
@@ -765,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "fodid"
-version = "4.5.2"
+version = "4.5.3"
 dependencies = [
  "base64",
  "chrono",
