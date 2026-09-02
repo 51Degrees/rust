@@ -144,10 +144,10 @@ fn assert_valid_51did(label: &str, base64: &str) {
         .unwrap_or_else(|e| panic!("{label} should parse as a 51Did: {e}"));
 
     // A 51Did wraps a payload of at least PAYLOAD_LENGTH bytes carrying a
-    // HASH_LENGTH byte probabilistic value, inside a domain bearing envelope.
+    // MATCH_KEY_LENGTH byte probabilistic value, inside a domain bearing envelope.
     assert_eq!(
         fod_id.match_key().len(),
-        fodid::HASH_LENGTH,
+        fodid::MATCH_KEY_LENGTH,
         "{label}: hash length"
     );
     assert!(

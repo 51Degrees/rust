@@ -39,16 +39,26 @@ pub const LICENSE_ID_LENGTH: usize = 4;
 /// Byte offset of the match key within the payload (the byte after the
 /// header). For a probabilistic or hashed-email identifier this is the start of
 /// the SHA-256 hash; for a random identifier it is the start of the GUID.
-pub const HASH_OFFSET: usize = 5;
+pub const MATCH_KEY_OFFSET: usize = 5;
 
 /// Byte length of the match key carried by probabilistic and hashed-email
 /// identifiers (a SHA-256 hash).
-pub const HASH_LENGTH: usize = 32;
+pub const MATCH_KEY_LENGTH: usize = 32;
+
+/// Obsolete alias for [`MATCH_KEY_OFFSET`]. The stable, comparable part of a
+/// 51Did is now called the match key.
+#[deprecated(note = "renamed to MATCH_KEY_OFFSET")]
+pub const HASH_OFFSET: usize = MATCH_KEY_OFFSET;
+
+/// Obsolete alias for [`MATCH_KEY_LENGTH`]. The stable, comparable part of a
+/// 51Did is now called the match key.
+#[deprecated(note = "renamed to MATCH_KEY_LENGTH")]
+pub const HASH_LENGTH: usize = MATCH_KEY_LENGTH;
 
 /// Byte length of the payload header (Flags + LicenseId) that is common to every
 /// identifier type. A payload shorter than this is
 /// [`Error::PayloadTooShort`].
-pub const HEADER_LENGTH: usize = HASH_OFFSET;
+pub const HEADER_LENGTH: usize = MATCH_KEY_OFFSET;
 
 /// Byte length of the GUID match key carried by [`IdType::Random`] identifiers.
 pub const GUID_LENGTH: usize = 16;
@@ -62,7 +72,7 @@ pub const RANDOM_PAYLOAD_LENGTH: usize = HEADER_LENGTH + GUID_LENGTH;
 /// 51Did payload (header + hash). A payload of either type shorter than this
 /// is [`Error::InvalidTypePayloadLength`]. There is no maximum. Random
 /// payloads have a shorter minimum, see [`RANDOM_PAYLOAD_LENGTH`].
-pub const PAYLOAD_LENGTH: usize = HASH_OFFSET + HASH_LENGTH;
+pub const PAYLOAD_LENGTH: usize = MATCH_KEY_OFFSET + MATCH_KEY_LENGTH;
 
 /// The identifier type carried in bits 6-7 of the 51Did flags byte.
 ///
@@ -177,11 +187,11 @@ impl FodId {
     /// This is the one place the 51Did payload rules live. The payload must
     /// hold the [`HEADER_LENGTH`] byte header before the type can be read,
     /// and then the value length that type requires ([`GUID_LENGTH`] for
-    /// [`IdType::Random`], [`HASH_LENGTH`] for [`IdType::Probabilistic`] and
-    /// [`IdType::HashedEmail`]). A [`IdType::Reserved`] payload has no
-    /// defined value length and is read best effort. Bytes after the value
-    /// are accepted and left in the payload, because a longer payload is a
-    /// newer shape rather than a fault.
+    /// [`IdType::Random`], [`MATCH_KEY_LENGTH`] for
+    /// [`IdType::Probabilistic`] and [`IdType::HashedEmail`]). A
+    /// [`IdType::Reserved`] payload has no defined value length and is read
+    /// best effort. Bytes after the value are accepted and left in the
+    /// payload, because a longer payload is a newer shape rather than a fault.
     ///
     /// # Errors
     ///
@@ -208,7 +218,7 @@ impl FodId {
             // A reserved type has no defined value length yet: expose whatever
             // payload bytes follow the header, best effort.
             IdType::Reserved => payload.len() - HEADER_LENGTH,
-            IdType::Probabilistic | IdType::HashedEmail => HASH_LENGTH,
+            IdType::Probabilistic | IdType::HashedEmail => MATCH_KEY_LENGTH,
         };
         if payload.len() < HEADER_LENGTH + value_length {
             return Err(Error::InvalidTypePayloadLength {
@@ -217,7 +227,7 @@ impl FodId {
                 actual: payload.len(),
             });
         }
-        let match_key = payload[HASH_OFFSET..HASH_OFFSET + value_length].to_vec();
+        let match_key = payload[MATCH_KEY_OFFSET..MATCH_KEY_OFFSET + value_length].to_vec();
         Ok(FodId {
             owid,
             flags,

@@ -261,9 +261,15 @@ mod fodid;
 
 pub use error::{Error, Result};
 pub use fodid::{
-    FodId, IdType, FLAGS_OFFSET, GUID_LENGTH, HASH_LENGTH, HASH_OFFSET, HEADER_LENGTH,
-    LICENSE_ID_LENGTH, LICENSE_ID_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
+    FodId, IdType, FLAGS_OFFSET, GUID_LENGTH, HEADER_LENGTH, LICENSE_ID_LENGTH, LICENSE_ID_OFFSET,
+    MATCH_KEY_LENGTH, MATCH_KEY_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
 };
+
+// The obsolete names for the match key constants, re-exported so callers
+// written against the earlier releases still compile. Using either one raises
+// a deprecation warning that names the replacement.
+#[allow(deprecated)]
+pub use fodid::{HASH_LENGTH, HASH_OFFSET};
 
 // The OWID library, compiled into this crate as a private module. The source
 // is copied from the owid-rust submodule (https://github.com/51Degrees/owid-rust)
