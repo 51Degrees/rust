@@ -44,8 +44,8 @@ const HASHED_EMAIL_FLAGS: u8 = 0b1000_0011;
 const RESERVED_FLAGS: u8 = 0b1100_0000;
 
 /// The stable 32-byte hash used across the field-level assertions: 0x20..0x3F.
-fn canonical_hash() -> [u8; fodid::HASH_LENGTH] {
-    let mut hash = [0u8; fodid::HASH_LENGTH];
+fn canonical_hash() -> [u8; fodid::MATCH_KEY_LENGTH] {
+    let mut hash = [0u8; fodid::MATCH_KEY_LENGTH];
     for (i, b) in hash.iter_mut().enumerate() {
         *b = 0x20 + i as u8;
     }
@@ -59,7 +59,7 @@ fn canonical_payload() -> Vec<u8> {
     payload[fodid::FLAGS_OFFSET] = CANONICAL_FLAGS;
     payload[fodid::LICENSE_ID_OFFSET..fodid::LICENSE_ID_OFFSET + fodid::LICENSE_ID_LENGTH]
         .copy_from_slice(&CANONICAL_LICENSE_ID.to_le_bytes());
-    payload[fodid::HASH_OFFSET..fodid::HASH_OFFSET + fodid::HASH_LENGTH]
+    payload[fodid::MATCH_KEY_OFFSET..fodid::MATCH_KEY_OFFSET + fodid::MATCH_KEY_LENGTH]
         .copy_from_slice(&canonical_hash());
     payload
 }
@@ -71,7 +71,7 @@ fn typed_payload(flags: u8, value_len: usize) -> Vec<u8> {
     payload[fodid::FLAGS_OFFSET] = flags;
     payload[fodid::LICENSE_ID_OFFSET..fodid::LICENSE_ID_OFFSET + fodid::LICENSE_ID_LENGTH]
         .copy_from_slice(&CANONICAL_LICENSE_ID.to_le_bytes());
-    for (i, b) in payload[fodid::HASH_OFFSET..].iter_mut().enumerate() {
+    for (i, b) in payload[fodid::MATCH_KEY_OFFSET..].iter_mut().enumerate() {
         *b = 0x50 + i as u8;
     }
     payload
@@ -159,12 +159,12 @@ fn assert_parsed(result: &fodid::Result<FodId>) -> &FodId {
 #[test]
 fn constants_are_internally_consistent() {
     assert_eq!(
-        fodid::HASH_OFFSET + fodid::HASH_LENGTH,
+        fodid::MATCH_KEY_OFFSET + fodid::MATCH_KEY_LENGTH,
         fodid::PAYLOAD_LENGTH
     );
     assert_eq!(
         fodid::LICENSE_ID_OFFSET + fodid::LICENSE_ID_LENGTH,
-        fodid::HASH_OFFSET
+        fodid::MATCH_KEY_OFFSET
     );
     assert_eq!(
         fodid::HEADER_LENGTH + fodid::GUID_LENGTH,
@@ -308,10 +308,13 @@ fn hash_is_independent_of_payload() {
 
     // The hash is an owned copy; the payload it was unpacked from is intact.
     assert_eq!(&canonical_hash(), fod_id.match_key());
-    assert_eq!(canonical_hash()[0], fod_id.payload()[fodid::HASH_OFFSET]);
     assert_eq!(
-        canonical_hash()[fodid::HASH_LENGTH - 1],
-        fod_id.payload()[fodid::HASH_OFFSET + fodid::HASH_LENGTH - 1]
+        canonical_hash()[0],
+        fod_id.payload()[fodid::MATCH_KEY_OFFSET]
+    );
+    assert_eq!(
+        canonical_hash()[fodid::MATCH_KEY_LENGTH - 1],
+        fod_id.payload()[fodid::MATCH_KEY_OFFSET + fodid::MATCH_KEY_LENGTH - 1]
     );
 }
 
@@ -357,7 +360,7 @@ fn longer_payload_is_accepted_and_the_value_still_read() {
         assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id(), "extra {extra}");
         assert_eq!(&canonical_hash(), fod_id.match_key(), "extra {extra}");
         assert_eq!(
-            fodid::HASH_LENGTH,
+            fodid::MATCH_KEY_LENGTH,
             fod_id.match_key().len(),
             "extra {extra}"
         );
@@ -379,10 +382,14 @@ fn longer_payload_is_accepted_for_every_identifier_type() {
         (
             PROBABILISTIC_FLAGS,
             IdType::Probabilistic,
-            fodid::HASH_LENGTH,
+            fodid::MATCH_KEY_LENGTH,
         ),
         (RANDOM_FLAGS, IdType::Random, fodid::GUID_LENGTH),
-        (HASHED_EMAIL_FLAGS, IdType::HashedEmail, fodid::HASH_LENGTH),
+        (
+            HASHED_EMAIL_FLAGS,
+            IdType::HashedEmail,
+            fodid::MATCH_KEY_LENGTH,
+        ),
     ];
     for (flags, id_type, value_len) in cases {
         let payload = typed_payload(flags, value_len + 40);
@@ -402,8 +409,10 @@ fn longer_payload_is_accepted_for_every_identifier_type() {
 fn probabilistic_payload_one_byte_short_is_invalid_type_payload_length() {
     let fixture = Fixture::new();
     // 36 bytes, one short of the 37 a probabilistic identifier needs.
-    let base64 =
-        fixture.signed_owid_base64(typed_payload(PROBABILISTIC_FLAGS, fodid::HASH_LENGTH - 1));
+    let base64 = fixture.signed_owid_base64(typed_payload(
+        PROBABILISTIC_FLAGS,
+        fodid::MATCH_KEY_LENGTH - 1,
+    ));
 
     let result = FodId::from_base64(&base64);
     assert_failed(&result, Status::InvalidTypePayloadLength);
@@ -420,8 +429,10 @@ fn probabilistic_payload_one_byte_short_is_invalid_type_payload_length() {
 #[test]
 fn hashed_email_payload_one_byte_short_is_invalid_type_payload_length() {
     let fixture = Fixture::new();
-    let base64 =
-        fixture.signed_owid_base64(typed_payload(HASHED_EMAIL_FLAGS, fodid::HASH_LENGTH - 1));
+    let base64 = fixture.signed_owid_base64(typed_payload(
+        HASHED_EMAIL_FLAGS,
+        fodid::MATCH_KEY_LENGTH - 1,
+    ));
 
     let result = FodId::from_base64(&base64);
     assert_failed(&result, Status::InvalidTypePayloadLength);
@@ -704,7 +715,7 @@ fn a_cryptographically_invalid_51did_parses_and_then_verifies_as_invalid() {
     let mut bytes = envelope.as_byte_array().unwrap();
     // The payload is the 37 bytes before the signature. Flip a bit in the
     // hash without changing any length.
-    let hash_start = bytes.len() - signature_length - fodid::HASH_LENGTH;
+    let hash_start = bytes.len() - signature_length - fodid::MATCH_KEY_LENGTH;
     bytes[hash_start] ^= 0x01;
 
     let result = FodId::from_byte_array(&bytes);
@@ -779,10 +790,14 @@ fn id_type_decodes_from_flag_bits_6_and_7() {
         (
             PROBABILISTIC_FLAGS,
             IdType::Probabilistic,
-            fodid::HASH_LENGTH,
+            fodid::MATCH_KEY_LENGTH,
         ),
         (RANDOM_FLAGS, IdType::Random, fodid::GUID_LENGTH),
-        (HASHED_EMAIL_FLAGS, IdType::HashedEmail, fodid::HASH_LENGTH),
+        (
+            HASHED_EMAIL_FLAGS,
+            IdType::HashedEmail,
+            fodid::MATCH_KEY_LENGTH,
+        ),
     ];
     for (flags, expected_type, value_len) in cases {
         let payload = typed_payload(flags, value_len);
