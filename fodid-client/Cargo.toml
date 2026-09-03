@@ -1,0 +1,43 @@
+[package]
+name = "fodid-client"
+version = "4.5.0"
+description = "Client for the 51Did (51Degrees Identifier) two-step verification: fetches and caches the published signing keys, verifies a 51Did signature offline or through the cloud, and redeems the sealed creator context result a browser relays, with the typed outcomes the other 51Did packages report."
+keywords = ["51degrees", "fodid", "51did", "identifier", "owid"]
+categories = ["web-programming::http-client", "cryptography"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+# Compile the built-in blocking reqwest transport (ReqwestClient). Off by
+# default so the crate builds without reqwest, and so for wasm32-wasip1 where
+# an edge runtime supplies its own DidHttpClient. Native consumers enable this
+# to use the built-in client.
+reqwest-client = ["dep:reqwest"]
+
+[dependencies]
+# The 51Did reader, which also carries the OWID envelope types the offline
+# signature check verifies through.
+fodid = { path = "../fodid", version = "4.5" }
+chrono.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# Blocking HTTP client for the built-in transport. rustls avoids a system
+# OpenSSL dependency on Windows, and the form feature carries the url-encoded
+# redeem body. Optional and gated behind the `reqwest-client` feature, because
+# reqwest::blocking needs native sockets and threads and so does not build for
+# targets such as wasm32-wasip1, exactly as in the cloud request engine.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "form"], optional = true }
+
+[dev-dependencies]
+# The tests create a real signed 51Did to stand in for the cloud, which needs
+# the OWID creator types fodid exposes under its creator feature.
+fodid = { path = "../fodid", version = "4.5", features = ["creator"] }
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled, so the
+# built-in transport is documented alongside the trait it implements.
+all-features = true
