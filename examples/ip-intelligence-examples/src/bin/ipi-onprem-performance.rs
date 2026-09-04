@@ -56,13 +56,21 @@ pub struct ExampleOptions {
     pub max_ips: usize,
     /// How many times each thread loops over the loaded IP set.
     pub iterations: usize,
+    /// Where to write the results JSON the nightly performance graphs read, if
+    /// anywhere. CI passes `--json-output <path>`; an interactive run leaves it
+    /// unset and only reads the printed figures.
+    pub json_output: Option<std::path::PathBuf>,
 }
 
 impl ExampleOptions {
     /// Default options, using the best-available loadable data-file tier and a
     /// thread count taken from the available parallelism.
     pub fn from_env() -> Option<Self> {
-        Self::for_tier(examples_shared::IpiTier::BestAvailable, 500, 4)
+        let options = Self::for_tier(examples_shared::IpiTier::BestAvailable, 500, 4)?;
+        Some(ExampleOptions {
+            json_output: examples_shared::json_output_path(std::env::args().skip(1)),
+            ..options
+        })
     }
 
     /// Options pinned to a specific data-file tier, IP cap and iteration count.
@@ -81,6 +89,7 @@ impl ExampleOptions {
                 .unwrap_or(4),
             max_ips,
             iterations,
+            json_output: None,
         })
     }
 }
@@ -168,6 +177,27 @@ pub fn run(options: &ExampleOptions, out: &mut dyn Write) -> anyhow::Result<()> 
     )?;
     let multi = benchmark(&pipeline, &ips, options.thread_count, options.iterations);
     report(out, "Multi-threaded", &multi, options.thread_count)?;
+
+    // The nightly performance graphs read this file. The example writes it
+    // itself so the figure does not depend on the wording or number formatting
+    // of the printed report above, which is free to change. The multi-threaded
+    // pass is the headline figure for the product, so it is the one published.
+    if let Some(json_output) = &options.json_output {
+        let results = examples_shared::PerformanceResults::new()
+            .higher_is_better("LookupsPerSecond", multi.lookups_per_second())
+            .lower_is_better("AvgMillisecsPerLookup", multi.ms_per_lookup());
+        results.write_to(json_output).with_context(|| {
+            format!(
+                "failed to write the performance results to '{}'",
+                json_output.display()
+            )
+        })?;
+        writeln!(
+            out,
+            "Wrote performance results to '{}'.",
+            json_output.display()
+        )?;
+    }
 
     Ok(())
 }
@@ -309,6 +339,35 @@ mod tests {
         assert!(printed.contains("Single-threaded result"));
         assert!(printed.contains("Multi-threaded result"));
         assert!(printed.contains("lookups/sec"));
+    }
+
+    /// The results file CI publishes must be written in the shared schema, with
+    /// the throughput metric the performance graph is keyed on.
+    #[test]
+    fn writes_the_results_json_when_asked() {
+        let Some(options) = ExampleOptions::for_tier(examples_shared::IpiTier::Asn, 50, 1) else {
+            eprintln!("no usable IP Intelligence data file or evidence file; skipping perf run");
+            return;
+        };
+        let json_output = std::env::temp_dir()
+            .join("ipi-onprem-performance-results")
+            .join("results.json");
+        let _ = std::fs::remove_file(&json_output);
+
+        let options = ExampleOptions {
+            json_output: Some(json_output.clone()),
+            ..options
+        };
+        run(&options, &mut Vec::new()).expect("the performance example should run");
+
+        let written =
+            std::fs::read_to_string(&json_output).expect("the results file should be written");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&written).expect("the results file should be valid JSON");
+        assert!(
+            parsed["HigherIsBetter"]["LookupsPerSecond"].is_number(),
+            "the results file should carry the graph metric, got: {written}"
+        );
     }
 }
 
