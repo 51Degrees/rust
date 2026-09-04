@@ -149,6 +149,14 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
+      # 6a. The OWID source the fodid crate compiles in. ci/copy-owid-source.ps1
+      #     copies it from the owid-rust submodule (checked out in step 1) into
+      #     fodid/src/owid, which git ignores, so every fmt, build, test, lint
+      #     and doc step below needs the copy in place first.
+      - name: Copy the OWID source into fodid
+        shell: pwsh
+        run: ./ci/copy-owid-source.ps1
+
       # 7. The verification gate. fmt is checked first because it is the cheapest
       #    and most common failure. clippy and doc inherit RUSTFLAGS/RUSTDOCFLAGS
       #    so any warning fails the build.
@@ -241,8 +249,12 @@ jobs:
     # Cross-compile to wasm is host-neutral; pin to a current LTS for consistency.
     runs-on: ubuntu-24.04
     steps:
+      # The owid-rust submodule holds the OWID source that the fodid crate
+      # compiles in, so it is needed here even though the C/C++ sources are not.
       - name: Checkout workspace
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Install Rust toolchain with wasm target
         uses: dtolnay/rust-toolchain@stable
@@ -256,6 +268,12 @@ jobs:
           # A separate cache key from the native build job, which compiles a
           # different target triple and feature set.
           key: wasm32-wasip1
+
+      # fodid compiles the OWID source that ci/copy-owid-source.ps1 places under
+      # fodid/src/owid (ignored by git), so the copy runs before any build.
+      - name: Copy the OWID source into fodid
+        shell: pwsh
+        run: ./ci/copy-owid-source.ps1
 
       # Each crate is built standalone rather than in one cargo invocation so
       # feature unification across the set cannot pull reqwest in through a

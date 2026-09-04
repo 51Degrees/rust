@@ -144,20 +144,20 @@ fn assert_valid_51did(label: &str, base64: &str) {
         .unwrap_or_else(|e| panic!("{label} should parse as a 51Did: {e}"));
 
     // A 51Did wraps a payload of at least PAYLOAD_LENGTH bytes carrying a
-    // HASH_LENGTH byte probabilistic value, inside a domain bearing envelope.
+    // MATCH_KEY_LENGTH byte probabilistic value, inside a domain bearing envelope.
     assert_eq!(
-        fod_id.hash().len(),
-        fodid::HASH_LENGTH,
+        fod_id.match_key().len(),
+        fodid::MATCH_KEY_LENGTH,
         "{label}: hash length"
     );
     assert!(
-        fod_id.payload.len() >= fodid::PAYLOAD_LENGTH,
+        fod_id.payload().len() >= fodid::PAYLOAD_LENGTH,
         "{label}: payload length {} is below the {} byte minimum",
-        fod_id.payload.len(),
+        fod_id.payload().len(),
         fodid::PAYLOAD_LENGTH
     );
     assert!(
-        !fod_id.domain.is_empty(),
+        !fod_id.domain().is_empty(),
         "{label}: domain should not be empty"
     );
 
@@ -166,15 +166,19 @@ fn assert_valid_51did(label: &str, base64: &str) {
     let round_trip = fod_id.as_base64().expect("should re-encode");
     let reparsed = FodId::from_base64(&round_trip).expect("should re-parse");
     assert_eq!(
-        fod_id.hash(),
-        reparsed.hash(),
+        fod_id.match_key(),
+        reparsed.match_key(),
         "{label}: hash should survive a base64 round trip"
     );
 
-    let hash_hex: String = fod_id.hash().iter().map(|b| format!("{b:02x}")).collect();
+    let hash_hex: String = fod_id
+        .match_key()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     println!(
         "{label}: domain={} flags={:#04x} license_id={:#010x} hash={hash_hex}",
-        fod_id.domain,
+        fod_id.domain(),
         fod_id.flags(),
         fod_id.license_id()
     );

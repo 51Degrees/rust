@@ -23,7 +23,7 @@
 use std::ops::Deref;
 use std::str::FromStr;
 
-use owid::Owid;
+use crate::owid::Owid;
 
 use crate::error::{Error, Result};
 
@@ -36,29 +36,43 @@ pub const LICENSE_ID_OFFSET: usize = 1;
 /// Byte length of the License Id field.
 pub const LICENSE_ID_LENGTH: usize = 4;
 
-/// Byte offset of the value field within the payload (the byte after the
+/// Byte offset of the match key within the payload (the byte after the
 /// header). For a probabilistic or hashed-email identifier this is the start of
 /// the SHA-256 hash; for a random identifier it is the start of the GUID.
-pub const HASH_OFFSET: usize = 5;
+pub const MATCH_KEY_OFFSET: usize = 5;
 
-/// Byte length of the value carried by probabilistic and hashed-email
+/// Byte length of the match key carried by probabilistic and hashed-email
 /// identifiers (a SHA-256 hash).
-pub const HASH_LENGTH: usize = 32;
+pub const MATCH_KEY_LENGTH: usize = 32;
+
+/// Obsolete alias for [`MATCH_KEY_OFFSET`]. The stable, comparable part of a
+/// 51Did is now called the match key.
+#[deprecated(note = "renamed to MATCH_KEY_OFFSET")]
+pub const HASH_OFFSET: usize = MATCH_KEY_OFFSET;
+
+/// Obsolete alias for [`MATCH_KEY_LENGTH`]. The stable, comparable part of a
+/// 51Did is now called the match key.
+#[deprecated(note = "renamed to MATCH_KEY_LENGTH")]
+pub const HASH_LENGTH: usize = MATCH_KEY_LENGTH;
 
 /// Byte length of the payload header (Flags + LicenseId) that is common to every
-/// identifier type.
-pub const HEADER_LENGTH: usize = HASH_OFFSET;
+/// identifier type. A payload shorter than this is
+/// [`Error::PayloadTooShort`].
+pub const HEADER_LENGTH: usize = MATCH_KEY_OFFSET;
 
-/// Byte length of the GUID value carried by [`IdType::Random`] identifiers.
+/// Byte length of the GUID match key carried by [`IdType::Random`] identifiers.
 pub const GUID_LENGTH: usize = 16;
 
 /// Minimum byte length of a [`IdType::Random`] 51Did payload (header + GUID).
+/// A random payload shorter than this is
+/// [`Error::InvalidTypePayloadLength`]. There is no maximum.
 pub const RANDOM_PAYLOAD_LENGTH: usize = HEADER_LENGTH + GUID_LENGTH;
 
 /// Minimum byte length of a [`IdType::Probabilistic`] or [`IdType::HashedEmail`]
-/// 51Did payload (header + hash). Random payloads are shorter, see
-/// [`RANDOM_PAYLOAD_LENGTH`].
-pub const PAYLOAD_LENGTH: usize = HASH_OFFSET + HASH_LENGTH;
+/// 51Did payload (header + hash). A payload of either type shorter than this
+/// is [`Error::InvalidTypePayloadLength`]. There is no maximum. Random
+/// payloads have a shorter minimum, see [`RANDOM_PAYLOAD_LENGTH`].
+pub const PAYLOAD_LENGTH: usize = MATCH_KEY_OFFSET + MATCH_KEY_LENGTH;
 
 /// The identifier type carried in bits 6-7 of the 51Did flags byte.
 ///
@@ -98,54 +112,70 @@ impl IdType {
 /// The payload starts with a fixed header: a 1-byte usage [`flags`](FodId::flags)
 /// bit mask and a 4-byte little endian [`license_id`](FodId::license_id). Bits
 /// 6-7 of the flags select the [`id_type`](FodId::id_type), which in turn
-/// determines the length and meaning of the value bytes that follow:
+/// determines the length and meaning of the match key bytes that follow:
 ///
 /// | Offset | Length | Field                                              |
 /// |-------:|-------:|----------------------------------------------------|
 /// |      0 |      1 | Flags (bits 0-2 usage, bits 6-7 type)              |
 /// |      1 |      4 | LicenseId (`u32` little endian)                    |
-/// |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
-/// |      5 |     16 | Value: GUID (Random)                               |
+/// |      5 |     32 | Match key: SHA-256 (Probabilistic, HashedEmail)    |
+/// |      5 |     16 | Match key: GUID (Random)                           |
 ///
-/// The value bytes are read through [`hash`](FodId::hash). The name is kept for
-/// continuity (a probabilistic value is a SHA-256), but for a [`IdType::Random`]
-/// identifier the value is a GUID, not a hash.
+/// The match key is read through [`match_key`](FodId::match_key). For a
+/// [`IdType::Random`] identifier it is a GUID, otherwise a SHA-256.
+///
+/// The lengths in the table are minimums. A payload may carry more bytes
+/// after the match key, which this reader accepts and leaves in place, reachable
+/// through [`payload`](Owid::payload). There is no upper bound in this crate.
 ///
 /// `FodId` [`Deref`]s to [`Owid`], so the OWID level fields and operations
-/// (`domain`, `date`, `payload`, `signature`, `as_base64`,
+/// (`domain()`, `date()`, `payload()`, `signature()`, `as_base64`,
 /// `verify_with_public_key`, ...) are available directly on a `FodId` value.
 ///
-/// Construction does **not** verify the OWID signature. Call
-/// [`verify_with_public_key`](Owid::verify_with_public_key) (reached through the
-/// [`Deref`]) when cryptographic verification is required.
+/// A parsed `FodId` is not necessarily cryptographically valid. Reading
+/// does **not** verify the OWID signature. Call
+/// [`verify_status_with_public_key`](Owid::verify_status_with_public_key)
+/// (reached through the [`Deref`]) when cryptographic verification is
+/// required.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FodId {
     owid: Owid,
     flags: u8,
     license_id: u32,
-    value: Vec<u8>,
+    match_key: Vec<u8>,
 }
 
 impl FodId {
-    /// Parses a 51Did from its base64 encoded OWID string, as produced by the
-    /// 51Degrees cloud service.
+    /// Reads a 51Did from its base64 encoded OWID string, as produced by the
+    /// 51Degrees cloud service, without verifying its signature.
+    ///
+    /// Malformed input is an ordinary outcome and is answered with an
+    /// [`Error`] naming the reason, never a panic. The OWID envelope is read
+    /// first, then the 51Did payload rules are applied through
+    /// [`from_owid`](FodId::from_owid), so every reading route makes the
+    /// same checks.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Owid`] if the string is not a valid OWID envelope, or
-    /// [`Error::PayloadTooShort`] if the payload is shorter than the minimum for
-    /// its identifier type.
+    /// Returns [`Error::Parse`] carrying the OWID status if the string is not
+    /// a valid OWID envelope (for example
+    /// [`ParseStatus::InvalidBase64`](crate::ParseStatus::InvalidBase64)), [`Error::PayloadTooShort`] if
+    /// the payload cannot hold the 51Did header, or
+    /// [`Error::InvalidTypePayloadLength`] if the payload is shorter than
+    /// the minimum for its identifier type.
     pub fn from_base64(base64: &str) -> Result<Self> {
         Self::from_owid(Owid::from_base64(base64)?)
     }
 
-    /// Parses a 51Did from the raw bytes of an OWID envelope.
+    /// Reads a 51Did from the raw bytes of an OWID envelope, without verifying
+    /// its signature.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Owid`] if the bytes are not a valid OWID envelope, or
-    /// [`Error::PayloadTooShort`] if the payload is shorter than the minimum for
-    /// its identifier type.
+    /// Returns [`Error::Parse`] carrying the OWID status if the bytes are not
+    /// a valid OWID envelope, [`Error::PayloadTooShort`] if the payload cannot
+    /// hold the 51Did header, or [`Error::InvalidTypePayloadLength`] if the
+    /// payload is shorter than the minimum for its identifier type.
     pub fn from_byte_array(buffer: &[u8]) -> Result<Self> {
         Self::from_owid(Owid::from_byte_array(buffer)?)
     }
@@ -154,44 +184,55 @@ impl FodId {
     /// fields. The OWID is moved into the returned value and remains reachable
     /// through [`owid`](FodId::owid) and the [`Deref`].
     ///
+    /// This is the one place the 51Did payload rules live. The payload must
+    /// hold the [`HEADER_LENGTH`] byte header before the type can be read,
+    /// and then the value length that type requires ([`GUID_LENGTH`] for
+    /// [`IdType::Random`], [`MATCH_KEY_LENGTH`] for
+    /// [`IdType::Probabilistic`] and [`IdType::HashedEmail`]). A
+    /// [`IdType::Reserved`] payload has no defined value length and is read
+    /// best effort. Bytes after the value are accepted and left in the
+    /// payload, because a longer payload is a newer shape rather than a fault.
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::PayloadTooShort`] if the OWID payload is shorter than the
-    /// minimum for its identifier type (the [`HEADER_LENGTH`] byte header, plus
-    /// the value length the type requires).
+    /// Returns [`Error::PayloadTooShort`] if the payload is shorter than the
+    /// header, or [`Error::InvalidTypePayloadLength`] if the payload is
+    /// shorter than the header plus the value length the type requires.
     pub fn from_owid(owid: Owid) -> Result<Self> {
-        if owid.payload.len() < HEADER_LENGTH {
+        let payload = owid.payload();
+        if payload.len() < HEADER_LENGTH {
             return Err(Error::PayloadTooShort {
                 expected: HEADER_LENGTH,
-                actual: owid.payload.len(),
+                actual: payload.len(),
             });
         }
-        let payload = &owid.payload;
         let flags = payload[FLAGS_OFFSET];
         let license_id = u32::from_le_bytes(
             payload[LICENSE_ID_OFFSET..LICENSE_ID_OFFSET + LICENSE_ID_LENGTH]
                 .try_into()
                 .expect("slice is LICENSE_ID_LENGTH bytes"),
         );
-        let value_length = match IdType::from_flags(flags) {
+        let id_type = IdType::from_flags(flags);
+        let value_length = match id_type {
             IdType::Random => GUID_LENGTH,
             // A reserved type has no defined value length yet: expose whatever
             // payload bytes follow the header, best effort.
             IdType::Reserved => payload.len() - HEADER_LENGTH,
-            IdType::Probabilistic | IdType::HashedEmail => HASH_LENGTH,
+            IdType::Probabilistic | IdType::HashedEmail => MATCH_KEY_LENGTH,
         };
         if payload.len() < HEADER_LENGTH + value_length {
-            return Err(Error::PayloadTooShort {
+            return Err(Error::InvalidTypePayloadLength {
+                id_type,
                 expected: HEADER_LENGTH + value_length,
                 actual: payload.len(),
             });
         }
-        let value = payload[HASH_OFFSET..HASH_OFFSET + value_length].to_vec();
+        let match_key = payload[MATCH_KEY_OFFSET..MATCH_KEY_OFFSET + value_length].to_vec();
         Ok(FodId {
             owid,
             flags,
             license_id,
-            value,
+            match_key,
         })
     }
 
@@ -212,15 +253,23 @@ impl FodId {
         self.license_id
     }
 
-    /// The value bytes from the payload: a 32-byte SHA-256 for
+    /// The match key from the payload: a 32-byte SHA-256 for
     /// [`IdType::Probabilistic`] and [`IdType::HashedEmail`] identifiers, 16 GUID
     /// bytes for [`IdType::Random`] ones.
     ///
     /// This is the stable field for comparing two 51Dids: two identifiers for
-    /// the same inputs share the same value even though their wrapping envelopes
-    /// (date, signature) differ on every issue. Compare values, never envelopes.
+    /// the same inputs share the same match key even though their wrapping
+    /// envelopes (date, signature) differ on every issue. Compare match keys,
+    /// never envelopes.
+    pub fn match_key(&self) -> &[u8] {
+        &self.match_key
+    }
+
+    /// Obsolete alias for [`match_key`](FodId::match_key). The stable,
+    /// comparable part of a 51Did is now called the match key.
+    #[deprecated(note = "renamed to match_key")]
     pub fn hash(&self) -> &[u8] {
-        &self.value
+        self.match_key()
     }
 
     /// A reference to the underlying OWID envelope.

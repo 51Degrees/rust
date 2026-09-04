@@ -7,9 +7,11 @@
 # After publishing a crate the script waits for the new version to appear on the
 # index so the next, dependent crate resolves it.
 #
-# `fodid` and `fiftyone-fodid-cloud` depend on `owid`, which is consumed from
-# crates.io (the workspace `owid` dependency is a published version, not git), so
-# they are publishable and included below in dependency order.
+# `fodid` and `fiftyone-fodid-cloud` need no OWID crate from any registry. The
+# OWID source is compiled into `fodid` from the owid-rust submodule by
+# ci/copy-owid-source.ps1, which the publish workflow runs before this script,
+# and the `fodid` manifest lists the copied directory in its `include` so that
+# `cargo publish` packages it even though git ignores it.
 set -euo pipefail
 
 # Publishing needs a crates.io token. When it is absent (for example a normal
@@ -70,7 +72,12 @@ crate_version() {
 publish_crate() {
   local crate="$1" attempt out when target now wait
   for attempt in $(seq 1 40); do
-    if out="$(cargo publish -p "$crate" 2>&1)"; then
+    # --allow-dirty because the OWID source under fodid/src/owid is copied
+    # in by ci/copy-owid-source.ps1 and deliberately never committed, and
+    # cargo otherwise refuses to publish a package that includes files git
+    # does not track. The workflow starts from a clean checkout, so that
+    # copy is the only thing the flag lets through.
+    if out="$(cargo publish -p "$crate" --allow-dirty 2>&1)"; then
       echo "$out"
       return 0
     fi
