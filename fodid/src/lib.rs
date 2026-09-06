@@ -261,8 +261,8 @@ mod fodid;
 
 pub use error::{Error, Result};
 pub use fodid::{
-    FodId, IdType, FLAGS_OFFSET, GUID_LENGTH, HEADER_LENGTH, LICENSE_ID_LENGTH, LICENSE_ID_OFFSET,
-    MATCH_KEY_LENGTH, MATCH_KEY_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
+    FodId, IdType, Usage, FLAGS_OFFSET, GUID_LENGTH, HEADER_LENGTH, LICENSE_ID_LENGTH,
+    LICENSE_ID_OFFSET, MATCH_KEY_LENGTH, MATCH_KEY_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
 };
 
 // The obsolete names for the match key constants, re-exported so callers

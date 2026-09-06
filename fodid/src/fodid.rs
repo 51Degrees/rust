@@ -94,6 +94,66 @@ pub enum IdType {
     Reserved,
 }
 
+/// The usage the identifier was created for, carried in bits 0-2 of the
+/// flags byte. It decides where the identifier may go: one created for
+/// [`Usage::NonMarketing`] must never be passed to a demand source, and
+/// one created for [`Usage::Standard`] or [`Usage::Personalized`] may be
+/// passed only to a recipient that has accepted the applicable terms.
+///
+/// The three usages are cumulative rather than exclusive in the byte.
+/// Non-marketing sets bit 0, standard sets bits 0 and 1, and personalized
+/// sets bits 0, 1 and 2, so every marketing identifier also carries the
+/// non-marketing bit. A caller who masked the byte for that bit alone
+/// would read every marketing identifier as non-marketing, which is the
+/// wrong way round for a data protection decision. This type answers
+/// with the highest usage granted, so that mistake cannot be made.
+///
+/// The names match the cloud's `id.usage` values: `non-marketing`,
+/// `standard` and `personalized`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Usage {
+    /// No usage bit is set. The cloud never issues such an identifier,
+    /// so this is an identifier from somewhere else or a damaged one,
+    /// and it should be treated as though it may not be passed on.
+    None,
+    /// Created for use that is not marketing. Must not be passed to a
+    /// demand source.
+    NonMarketing,
+    /// Created for standard marketing, being targeting unrelated to the
+    /// person's browsing history or interactions.
+    Standard,
+    /// Created for personalized marketing, being targeting related to
+    /// the person's browsing history or interactions.
+    Personalized,
+}
+
+impl Usage {
+    /// Decode the usage from a flags byte (bits 0-2), answering the
+    /// highest usage granted.
+    fn from_flags(flags: u8) -> Usage {
+        if flags & 0b100 != 0 {
+            Usage::Personalized
+        } else if flags & 0b010 != 0 {
+            Usage::Standard
+        } else if flags & 0b001 != 0 {
+            Usage::NonMarketing
+        } else {
+            Usage::None
+        }
+    }
+
+    /// The cloud's `id.usage` value for this usage, or `None` where
+    /// there is none.
+    pub fn id_usage(self) -> Option<&'static str> {
+        match self {
+            Usage::None => None,
+            Usage::NonMarketing => Some("non-marketing"),
+            Usage::Standard => Some("standard"),
+            Usage::Personalized => Some("personalized"),
+        }
+    }
+}
+
 impl IdType {
     /// Decode the identifier type from a flags byte (bits 6-7).
     fn from_flags(flags: u8) -> IdType {
@@ -246,6 +306,20 @@ impl FodId {
     /// The identifier type carried in bits 6-7 of [`flags`](FodId::flags).
     pub fn id_type(&self) -> IdType {
         IdType::from_flags(self.flags)
+    }
+
+    /// The usage carried in bits 0-2 of [`flags`](FodId::flags), as the
+    /// highest usage granted. See [`Usage`] for why it is read that way.
+    pub fn usage(&self) -> Usage {
+        Usage::from_flags(self.flags)
+    }
+
+    /// Whether the usage was derived from an IAB consent string the
+    /// caller sent, rather than stated by the caller directly. Bit 3 of
+    /// [`flags`](FodId::flags). Both are legitimate ways to arrive at a
+    /// usage, and this says nothing about which usage it is.
+    pub fn usage_from_consent(&self) -> bool {
+        self.flags & 0b1000 != 0
     }
 
     /// The 4-byte little endian License Id from the payload.

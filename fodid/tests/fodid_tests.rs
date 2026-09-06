@@ -28,7 +28,7 @@
 //! no value came back, and the status names the reason. Reading never
 //! touches a key, so none of the failure cases here constructs one.
 
-use fodid::{Creator, Crypto, Error, FodId, IdType, Owid, ParseStatus, SignatureStatus};
+use fodid::{Creator, Crypto, Error, FodId, IdType, Owid, ParseStatus, SignatureStatus, Usage};
 
 const TEST_DOMAIN: &str = "51degrees.com";
 
@@ -806,6 +806,43 @@ fn id_type_decodes_from_flag_bits_6_and_7() {
         assert_eq!(fod_id.match_key().len(), value_len);
         assert_eq!(fod_id.license_id(), CANONICAL_LICENSE_ID);
     }
+}
+
+/// The usage is the highest granted, because the bits are cumulative. A
+/// mask for the non-marketing bit alone would say yes for every marketing
+/// identifier, which is the wrong answer for a data protection decision.
+#[test]
+fn usage_is_the_highest_granted() {
+    let fixture = Fixture::new();
+    let cases = [
+        (0b000, Usage::None, None),
+        (0b001, Usage::NonMarketing, Some("non-marketing")),
+        (0b011, Usage::Standard, Some("standard")),
+        (0b111, Usage::Personalized, Some("personalized")),
+    ];
+    for (bits, expected, id_usage) in cases {
+        let payload = typed_payload(RANDOM_FLAGS | bits, fodid::GUID_LENGTH);
+        let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+        assert_eq!(fod_id.usage(), expected, "usage bits {bits:#05b}");
+        assert_eq!(fod_id.usage().id_usage(), id_usage);
+        assert_eq!(
+            fod_id.id_type(),
+            IdType::Random,
+            "the type bits are untouched"
+        );
+        assert!(!fod_id.usage_from_consent());
+    }
+}
+
+/// Bit 3 records that the usage came from a consent string rather than
+/// being stated, and reads independently of which usage it is.
+#[test]
+fn usage_from_consent_is_bit_three() {
+    let fixture = Fixture::new();
+    let payload = typed_payload(RANDOM_FLAGS | 0b1011, fodid::GUID_LENGTH);
+    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+    assert!(fod_id.usage_from_consent());
+    assert_eq!(fod_id.usage(), Usage::Standard);
 }
 
 #[test]
