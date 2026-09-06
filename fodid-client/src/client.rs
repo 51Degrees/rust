@@ -23,6 +23,9 @@
 //! The client, being everything a server does with a 51Did against the
 //! 51Degrees cloud.
 
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll, Waker};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Duration, Utc};
@@ -66,10 +69,23 @@ pub const MAXIMUM_ENCODED_LENGTH: usize = 4096;
 /// time on without waiting.
 type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
-/// The cached key schedule and when it was fetched.
+/// The cached key schedule, when it was fetched, and the fetch in flight.
+///
+/// The lock around this is only ever held between awaits, never across
+/// one, so a slow fetch blocks no other caller. A caller that finds a fetch
+/// already in flight waits for that one to land instead of starting a
+/// second, which is what keeps concurrent lookups down to one request.
 struct KeyCache {
     keys: Option<Vec<DidPublicKey>>,
     fetched_at: DateTime<Utc>,
+    /// Counts the fetches that have landed, so a caller that waited on
+    /// another caller's fetch can tell whether one did.
+    generation: u64,
+    /// Whether a fetch is in flight.
+    fetching: bool,
+    /// The callers waiting for the fetch in flight to finish, woken when it
+    /// lands or fails.
+    waiters: Vec<Waker>,
 }
 
 /// Everything a server does with a 51Did against the 51Degrees cloud: fetch
@@ -90,9 +106,14 @@ struct KeyCache {
 /// as the endpoints accept, and the licence key travels only in a POST form
 /// body, because a query string is written to access logs.
 ///
-/// The key cache is per instance and safe to share across threads, so
-/// create one client for the process and reuse it. Every call blocks until
-/// the transport answers.
+/// Every method that may reach the network is `async` and is awaited. The
+/// futures are driven by whatever runtime the host has, because the crate
+/// carries none of its own, and they are not required to be `Send`, so a
+/// single-threaded host such as a `wasm32-wasip1` edge runtime can await
+/// them. The key cache is per instance and safe to share across threads, so
+/// create one client for the process and reuse it. Concurrent callers that
+/// each find the cache needs fetching share one fetch rather than each
+/// making their own.
 pub struct DidClient {
     http: Arc<dyn DidHttpClient>,
     resource_key: String,
@@ -187,6 +208,9 @@ impl DidClientBuilder {
             cache: Mutex::new(KeyCache {
                 keys: None,
                 fetched_at,
+                generation: 0,
+                fetching: false,
+                waiters: Vec::new(),
             }),
         })
     }
@@ -277,12 +301,8 @@ impl DidClient {
     /// [`Error::Transport`] when the cloud cannot be reached, and
     /// [`Error::UnexpectedStatus`] when it answers with a status other than
     /// 200.
-    pub fn public_keys(&self) -> Result<Vec<DidPublicKey>> {
-        let mut cache = self.lock_cache();
-        if cache.keys.is_none() {
-            self.refresh_keys_locked(&mut cache)?;
-        }
-        Ok(cache.keys.clone().unwrap_or_default())
+    pub async fn public_keys(&self) -> Result<Vec<DidPublicKey>> {
+        self.keys_where(|cache| cache.keys.is_none()).await
     }
 
     /// The key in force when the identifier was created, being the entry
@@ -297,9 +317,9 @@ impl DidClient {
     ///
     /// [`Error::Transport`] and [`Error::UnexpectedStatus`] when a fetch was
     /// needed and did not answer with 200.
-    pub fn public_key_for(&self, fod_id: &FodId) -> Result<Option<DidPublicKey>> {
+    pub async fn public_key_for(&self, fod_id: &FodId) -> Result<Option<DidPublicKey>> {
         let date = fod_id.date();
-        let keys = self.keys_covering(date)?;
+        let keys = self.keys_covering(date).await?;
         Ok(in_force_at(&keys, date).cloned())
     }
 
@@ -309,8 +329,8 @@ impl DidClient {
     /// True only when the signature verifies under a key in force at the
     /// identifier's date. See [`DidClient::verify_signature_detailed`] for
     /// why a check did not pass.
-    pub fn verify_signature(&self, fod_id: &FodId) -> Result<bool> {
-        Ok(self.verify_signature_detailed(fod_id)? == SignatureCheck::Verified)
+    pub async fn verify_signature(&self, fod_id: &FodId) -> Result<bool> {
+        Ok(self.verify_signature_detailed(fod_id).await? == SignatureCheck::Verified)
     }
 
     /// Verifies the identifier's signature offline and says why when the
@@ -326,9 +346,9 @@ impl DidClient {
     ///
     /// [`Error::Transport`] and [`Error::UnexpectedStatus`] when a key fetch
     /// was needed and did not answer with 200.
-    pub fn verify_signature_detailed(&self, fod_id: &FodId) -> Result<SignatureCheck> {
+    pub async fn verify_signature_detailed(&self, fod_id: &FodId) -> Result<SignatureCheck> {
         let date = fod_id.date();
-        let keys = self.keys_covering(date)?;
+        let keys = self.keys_covering(date).await?;
         let candidates = candidates_for_date(&keys, date);
         if candidates.is_empty() {
             return Ok(SignatureCheck::NoKey);
@@ -357,13 +377,13 @@ impl DidClient {
     /// refused the value, [`Error::Transport`] when the cloud cannot be
     /// reached, and [`Error::UnexpectedStatus`] when it answers with a
     /// status this client does not expect.
-    pub fn verify(&self, fod_id: &FodId) -> Result<bool> {
+    pub async fn verify(&self, fod_id: &FodId) -> Result<bool> {
         // A parsed identifier is already known to be a 51Did, so the string
         // surface's local check is not repeated.
         let encoded = fod_id
             .as_base64()
             .map_err(|e| Error::InvalidArgument(format!("the 51Did could not be encoded: {e}")))?;
-        self.verify_encoded_unchecked(&encoded)
+        self.verify_encoded_unchecked(&encoded).await
     }
 
     /// Verifies a 51Did string's signature through the cloud's verify
@@ -378,12 +398,12 @@ impl DidClient {
     /// cloud refused it. [`Error::Transport`] when the cloud cannot be
     /// reached, and [`Error::UnexpectedStatus`] when it answers with a
     /// status this client does not expect.
-    pub fn verify_encoded(&self, fod_id: &str) -> Result<bool> {
+    pub async fn verify_encoded(&self, fod_id: &str) -> Result<bool> {
         validate_encoded_value(fod_id)?;
-        self.verify_encoded_unchecked(fod_id)
+        self.verify_encoded_unchecked(fod_id).await
     }
 
-    fn verify_encoded_unchecked(&self, fod_id: &str) -> Result<bool> {
+    async fn verify_encoded_unchecked(&self, fod_id: &str) -> Result<bool> {
         // The documented parameter is 51did. The same value is sent again as
         // owid, the name the verify endpoint first went live under, which a
         // service that predates the 51did name reads and a current one
@@ -394,7 +414,7 @@ impl DidClient {
             self.endpoint,
             escape_data_string(&self.resource_key)
         );
-        let response = self.send(HttpMethod::Get, url, Vec::new())?;
+        let response = self.send(HttpMethod::Get, url, Vec::new()).await?;
         if response.status == 200 || response.status == 400 {
             if let Some(valid) = read_valid(&response.body) {
                 return Ok(valid);
@@ -422,7 +442,7 @@ impl DidClient {
     /// so does not offer the creator context, [`Error::Transport`] when the
     /// cloud cannot be reached, and [`Error::UnexpectedStatus`] for any
     /// other status.
-    pub fn redeem(
+    pub async fn redeem(
         &self,
         fod_id: &FodId,
         result: &str,
@@ -434,6 +454,7 @@ impl DidClient {
             .as_base64()
             .map_err(|e| Error::InvalidArgument(format!("the 51Did could not be encoded: {e}")))?;
         self.redeem_encoded_unchecked(&encoded, result, challenge)
+            .await
     }
 
     /// Redeems a sealed creator context result against a 51Did string. See
@@ -443,7 +464,7 @@ impl DidClient {
     ///
     /// [`Error::InvalidArgument`] when the value is not a 51Did, refused
     /// here before any call is made, and otherwise as [`DidClient::redeem`].
-    pub fn redeem_encoded(
+    pub async fn redeem_encoded(
         &self,
         fod_id: &str,
         result: &str,
@@ -451,9 +472,10 @@ impl DidClient {
     ) -> Result<RedeemResult> {
         validate_encoded_value(fod_id)?;
         self.redeem_encoded_unchecked(fod_id, result, challenge)
+            .await
     }
 
-    fn redeem_encoded_unchecked(
+    async fn redeem_encoded_unchecked(
         &self,
         fod_id: &str,
         result: &str,
@@ -476,7 +498,7 @@ impl DidClient {
             form.push(("license".to_string(), licence_key.clone()));
         }
         let url = format!("{}id/redeem", self.endpoint);
-        let response = self.send(HttpMethod::Post, url, form)?;
+        let response = self.send(HttpMethod::Post, url, form).await?;
         match response.status {
             200 | 503 => Ok(RedeemResult::from_response(response.status, &response.body)),
             400 => Err(Error::InvalidArgument(
@@ -489,19 +511,52 @@ impl DidClient {
 
     /// The cached keys, fetched again first when
     /// [`DidClient::public_key_for`] says a fetch is due for the date.
-    fn keys_covering(&self, date: DateTime<Utc>) -> Result<Vec<DidPublicKey>> {
-        let mut cache = self.lock_cache();
-        let refresh = match &cache.keys {
+    async fn keys_covering(&self, date: DateTime<Utc>) -> Result<Vec<DidPublicKey>> {
+        self.keys_where(|cache| match &cache.keys {
             None => true,
-            Some(keys) => self.needs_refresh_locked(keys, cache.fetched_at, date),
-        };
-        if refresh {
-            self.refresh_keys_locked(&mut cache)?;
-        }
-        Ok(cache.keys.clone().unwrap_or_default())
+            Some(keys) => self.needs_refresh(keys, cache.fetched_at, date),
+        })
+        .await
     }
 
-    fn needs_refresh_locked(
+    /// The cached keys, fetched first when `stale` says the cache as it
+    /// stands will not do.
+    ///
+    /// When another caller's fetch is already in flight this one waits for
+    /// that fetch instead of making a second request, and answers from the
+    /// keys that fetch landed. Only when the other fetch failed does this
+    /// caller make a request of its own, so an answer here is always backed
+    /// by at most one request made on this caller's behalf.
+    async fn keys_where(&self, stale: impl Fn(&KeyCache) -> bool) -> Result<Vec<DidPublicKey>> {
+        loop {
+            // Everything under the lock is a plain read or a flag write, and
+            // the lock is dropped before anything is awaited.
+            let (generation, fetch) = {
+                let mut cache = self.lock_cache();
+                if !stale(&cache) {
+                    return Ok(cache.keys.clone().unwrap_or_default());
+                }
+                if cache.fetching {
+                    (cache.generation, false)
+                } else {
+                    cache.fetching = true;
+                    (cache.generation, true)
+                }
+            };
+            if fetch {
+                return self.fetch_keys().await;
+            }
+            FetchFinished { client: self }.await;
+            let cache = self.lock_cache();
+            if cache.generation != generation {
+                return Ok(cache.keys.clone().unwrap_or_default());
+            }
+            // The fetch waited on did not land, so this caller goes round
+            // again and, finding nothing in flight, makes its own.
+        }
+    }
+
+    fn needs_refresh(
         &self,
         keys: &[DidPublicKey],
         fetched_at: DateTime<Utc>,
@@ -517,19 +572,29 @@ impl DidClient {
         newest.is_none_or(|newest| date > newest)
     }
 
-    fn refresh_keys_locked(&self, cache: &mut MutexGuard<'_, KeyCache>) -> Result<()> {
+    /// Fetches the key list and stores it. Called only by the caller that
+    /// set the in-flight flag, and clears that flag however it ends, the
+    /// future being dropped before it finishes included, so no waiter is
+    /// left waiting on a fetch that will never land.
+    async fn fetch_keys(&self) -> Result<Vec<DidPublicKey>> {
+        let _finished = FetchFinishes { client: self };
         let url = format!(
             "{}id/key/{}",
             self.endpoint,
             escape_data_string(&self.resource_key)
         );
-        let response = self.send(HttpMethod::Get, url, Vec::new())?;
+        let response = self.send(HttpMethod::Get, url, Vec::new()).await?;
         if response.status != 200 {
             return Err(unexpected("key", &response));
         }
-        cache.keys = Some(parse_keys(&response.body)?);
-        cache.fetched_at = (self.clock)();
-        Ok(())
+        let keys = parse_keys(&response.body)?;
+        {
+            let mut cache = self.lock_cache();
+            cache.keys = Some(keys.clone());
+            cache.fetched_at = (self.clock)();
+            cache.generation += 1;
+        }
+        Ok(keys)
     }
 
     fn lock_cache(&self) -> MutexGuard<'_, KeyCache> {
@@ -541,7 +606,7 @@ impl DidClient {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn send(
+    async fn send(
         &self,
         method: HttpMethod,
         url: String,
@@ -553,7 +618,45 @@ impl DidClient {
             form,
             user_agent: USER_AGENT.to_string(),
         };
-        self.http.send(&request).map_err(Error::Transport)
+        self.http.send(&request).await.map_err(Error::Transport)
+    }
+}
+
+/// Resolves once no key fetch is in flight. A caller that found one in
+/// flight awaits this rather than making a second request.
+struct FetchFinished<'a> {
+    client: &'a DidClient,
+}
+
+impl Future for FetchFinished<'_> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let mut cache = self.client.lock_cache();
+        if !cache.fetching {
+            return Poll::Ready(());
+        }
+        // The same caller polled again registers once.
+        if !cache.waiters.iter().any(|w| w.will_wake(cx.waker())) {
+            cache.waiters.push(cx.waker().clone());
+        }
+        Poll::Pending
+    }
+}
+
+/// Clears the in-flight flag and wakes every waiter when dropped, which is
+/// when the fetch that set the flag ends, however it ends.
+struct FetchFinishes<'a> {
+    client: &'a DidClient,
+}
+
+impl Drop for FetchFinishes<'_> {
+    fn drop(&mut self) {
+        let mut cache = self.client.lock_cache();
+        cache.fetching = false;
+        for waker in cache.waiters.drain(..) {
+            waker.wake();
+        }
     }
 }
 
@@ -632,15 +735,37 @@ fn read_errors(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::rc::Rc;
     use std::sync::Mutex;
 
     use fodid::{Creator, Crypto};
 
     use super::*;
+    use crate::http::LocalBoxFuture;
     use crate::outcome::ContextOutcome;
 
     const RESOURCE_KEY: &str = "AQS5HKcy-resource";
     const ENDPOINT: &str = "https://example.test/api/v4/";
+
+    /// Returns pending once, waking itself, and is ready on the next poll.
+    /// Every stub transport yields through this before answering, so that
+    /// a second caller can reach the client while the first is still
+    /// waiting on the network, which is how the shared fetch is exercised.
+    struct YieldOnce(bool);
+
+    impl Future for YieldOnce {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.0 {
+                Poll::Ready(())
+            } else {
+                self.0 = true;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
 
     /// Stands in for the network, recording every request and answering
     /// canned responses in order.
@@ -680,13 +805,44 @@ mod tests {
     }
 
     impl DidHttpClient for FakeHttp {
-        fn send(&self, request: &DidHttpRequest) -> std::result::Result<DidHttpResponse, String> {
-            self.requests.lock().unwrap().push(request.clone());
-            self.responses
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or_else(|| Err("no canned response left for this request".to_string()))
+        fn send<'a>(
+            &'a self,
+            request: &'a DidHttpRequest,
+        ) -> LocalBoxFuture<'a, std::result::Result<DidHttpResponse, String>> {
+            Box::pin(async move {
+                YieldOnce(false).await;
+                self.requests.lock().unwrap().push(request.clone());
+                self.responses
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or_else(|| Err("no canned response left for this request".to_string()))
+            })
+        }
+    }
+
+    /// A transport whose future holds an `Rc` across an await. An `Rc`
+    /// cannot cross threads, so this compiles only because the trait does
+    /// not require the future to be `Send`, which is the point of the test
+    /// that uses it.
+    struct RcHolding {
+        body: String,
+    }
+
+    impl DidHttpClient for RcHolding {
+        fn send<'a>(
+            &'a self,
+            request: &'a DidHttpRequest,
+        ) -> LocalBoxFuture<'a, std::result::Result<DidHttpResponse, String>> {
+            Box::pin(async move {
+                let held = Rc::new(request.url.clone());
+                YieldOnce(false).await;
+                assert!(held.ends_with(&escape_data_string(RESOURCE_KEY)));
+                Ok(DidHttpResponse {
+                    status: 200,
+                    body: self.body.clone(),
+                })
+            })
         }
     }
 
@@ -731,7 +887,7 @@ mod tests {
         }
     }
 
-    fn new_client(http: Arc<FakeHttp>) -> DidClient {
+    fn new_client(http: Arc<dyn DidHttpClient>) -> DidClient {
         DidClient::builder(RESOURCE_KEY)
             .endpoint(ENDPOINT)
             .http_client(http)
@@ -827,12 +983,12 @@ mod tests {
 
     // Keys and the cache.
 
-    #[test]
-    fn keys_are_fetched_from_the_key_endpoint_with_the_user_agent() {
+    #[tokio::test]
+    async fn keys_are_fetched_from_the_key_endpoint_with_the_user_agent() {
         let fixture = Fixture::new();
         let http = FakeHttp::answering(vec![(200, &fixture.keys_json())]);
         let client = new_client(http.clone());
-        let keys = client.public_keys().unwrap();
+        let keys = client.public_keys().await.unwrap();
         assert_eq!(keys.len(), 2);
         let requests = http.requests();
         assert_eq!(requests.len(), 1);
@@ -849,10 +1005,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_key_answer_other_than_200_is_unexpected() {
+    #[tokio::test]
+    async fn a_key_answer_other_than_200_is_unexpected() {
         let http = FakeHttp::answering(vec![(500, "down")]);
-        let error = new_client(http).public_keys().unwrap_err();
+        let error = new_client(http).public_keys().await.unwrap_err();
         match error {
             Error::UnexpectedStatus {
                 endpoint, status, ..
@@ -864,10 +1020,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_transport_failure_is_reported_as_one() {
+    #[tokio::test]
+    async fn a_transport_failure_is_reported_as_one() {
         let error = new_client(FakeHttp::failing("no route"))
             .public_keys()
+            .await
             .unwrap_err();
         assert!(
             matches!(error, Error::Transport(ref m) if m == "no route"),
@@ -875,19 +1032,27 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_fresh_cache_inside_the_schedule_is_not_fetched_again() {
+    #[tokio::test]
+    async fn a_fresh_cache_inside_the_schedule_is_not_fetched_again() {
         let fixture = Fixture::new();
         let http = FakeHttp::answering(vec![(200, &fixture.keys_json())]);
         let client = new_client(http.clone());
-        assert!(client.public_key_for(&fixture.fod_id).unwrap().is_some());
-        assert!(client.public_key_for(&fixture.fod_id).unwrap().is_some());
-        assert!(client.verify_signature(&fixture.fod_id).unwrap());
+        assert!(client
+            .public_key_for(&fixture.fod_id)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(client
+            .public_key_for(&fixture.fod_id)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(client.verify_signature(&fixture.fod_id).await.unwrap());
         assert_eq!(http.requests().len(), 1, "one fetch serves every lookup");
     }
 
-    #[test]
-    fn a_cache_older_than_a_day_is_fetched_again() {
+    #[tokio::test]
+    async fn a_cache_older_than_a_day_is_fetched_again() {
         let fixture = Fixture::new();
         let keys = fixture.keys_json();
         let http = FakeHttp::answering(vec![(200, &keys), (200, &keys)]);
@@ -899,17 +1064,17 @@ mod tests {
             .clock(move || *clock_now.lock().unwrap())
             .build()
             .unwrap();
-        client.public_key_for(&fixture.fod_id).unwrap();
+        client.public_key_for(&fixture.fod_id).await.unwrap();
         *now.lock().unwrap() += KEY_CACHE_LIFETIME - Duration::minutes(1);
-        client.public_key_for(&fixture.fod_id).unwrap();
+        client.public_key_for(&fixture.fod_id).await.unwrap();
         assert_eq!(http.requests().len(), 1, "still inside the lifetime");
         *now.lock().unwrap() += Duration::minutes(2);
-        client.public_key_for(&fixture.fod_id).unwrap();
+        client.public_key_for(&fixture.fod_id).await.unwrap();
         assert_eq!(http.requests().len(), 2, "stale, so fetched again");
     }
 
-    #[test]
-    fn a_date_before_every_key_held_is_fetched_again() {
+    #[tokio::test]
+    async fn a_date_before_every_key_held_is_fetched_again() {
         let fixture = Fixture::new();
         // A schedule that only starts tomorrow does not cover an identifier
         // created now, so the client looks again before answering.
@@ -917,15 +1082,26 @@ mod tests {
         let later = format!(r#"[{{"startsAt":"{tomorrow}","publicKey":"x"}}]"#);
         let http = FakeHttp::answering(vec![(200, &later), (200, &later), (200, &later)]);
         let client = new_client(http.clone());
-        assert!(client.public_key_for(&fixture.fod_id).unwrap().is_none());
-        assert!(client.public_key_for(&fixture.fod_id).unwrap().is_none());
+        assert!(client
+            .public_key_for(&fixture.fod_id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(client
+            .public_key_for(&fixture.fod_id)
+            .await
+            .unwrap()
+            .is_none());
         assert_eq!(
             http.requests().len(),
             2,
             "each lookup fetched, none covered"
         );
         assert_eq!(
-            client.verify_signature_detailed(&fixture.fod_id).unwrap(),
+            client
+                .verify_signature_detailed(&fixture.fod_id)
+                .await
+                .unwrap(),
             SignatureCheck::NoKey
         );
         assert_eq!(
@@ -935,8 +1111,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_date_after_the_newest_start_held_is_fetched_again() {
+    #[tokio::test]
+    async fn a_date_after_the_newest_start_held_is_fetched_again() {
         let fixture = Fixture::new();
         // A schedule with no key published ahead: the newest start is
         // yesterday, and an identifier created now is later than it, so the
@@ -946,26 +1122,115 @@ mod tests {
         let json = format!(r#"[{{"startsAt":"{yesterday}","publicKey":"{escaped}"}}]"#);
         let http = FakeHttp::answering(vec![(200, &json), (200, &json)]);
         let client = new_client(http.clone());
-        assert!(client.public_key_for(&fixture.fod_id).unwrap().is_some());
-        assert!(client.public_key_for(&fixture.fod_id).unwrap().is_some());
+        assert!(client
+            .public_key_for(&fixture.fod_id)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(client
+            .public_key_for(&fixture.fod_id)
+            .await
+            .unwrap()
+            .is_some());
         assert_eq!(http.requests().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn concurrent_lookups_share_one_fetch() {
+        let fixture = Fixture::new();
+        // One canned answer only, so a second request would fail with no
+        // response left and show up as an error below.
+        let http = FakeHttp::answering(vec![(200, &fixture.keys_json())]);
+        let client = new_client(http.clone());
+        // Both futures start before either finishes. The stub yields before
+        // answering, so the second lookup finds the first one's fetch in
+        // flight and waits for it rather than sending its own.
+        let (first, second, third) = tokio::join!(
+            client.public_keys(),
+            client.public_key_for(&fixture.fod_id),
+            client.verify_signature(&fixture.fod_id),
+        );
+        assert_eq!(first.unwrap().len(), 2);
+        assert!(second.unwrap().is_some());
+        assert!(third.unwrap());
+        assert_eq!(http.requests().len(), 1, "one request served all three");
+    }
+
+    #[tokio::test]
+    async fn a_waiter_fetches_for_itself_when_the_shared_fetch_fails() {
+        let fixture = Fixture::new();
+        let http = FakeHttp::answering(vec![(500, "down"), (200, &fixture.keys_json())]);
+        let client = new_client(http.clone());
+        let (first, second) = tokio::join!(client.public_keys(), client.public_keys());
+        assert!(
+            matches!(first, Err(Error::UnexpectedStatus { status: 500, .. })),
+            "the caller that fetched sees the failure"
+        );
+        assert_eq!(
+            second.unwrap().len(),
+            2,
+            "the caller that waited fetched again and got the keys"
+        );
+        assert_eq!(http.requests().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_fetch_does_not_leave_waiters_stranded() {
+        let fixture = Fixture::new();
+        let http = FakeHttp::answering(vec![(200, &fixture.keys_json())]);
+        let client = new_client(http.clone());
+        // Poll a fetch far enough to mark it in flight, then drop it before
+        // it lands. The in-flight mark must go with it.
+        {
+            let waker = Waker::noop();
+            let mut cx = Context::from_waker(waker);
+            let mut fetch = Box::pin(client.public_keys());
+            assert!(fetch.as_mut().poll(&mut cx).is_pending());
+            assert!(client.lock_cache().fetching, "the fetch is in flight");
+        }
+        assert!(
+            !client.lock_cache().fetching,
+            "the dropped fetch cleared the mark"
+        );
+        // The stub recorded nothing, because the dropped future never got
+        // past its first yield, so the canned answer is still there for
+        // this lookup.
+        assert_eq!(client.public_keys().await.unwrap().len(), 2);
+        assert_eq!(http.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_transport_future_need_not_be_send() {
+        // The stub holds an Rc across an await inside its send future. That
+        // future is not Send, and the test compiles and passes because the
+        // trait never asks it to be.
+        let fixture = Fixture::new();
+        let http: Arc<dyn DidHttpClient> = Arc::new(RcHolding {
+            body: fixture.keys_json(),
+        });
+        let client = new_client(http);
+        assert_eq!(client.public_keys().await.unwrap().len(), 2);
+        assert!(client.verify_signature(&fixture.fod_id).await.unwrap());
     }
 
     // Offline signature checking.
 
-    #[test]
-    fn a_genuine_signature_verifies_under_the_key_in_force() {
+    #[tokio::test]
+    async fn a_genuine_signature_verifies_under_the_key_in_force() {
         let fixture = Fixture::new();
         let client = new_client(FakeHttp::answering(vec![(200, &fixture.keys_json())]));
         assert_eq!(
-            client.verify_signature_detailed(&fixture.fod_id).unwrap(),
+            client
+                .verify_signature_detailed(&fixture.fod_id)
+                .await
+                .unwrap(),
             SignatureCheck::Verified
         );
-        assert!(client.verify_signature(&fixture.fod_id).unwrap());
+        assert!(client.verify_signature(&fixture.fod_id).await.unwrap());
     }
 
-    #[test]
-    fn a_signature_under_another_key_is_invalid() {
+    #[tokio::test]
+    async fn a_signature_under_another_key_is_invalid() {
         let fixture = Fixture::new();
         let other = Crypto::new().public_key_pem().unwrap();
         let client = new_client(FakeHttp::answering(vec![(
@@ -973,33 +1238,39 @@ mod tests {
             &fixture.keys_json_with(&other),
         )]));
         assert_eq!(
-            client.verify_signature_detailed(&fixture.fod_id).unwrap(),
+            client
+                .verify_signature_detailed(&fixture.fod_id)
+                .await
+                .unwrap(),
             SignatureCheck::Invalid
         );
-        assert!(!client.verify_signature(&fixture.fod_id).unwrap());
+        assert!(!client.verify_signature(&fixture.fod_id).await.unwrap());
     }
 
-    #[test]
-    fn a_key_that_cannot_be_read_is_unusable_not_invalid() {
+    #[tokio::test]
+    async fn a_key_that_cannot_be_read_is_unusable_not_invalid() {
         let fixture = Fixture::new();
         let client = new_client(FakeHttp::answering(vec![(
             200,
             &fixture.keys_json_with("not a PEM"),
         )]));
         assert_eq!(
-            client.verify_signature_detailed(&fixture.fod_id).unwrap(),
+            client
+                .verify_signature_detailed(&fixture.fod_id)
+                .await
+                .unwrap(),
             SignatureCheck::KeyUnusable
         );
     }
 
     // The online verify call.
 
-    #[test]
-    fn verify_gets_the_verify_route_with_both_parameter_names() {
+    #[tokio::test]
+    async fn verify_gets_the_verify_route_with_both_parameter_names() {
         let fixture = Fixture::new();
         let http = FakeHttp::answering(vec![(200, r#"{"valid":true}"#)]);
         let client = new_client(http.clone());
-        assert!(client.verify(&fixture.fod_id).unwrap());
+        assert!(client.verify(&fixture.fod_id).await.unwrap());
         let requests = http.requests();
         assert_eq!(requests.len(), 1);
         let encoded = escape_data_string(&fixture.encoded());
@@ -1020,32 +1291,32 @@ mod tests {
         assert_eq!(requests[0].user_agent, USER_AGENT);
     }
 
-    #[test]
-    fn verify_reads_a_false_answer() {
+    #[tokio::test]
+    async fn verify_reads_a_false_answer() {
         let fixture = Fixture::new();
         let client = new_client(FakeHttp::answering(vec![(200, r#"{"valid":false}"#)]));
-        assert!(!client.verify_encoded(&fixture.encoded()).unwrap());
+        assert!(!client.verify_encoded(&fixture.encoded()).await.unwrap());
     }
 
-    #[test]
-    fn verify_reports_the_service_errors_on_400() {
+    #[tokio::test]
+    async fn verify_reports_the_service_errors_on_400() {
         let fixture = Fixture::new();
         let client = new_client(FakeHttp::answering(vec![(
             400,
             r#"{"errors":["first problem","second problem"]}"#,
         )]));
-        let error = client.verify_encoded(&fixture.encoded()).unwrap_err();
+        let error = client.verify_encoded(&fixture.encoded()).await.unwrap_err();
         assert!(
             matches!(error, Error::InvalidArgument(ref m) if m == "first problem second problem"),
             "{error}"
         );
     }
 
-    #[test]
-    fn verify_treats_any_other_answer_as_unexpected() {
+    #[tokio::test]
+    async fn verify_treats_any_other_answer_as_unexpected() {
         let fixture = Fixture::new();
         let client = new_client(FakeHttp::answering(vec![(500, "oops")]));
-        let error = client.verify(&fixture.fod_id).unwrap_err();
+        let error = client.verify(&fixture.fod_id).await.unwrap_err();
         assert!(
             matches!(
                 error,
@@ -1058,28 +1329,31 @@ mod tests {
             "{error}"
         );
         let client = new_client_with_licence(FakeHttp::answering(vec![(200, "not json")]));
-        let error = client.verify(&fixture.fod_id).unwrap_err();
+        let error = client.verify(&fixture.fod_id).await.unwrap_err();
         assert!(matches!(error, Error::UnexpectedStatus { .. }), "{error}");
     }
 
-    #[test]
-    fn a_value_that_is_not_a_51did_is_refused_before_any_call() {
+    #[tokio::test]
+    async fn a_value_that_is_not_a_51did_is_refused_before_any_call() {
         let http = FakeHttp::answering(vec![]);
         let client = new_client(http.clone());
         for value in ["", "   ", "not base 64!", "AAAA"] {
-            let error = client.verify_encoded(value).unwrap_err();
+            let error = client.verify_encoded(value).await.unwrap_err();
             assert!(
                 matches!(error, Error::InvalidArgument(_)),
                 "{value:?}: {error}"
             );
-            let error = client.redeem_encoded(value, "sealed", None).unwrap_err();
+            let error = client
+                .redeem_encoded(value, "sealed", None)
+                .await
+                .unwrap_err();
             assert!(
                 matches!(error, Error::InvalidArgument(_)),
                 "{value:?}: {error}"
             );
         }
         let too_long = "A".repeat(MAXIMUM_ENCODED_LENGTH + 1);
-        let error = client.verify_encoded(&too_long).unwrap_err();
+        let error = client.verify_encoded(&too_long).await.unwrap_err();
         assert!(
             matches!(error, Error::InvalidArgument(ref m) if m.contains("too long")),
             "{error}"
@@ -1089,15 +1363,18 @@ mod tests {
 
     // Redeem.
 
-    #[test]
-    fn redeem_posts_the_form_without_a_licence_field_when_none_was_given() {
+    #[tokio::test]
+    async fn redeem_posts_the_form_without_a_licence_field_when_none_was_given() {
         let fixture = Fixture::new();
         let http = FakeHttp::answering(vec![(
             200,
             r#"{"context":"verified","signature":"verified"}"#,
         )]);
         let client = new_client(http.clone());
-        let result = client.redeem(&fixture.fod_id, "sealed", None).unwrap();
+        let result = client
+            .redeem(&fixture.fod_id, "sealed", None)
+            .await
+            .unwrap();
         assert_eq!(result.context(), ContextOutcome::Verified);
         let requests = http.requests();
         assert_eq!(requests.len(), 1);
@@ -1120,13 +1397,14 @@ mod tests {
         assert_eq!(request.user_agent, USER_AGENT);
     }
 
-    #[test]
-    fn redeem_carries_the_licence_key_and_challenge_in_the_form_only() {
+    #[tokio::test]
+    async fn redeem_carries_the_licence_key_and_challenge_in_the_form_only() {
         let fixture = Fixture::new();
         let http = FakeHttp::answering(vec![(200, r#"{"context":"verified"}"#)]);
         let client = new_client_with_licence(http.clone());
         client
             .redeem_encoded(&fixture.encoded(), "sealed", Some("nonce-1"))
+            .await
             .unwrap();
         let requests = http.requests();
         let request = &requests[0];
@@ -1136,67 +1414,85 @@ mod tests {
         assert!(!request.url.contains("licence-value"));
     }
 
-    #[test]
-    fn redeem_maps_a_mismatch_and_a_misconfigured_factor() {
+    #[tokio::test]
+    async fn redeem_maps_a_mismatch_and_a_misconfigured_factor() {
         let fixture = Fixture::new();
         let client = new_client(FakeHttp::answering(vec![(
             200,
             r#"{"context":"mismatch","signature":"verified",
                 "factors":{"device":"mismatch","asn":"misconfigured"}}"#,
         )]));
-        let result = client.redeem(&fixture.fod_id, "sealed", None).unwrap();
+        let result = client
+            .redeem(&fixture.fod_id, "sealed", None)
+            .await
+            .unwrap();
         assert_eq!(result.context(), ContextOutcome::Mismatch);
         let factors = result.factors().unwrap();
         assert_eq!(factors["device"], crate::FactorOutcome::Mismatch);
         assert_eq!(factors["asn"], crate::FactorOutcome::Misconfigured);
     }
 
-    #[test]
-    fn redeem_reads_503_as_unconfirmed() {
+    #[tokio::test]
+    async fn redeem_reads_503_as_unconfirmed() {
         let fixture = Fixture::new();
         let client = new_client(FakeHttp::answering(vec![(503, "")]));
-        let result = client.redeem(&fixture.fod_id, "sealed", None).unwrap();
+        let result = client
+            .redeem(&fixture.fod_id, "sealed", None)
+            .await
+            .unwrap();
         assert_eq!(result.context(), ContextOutcome::Unconfirmed);
         assert_eq!(result.status(), 503);
     }
 
-    #[test]
-    fn redeem_reports_the_service_errors_on_400() {
+    #[tokio::test]
+    async fn redeem_reports_the_service_errors_on_400() {
         let fixture = Fixture::new();
         let client = new_client(FakeHttp::answering(vec![(
             400,
             r#"{"errors":["bad 51did"]}"#,
         )]));
-        let error = client.redeem(&fixture.fod_id, "sealed", None).unwrap_err();
+        let error = client
+            .redeem(&fixture.fod_id, "sealed", None)
+            .await
+            .unwrap_err();
         assert!(
             matches!(error, Error::InvalidArgument(ref m) if m == "bad 51did"),
             "{error}"
         );
         // A 400 with no errors array carries the body as the message.
         let client = new_client(FakeHttp::answering(vec![(400, "plain refusal")]));
-        let error = client.redeem(&fixture.fod_id, "sealed", None).unwrap_err();
+        let error = client
+            .redeem(&fixture.fod_id, "sealed", None)
+            .await
+            .unwrap_err();
         assert!(
             matches!(error, Error::InvalidArgument(ref m) if m == "plain refusal"),
             "{error}"
         );
     }
 
-    #[test]
-    fn redeem_reports_404_as_not_supported() {
+    #[tokio::test]
+    async fn redeem_reports_404_as_not_supported() {
         let fixture = Fixture::new();
         let client = new_client(FakeHttp::answering(vec![(404, "")]));
-        let error = client.redeem(&fixture.fod_id, "sealed", None).unwrap_err();
+        let error = client
+            .redeem(&fixture.fod_id, "sealed", None)
+            .await
+            .unwrap_err();
         assert!(
             matches!(error, Error::NotSupported(ref e) if e == ENDPOINT),
             "{error}"
         );
     }
 
-    #[test]
-    fn redeem_treats_any_other_status_as_unexpected() {
+    #[tokio::test]
+    async fn redeem_treats_any_other_status_as_unexpected() {
         let fixture = Fixture::new();
         let client = new_client(FakeHttp::answering(vec![(502, "gateway")]));
-        let error = client.redeem(&fixture.fod_id, "sealed", None).unwrap_err();
+        let error = client
+            .redeem(&fixture.fod_id, "sealed", None)
+            .await
+            .unwrap_err();
         assert!(
             matches!(
                 error,
@@ -1210,11 +1506,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn redeem_reports_a_transport_failure() {
+    #[tokio::test]
+    async fn redeem_reports_a_transport_failure() {
         let fixture = Fixture::new();
         let client = new_client(FakeHttp::failing("timed out"));
-        let error = client.redeem(&fixture.fod_id, "sealed", None).unwrap_err();
+        let error = client
+            .redeem(&fixture.fod_id, "sealed", None)
+            .await
+            .unwrap_err();
         assert!(matches!(error, Error::Transport(_)), "{error}");
     }
 

@@ -46,7 +46,7 @@ licence key never reaches the browser.
 ## Usage
 
 Add the crate, turning on the built-in transport where the program runs on a
-native host.
+native host with a tokio runtime.
 
 ```toml
 [dependencies]
@@ -60,6 +60,12 @@ take the transport as a parameter so they read the same either way. On a
 native host, `Arc::new(fodid_client::ReqwestClient::default())` is the
 transport to pass, or leave `http_client` out and the builder creates one.
 
+Every method that may reach the network is `async` and is awaited. The crate
+carries no async runtime of its own, so the futures run on whatever runtime
+the host has, and they are not required to be `Send`, so a single-threaded
+host can await them. The built-in `reqwest` transport runs on a tokio
+runtime, so a program that uses it awaits the client from inside one.
+
 ### Step two, redeeming on the server
 
 ```rust,no_run
@@ -67,7 +73,7 @@ use std::sync::Arc;
 use fodid::FodId;
 use fodid_client::{ContextOutcome, DidClient, DidHttpClient, FactorOutcome};
 
-fn redeem(
+async fn redeem(
     transport: Arc<dyn DidHttpClient>,
     encoded_51did: &str,
     sealed_result: &str,
@@ -86,7 +92,7 @@ fn redeem(
     // about its signature, which the redemption reports separately.
     let fod_id = FodId::from_base64(encoded_51did)?;
 
-    let outcome = client.redeem(&fod_id, sealed_result, challenge)?;
+    let outcome = client.redeem(&fod_id, sealed_result, challenge).await?;
     match outcome.context() {
         ContextOutcome::Verified => {
             // Presented from the connection it was created on.
@@ -143,14 +149,15 @@ is not a 51Did is refused locally, before any call is made.
 The cloud publishes the schedule of signing keys, each in force from its
 start until the next one starts. The client fetches that schedule on first
 use and again when it is a day old, when no key covers the identifier's date,
-or when the date is later than the newest start it holds.
+or when the date is later than the newest start it holds. Concurrent callers
+that each find the schedule needs fetching share one fetch.
 
 ```rust,no_run
 use std::sync::Arc;
 use fodid::FodId;
 use fodid_client::{DidClient, DidHttpClient, SignatureCheck};
 
-fn check(
+async fn check(
     transport: Arc<dyn DidHttpClient>,
     encoded_51did: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -160,7 +167,7 @@ fn check(
     let fod_id = FodId::from_base64(encoded_51did)?;
 
     // Once the keys are cached this makes no network call.
-    match client.verify_signature_detailed(&fod_id)? {
+    match client.verify_signature_detailed(&fod_id).await? {
         SignatureCheck::Verified => println!("genuine"),
         SignatureCheck::Invalid => println!("distrust this identifier"),
         SignatureCheck::NoKey => println!("no published key covers its date"),
@@ -169,7 +176,7 @@ fn check(
 
     // The same check through the cloud, which costs one use and needs no
     // licence key.
-    let genuine_by_cloud: bool = client.verify(&fod_id)?;
+    let genuine_by_cloud: bool = client.verify(&fod_id).await?;
     let _ = genuine_by_cloud;
     Ok(())
 }
@@ -181,24 +188,33 @@ log rather than a fraud signal.
 
 ### Supplying a transport
 
-Every request goes through the `DidHttpClient` trait, one blocking `send`
-that returns whatever the server answered, whatever the status. A host with
-its own HTTP stack implements it and hands the client an `Arc` of it. A
-transport returns `Err` only when the request did not complete, because the
-client decides what each status means.
+Every request goes through the `DidHttpClient` trait, one awaitable `send`
+that resolves to whatever the server answered, whatever the status. It
+returns a `LocalBoxFuture`, a boxed future that is not required to be
+`Send`, so a host whose request or response types cannot cross threads can
+still implement it. A host with its own HTTP stack implements the trait and
+hands the client an `Arc` of it. A transport resolves to `Err` only when the
+request did not complete, because the client decides what each status means.
 
 ```rust
-use fodid_client::{DidHttpClient, DidHttpRequest, DidHttpResponse, HttpMethod};
+use fodid_client::{
+    DidHttpClient, DidHttpRequest, DidHttpResponse, HttpMethod, LocalBoxFuture,
+};
 
 struct HostTransport;
 
 impl DidHttpClient for HostTransport {
-    fn send(&self, request: &DidHttpRequest) -> Result<DidHttpResponse, String> {
-        // Hand request.url, request.form (url-encoded for a POST) and
-        // request.user_agent to the host's own fetch, then return the
-        // status and body it answered with.
-        let _ = (request.method == HttpMethod::Post, &request.url);
-        Err("not connected in this example".to_string())
+    fn send<'a>(
+        &'a self,
+        request: &'a DidHttpRequest,
+    ) -> LocalBoxFuture<'a, Result<DidHttpResponse, String>> {
+        Box::pin(async move {
+            // Hand request.url, request.form (url-encoded for a POST) and
+            // request.user_agent to the host's own fetch, await it, then
+            // return the status and body it answered with.
+            let _ = (request.method == HttpMethod::Post, &request.url);
+            Err("not connected in this example".to_string())
+        })
     }
 }
 ```
