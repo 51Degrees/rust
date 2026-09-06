@@ -49,8 +49,9 @@
 //!
 //! ## Identifier types
 //!
-//! Bits 6-7 of the flags byte select the [`IdType`], which determines the
-//! length and meaning of the match key:
+//! The flags byte carries the identifier type, read through
+//! [`FodId::id_type`], which determines the length and meaning of the match
+//! key:
 //!
 //! - [`IdType::Probabilistic`] (the default; legacy identifiers decode as this)
 //!   and [`IdType::HashedEmail`] carry a 32-byte SHA-256.
@@ -59,14 +60,17 @@
 //!
 //! ## Payload layout
 //!
-//! | Offset | Length | Field                                              |
-//! |-------:|-------:|----------------------------------------------------|
-//! |      0 |      1 | Flags (bits 0-2 usage, bits 6-7 type)              |
-//! |      1 |      4 | LicenseId (`u32` little endian)                    |
-//! |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
-//! |      5 |     16 | Value: GUID (Random)                               |
+//! The payload is a five byte header, being a flags byte and a four byte
+//! little endian License Id, followed by the match key. Every field is read
+//! through a typed accessor on [`FodId`], and the offsets and lengths are
+//! internal to this crate, because reading a field out of the payload bytes
+//! by hand is how the usage comes out wrong. The layout is specified at
+//! <https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md>
+//! and the accessors every 51Did package offers at
+//! <https://github.com/51Degrees/specifications/blob/main/did-specification/package-surface.md>,
+//! and those two pages are the authority rather than any summary here.
 //!
-//! These lengths are lower bounds. The payload must hold the 5 byte header
+//! The lengths given there are lower bounds. The payload must hold the header
 //! before the type can be read, and then the value the type requires, being
 //! 16 GUID bytes for a random identifier and 32 hash bytes for a
 //! probabilistic or hashed email one. A payload may carry more bytes after
@@ -136,7 +140,8 @@
 //! // Reading answers whether the input is a 51Did, and nothing more.
 //! let fod_id = FodId::from_base64(base64_from_cloud)?;
 //!
-//! let flags: u8 = fod_id.flags();
+//! let usage = fod_id.usage(); // the highest usage granted, never a raw bit
+//! let from_consent = fod_id.usage_from_consent();
 //! let id_type = fod_id.id_type();
 //! let license_id: u32 = fod_id.license_id();
 //! let match_key: &[u8] = fod_id.match_key(); // the match key to compare (32 or 16 bytes)
@@ -148,7 +153,8 @@
 //! // Verifying is the second question, asked of the parsed value.
 //! let status = fod_id.verify_status_with_public_key(public_pem, &[]);
 //! let genuine = status == SignatureStatus::Valid;
-//! # let _ = (flags, id_type, license_id, match_key, domain, round_trip, genuine);
+//! # let _ = (usage, from_consent, id_type, license_id, match_key);
+//! # let _ = (domain, round_trip, genuine);
 //! # Ok(())
 //! # }
 //! ```
@@ -260,16 +266,10 @@ mod error;
 mod fodid;
 
 pub use error::{Error, Result};
-pub use fodid::{
-    FodId, IdType, Usage, FLAGS_OFFSET, GUID_LENGTH, HEADER_LENGTH, LICENSE_ID_LENGTH,
-    LICENSE_ID_OFFSET, MATCH_KEY_LENGTH, MATCH_KEY_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
-};
-
-// The obsolete names for the match key constants, re-exported so callers
-// written against the earlier releases still compile. Using either one raises
-// a deprecation warning that names the replacement.
-#[allow(deprecated)]
-pub use fodid::{HASH_LENGTH, HASH_OFFSET};
+// The typed surface, and nothing else. The payload offsets and lengths stay
+// inside the crate, so the only way to read a field is the accessor that
+// names it. See the module comment in fodid.rs for why.
+pub use fodid::{FodId, IdType, Usage};
 
 // The OWID library, compiled into this crate as a private module. The source
 // is copied from the owid-rust submodule (https://github.com/51Degrees/owid-rust)

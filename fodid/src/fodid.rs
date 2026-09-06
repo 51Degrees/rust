@@ -27,52 +27,51 @@ use crate::owid::Owid;
 
 use crate::error::{Error, Result};
 
-/// Byte offset of the Flags field within the payload.
-pub const FLAGS_OFFSET: usize = 0;
+// The byte layout of a 51Did payload. These offsets and lengths are internal
+// to the crate, because the only use a caller has for an offset is to read a
+// field out of the payload by hand, and reading by hand is how the usage
+// comes out wrong. The usage bits are cumulative, so anyone masking the flags
+// byte for the non-marketing bit reads every marketing identifier as
+// non-marketing, which is the opposite of the truth. The typed accessors on
+// `FodId` are the way to read every field.
+//
+// The layout is specified at
+// https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md
+// and the accessors every 51Did package offers at
+// https://github.com/51Degrees/specifications/blob/main/did-specification/package-surface.md
+// Those pages are the authority, and the unit tests at the end of this file
+// check these values against them.
+//
+// There is no constant for the minimum length of a whole payload, because
+// that is the header plus the match key the identifier type requires, and
+// `FodId::from_owid` adds the two together at the point it needs the number.
+
+/// Byte offset of the flags field within the payload.
+pub(crate) const FLAGS_OFFSET: usize = 0;
 
 /// Byte offset of the License Id field within the payload.
-pub const LICENSE_ID_OFFSET: usize = 1;
+pub(crate) const LICENSE_ID_OFFSET: usize = 1;
 
 /// Byte length of the License Id field.
-pub const LICENSE_ID_LENGTH: usize = 4;
+pub(crate) const LICENSE_ID_LENGTH: usize = 4;
 
 /// Byte offset of the match key within the payload (the byte after the
 /// header). For a probabilistic or hashed-email identifier this is the start of
-/// the SHA-256 hash; for a random identifier it is the start of the GUID.
-pub const MATCH_KEY_OFFSET: usize = 5;
+/// the SHA-256 hash, and for a random identifier the start of the GUID.
+pub(crate) const MATCH_KEY_OFFSET: usize = 5;
 
 /// Byte length of the match key carried by probabilistic and hashed-email
 /// identifiers (a SHA-256 hash).
-pub const MATCH_KEY_LENGTH: usize = 32;
+pub(crate) const MATCH_KEY_LENGTH: usize = 32;
 
-/// Obsolete alias for [`MATCH_KEY_OFFSET`]. The stable, comparable part of a
-/// 51Did is now called the match key.
-#[deprecated(note = "renamed to MATCH_KEY_OFFSET")]
-pub const HASH_OFFSET: usize = MATCH_KEY_OFFSET;
-
-/// Obsolete alias for [`MATCH_KEY_LENGTH`]. The stable, comparable part of a
-/// 51Did is now called the match key.
-#[deprecated(note = "renamed to MATCH_KEY_LENGTH")]
-pub const HASH_LENGTH: usize = MATCH_KEY_LENGTH;
-
-/// Byte length of the payload header (Flags + LicenseId) that is common to every
-/// identifier type. A payload shorter than this is
+/// Byte length of the payload header (flags and License Id) that is common to
+/// every identifier type. A payload shorter than this is
 /// [`Error::PayloadTooShort`].
-pub const HEADER_LENGTH: usize = MATCH_KEY_OFFSET;
+pub(crate) const HEADER_LENGTH: usize = MATCH_KEY_OFFSET;
 
-/// Byte length of the GUID match key carried by [`IdType::Random`] identifiers.
-pub const GUID_LENGTH: usize = 16;
-
-/// Minimum byte length of a [`IdType::Random`] 51Did payload (header + GUID).
-/// A random payload shorter than this is
-/// [`Error::InvalidTypePayloadLength`]. There is no maximum.
-pub const RANDOM_PAYLOAD_LENGTH: usize = HEADER_LENGTH + GUID_LENGTH;
-
-/// Minimum byte length of a [`IdType::Probabilistic`] or [`IdType::HashedEmail`]
-/// 51Did payload (header + hash). A payload of either type shorter than this
-/// is [`Error::InvalidTypePayloadLength`]. There is no maximum. Random
-/// payloads have a shorter minimum, see [`RANDOM_PAYLOAD_LENGTH`].
-pub const PAYLOAD_LENGTH: usize = MATCH_KEY_OFFSET + MATCH_KEY_LENGTH;
+/// Byte length of the GUID match key carried by [`IdType::Random`]
+/// identifiers.
+pub(crate) const GUID_LENGTH: usize = 16;
 
 /// The identifier type carried in bits 6-7 of the 51Did flags byte.
 ///
@@ -169,24 +168,25 @@ impl IdType {
 /// A parsed 51Did: an [`Owid`] envelope whose payload encodes the fields of a
 /// 51Degrees identifier.
 ///
-/// The payload starts with a fixed header: a 1-byte usage [`flags`](FodId::flags)
-/// bit mask and a 4-byte little endian [`license_id`](FodId::license_id). Bits
-/// 6-7 of the flags select the [`id_type`](FodId::id_type), which in turn
-/// determines the length and meaning of the match key bytes that follow:
+/// The payload starts with a fixed five byte header, being a flags byte and a
+/// four byte little endian [`license_id`](FodId::license_id), and the match
+/// key follows it. The flags byte is not handed out whole, because every bit
+/// in it has a name, so the usage is read through [`usage`](FodId::usage) and
+/// [`usage_from_consent`](FodId::usage_from_consent) and the identifier type
+/// through [`id_type`](FodId::id_type). The type decides the length and
+/// meaning of the match key, being 16 GUID bytes for [`IdType::Random`] and a
+/// 32 byte SHA-256 for the other types, and the match key is read through
+/// [`match_key`](FodId::match_key).
 ///
-/// | Offset | Length | Field                                              |
-/// |-------:|-------:|----------------------------------------------------|
-/// |      0 |      1 | Flags (bits 0-2 usage, bits 6-7 type)              |
-/// |      1 |      4 | LicenseId (`u32` little endian)                    |
-/// |      5 |     32 | Match key: SHA-256 (Probabilistic, HashedEmail)    |
-/// |      5 |     16 | Match key: GUID (Random)                           |
+/// The byte layout is specified at
+/// <https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md>
+/// and the accessors every 51Did package offers at
+/// <https://github.com/51Degrees/specifications/blob/main/did-specification/package-surface.md>,
+/// and those two pages are the authority rather than any summary here.
 ///
-/// The match key is read through [`match_key`](FodId::match_key). For a
-/// [`IdType::Random`] identifier it is a GUID, otherwise a SHA-256.
-///
-/// The lengths in the table are minimums. A payload may carry more bytes
-/// after the match key, which this reader accepts and leaves in place, reachable
-/// through [`payload`](Owid::payload). There is no upper bound in this crate.
+/// Those lengths are minimums. A payload may carry more bytes after the match
+/// key, which this reader accepts and leaves in place, reachable through
+/// [`payload`](Owid::payload). There is no upper bound in this crate.
 ///
 /// `FodId` [`Deref`]s to [`Owid`], so the OWID level fields and operations
 /// (`domain()`, `date()`, `payload()`, `signature()`, `as_base64`,
@@ -245,10 +245,10 @@ impl FodId {
     /// through [`owid`](FodId::owid) and the [`Deref`].
     ///
     /// This is the one place the 51Did payload rules live. The payload must
-    /// hold the [`HEADER_LENGTH`] byte header before the type can be read,
-    /// and then the value length that type requires ([`GUID_LENGTH`] for
-    /// [`IdType::Random`], [`MATCH_KEY_LENGTH`] for
-    /// [`IdType::Probabilistic`] and [`IdType::HashedEmail`]). A
+    /// hold the five byte header before the type can be read, and then the
+    /// value length that type requires, being 16 GUID bytes for
+    /// [`IdType::Random`] and a 32 byte hash for [`IdType::Probabilistic`]
+    /// and [`IdType::HashedEmail`]. A
     /// [`IdType::Reserved`] payload has no defined value length and is read
     /// best effort. Bytes after the value are accepted and left in the
     /// payload, because a longer payload is a newer shape rather than a fault.
@@ -296,28 +296,21 @@ impl FodId {
         })
     }
 
-    /// The 1-byte usage flags bit mask from the payload. Records which usage
-    /// purposes the cloud was allowed to derive the identifier for (bits 0-2)
-    /// and the identifier type (bits 6-7, read through [`id_type`](FodId::id_type)).
-    pub fn flags(&self) -> u8 {
-        self.flags
-    }
-
-    /// The identifier type carried in bits 6-7 of [`flags`](FodId::flags).
+    /// The identifier type carried in bits 6-7 of the flags byte.
     pub fn id_type(&self) -> IdType {
         IdType::from_flags(self.flags)
     }
 
-    /// The usage carried in bits 0-2 of [`flags`](FodId::flags), as the
-    /// highest usage granted. See [`Usage`] for why it is read that way.
+    /// The usage carried in bits 0-2 of the flags byte, as the highest usage
+    /// granted. See [`Usage`] for why it is read that way.
     pub fn usage(&self) -> Usage {
         Usage::from_flags(self.flags)
     }
 
     /// Whether the usage was derived from an IAB consent string the
     /// caller sent, rather than stated by the caller directly. Bit 3 of
-    /// [`flags`](FodId::flags). Both are legitimate ways to arrive at a
-    /// usage, and this says nothing about which usage it is.
+    /// the flags byte. Both are legitimate ways to arrive at a usage, and
+    /// this says nothing about which usage it is.
     pub fn usage_from_consent(&self) -> bool {
         self.flags & 0b1000 != 0
     }
@@ -337,13 +330,6 @@ impl FodId {
     /// never envelopes.
     pub fn match_key(&self) -> &[u8] {
         &self.match_key
-    }
-
-    /// Obsolete alias for [`match_key`](FodId::match_key). The stable,
-    /// comparable part of a 51Did is now called the match key.
-    #[deprecated(note = "renamed to match_key")]
-    pub fn hash(&self) -> &[u8] {
-        self.match_key()
     }
 
     /// A reference to the underlying OWID envelope.
@@ -386,5 +372,53 @@ impl FromStr for FodId {
 
     fn from_str(s: &str) -> Result<Self> {
         FodId::from_base64(s)
+    }
+}
+
+/// The layout constants are internal, so a consumer cannot read them and the
+/// tests that build payloads byte by byte carry their own copy of the layout
+/// taken from the specification. These checks are the one place the two
+/// copies are tied together, comparing the constants the reader uses against
+/// the numbers the specification publishes at
+/// <https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md>.
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn constants_match_the_published_layout() {
+        assert_eq!(FLAGS_OFFSET, 0);
+        assert_eq!(LICENSE_ID_OFFSET, 1);
+        assert_eq!(LICENSE_ID_LENGTH, 4);
+        assert_eq!(MATCH_KEY_OFFSET, 5);
+        assert_eq!(MATCH_KEY_LENGTH, 32);
+        assert_eq!(HEADER_LENGTH, 5);
+        assert_eq!(GUID_LENGTH, 16);
+    }
+
+    #[test]
+    fn constants_are_internally_consistent() {
+        assert_eq!(LICENSE_ID_OFFSET + LICENSE_ID_LENGTH, MATCH_KEY_OFFSET);
+        assert_eq!(FLAGS_OFFSET + 1, LICENSE_ID_OFFSET);
+        assert_eq!(HEADER_LENGTH, MATCH_KEY_OFFSET);
+    }
+
+    /// The usage bits are cumulative, so the highest one set is the answer.
+    /// A mask for the non-marketing bit alone would say yes for every
+    /// marketing identifier, which is the wrong way round.
+    #[test]
+    fn usage_decodes_as_the_highest_bit_set() {
+        assert_eq!(Usage::from_flags(0b000), Usage::None);
+        assert_eq!(Usage::from_flags(0b001), Usage::NonMarketing);
+        assert_eq!(Usage::from_flags(0b011), Usage::Standard);
+        assert_eq!(Usage::from_flags(0b111), Usage::Personalized);
+    }
+
+    #[test]
+    fn id_type_decodes_from_the_top_two_bits() {
+        assert_eq!(IdType::from_flags(0b0000_0000), IdType::Probabilistic);
+        assert_eq!(IdType::from_flags(0b0100_0000), IdType::Random);
+        assert_eq!(IdType::from_flags(0b1000_0000), IdType::HashedEmail);
+        assert_eq!(IdType::from_flags(0b1100_0000), IdType::Reserved);
     }
 }

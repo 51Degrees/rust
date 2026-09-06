@@ -38,7 +38,7 @@ use fiftyone_cloud_request_engine::{
     CloudHttpClient, CloudHttpRequest, CloudHttpResponse, CloudRequestEngine, HttpMethod,
 };
 use fiftyone_fodid_cloud::{FodIdCloudEngine, FodIdData, FODID_DATA_KEY};
-use fodid::{Creator, Crypto, Owid};
+use fodid::{Creator, Crypto, IdType, Owid, Usage};
 
 /// A fake transport that answers the cloud endpoints from in-memory fixtures.
 struct FakeCloud {
@@ -182,7 +182,11 @@ fn unpacks_global_identifier_raw_and_parsed() {
     // Parsed form unpacks the payload fields from the real envelope.
     let parsed = fodid.id_prob_global_fod_id();
     let fod_id = parsed.value().expect("the global identifier parses");
-    assert_eq!(fod_id.flags(), FLAGS);
+    // FLAGS is 0b0000_0001, so the usage bits grant non-marketing only,
+    // bit 3 is clear, and bits 6-7 leave the type probabilistic.
+    assert_eq!(fod_id.usage(), Usage::NonMarketing);
+    assert!(!fod_id.usage_from_consent());
+    assert_eq!(fod_id.id_type(), IdType::Probabilistic);
     assert_eq!(fod_id.license_id(), LICENSE_ID);
     assert_eq!(fod_id.domain(), TEST_DOMAIN);
 

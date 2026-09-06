@@ -140,5 +140,9 @@ manifest's `include`, so `cargo publish` packages it.
 
 When working on `fodid`, keep the three levels distinct: the **51Did** is the
 identifier as a whole; the **envelope** (also called the wrapper) is the signed
-OWID that carries it and changes on every issue; the **value** is the stable,
-comparable payload read through `FodId::hash`. Compare values, never envelopes.
+OWID that carries it and changes on every issue; the **match key** is the
+stable, comparable part of the payload, read through `FodId::match_key`.
+Compare match keys, never envelopes. The payload offsets and lengths are
+internal to the crate, so every field is read through its typed accessor,
+and the layout is specified at
+https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md

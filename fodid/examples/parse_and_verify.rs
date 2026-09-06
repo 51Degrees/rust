@@ -50,7 +50,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The recipient reads it back. Reading answers only whether the string
     // is a 51Did, and says nothing about the signature.
     let fod_id = FodId::from_base64(&base64)?;
-    println!("flags     : {:#010b}", fod_id.flags());
+    println!("usage     : {:?}", fod_id.usage());
+    println!("consent   : {}", fod_id.usage_from_consent());
+    println!("id_type   : {:?}", fod_id.id_type());
     println!("license_id: {:#010x}", fod_id.license_id());
     println!("match_key : {}", hex(fod_id.match_key()));
 
