@@ -777,6 +777,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fodid-client"
+version = "4.5.0"
+dependencies = [
+ "chrono",
+ "fodid",
+ "reqwest",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
