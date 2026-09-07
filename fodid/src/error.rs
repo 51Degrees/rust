@@ -62,8 +62,8 @@ pub enum Error {
     /// 51Did header (the flags byte and the four byte licence id), so the
     /// identifier type cannot even be read.
     PayloadTooShort {
-        /// The number of payload bytes the header needs, which is
-        /// [`HEADER_LENGTH`](crate::HEADER_LENGTH).
+        /// The number of payload bytes the header needs, being the flags
+        /// byte and the four byte licence id.
         expected: usize,
         /// The number of payload bytes actually present.
         actual: usize,

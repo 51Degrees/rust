@@ -39,8 +39,8 @@
 //!   and
 //! - the parsed [`FodId`] (for example through
 //!   [`FodIdData::id_prob_global_fod_id`]), which unpacks the envelope's payload
-//!   (flags, identifier type, license id and the value) and gives access to the
-//!   OWID domain, date and signature for verification.
+//!   (the usage, the identifier type, the license id and the match key) and
+//!   gives access to the OWID domain, date and signature for verification.
 //!
 //! # Three identifier kinds, global and license scoped
 //!
@@ -167,7 +167,8 @@ pub trait FodIdData: AspectData {
     fn id_prob_lic(&self) -> AspectPropertyValue<String>;
 
     /// The globally-scoped 51Did parsed into a [`FodId`], unpacking the OWID
-    /// envelope and its payload (flags, license id, match key).
+    /// envelope and its payload (the usage, the identifier type, the license
+    /// id and the match key).
     ///
     /// Returns a no-value if the identifier was absent, or if the value could
     /// not be read as a 51Did (the no-value message then carries the reason
