@@ -20,6 +20,11 @@ chrono.workspace = true
 # Base64 decoding for the obvious-placeholder resource-key check, which
 # base64-decodes the key before applying the length tests.
 base64.workspace = true
+# The derive macro the performance-results model is serialised through.
+serde.workspace = true
+# JSON serialisation for the performance-results model the performance examples
+# write for the nightly performance graphs.
+serde_json.workspace = true
 
 [dev-dependencies]
 # Temporary directory trees for the find-file unit tests.
