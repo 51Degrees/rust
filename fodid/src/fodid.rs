@@ -176,7 +176,9 @@ pub(crate) enum Terms {
 /// The terms table from the specification, which is the whole of the
 /// definition of which index is which document. It is published at
 /// <https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md#terms>
-/// and this is the only place in the crate that carries it.
+/// and this is the only place in the shipped code that carries it. The
+/// tests write the address out again on purpose, so that a test never
+/// compares the reader with itself.
 ///
 /// One row per terms document, holding the index the payload carries, the
 /// name for it and the address it stands for. A new terms document is one
