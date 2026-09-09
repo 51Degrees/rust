@@ -79,6 +79,12 @@ pub const PAYLOAD_LENGTH: usize = MATCH_KEY_OFFSET + MATCH_KEY_LENGTH;
 /// [`Error::UnsupportedPayloadVersion`] rather than read under this layout.
 pub(crate) const SUPPORTED_PAYLOAD_VERSION: u8 = 0;
 
+/// The Terms index that says the terms are not stated in the identifier. A
+/// payload ending at the match key reads as this, so absence and a zero
+/// byte mean the same thing and nothing has to tell them apart. It is not a
+/// row in [`TERMS_TABLE`] because it names no document.
+const NOT_STATED_INDEX: u8 = 0;
+
 /// The identifier type carried in bits 6-7 of the 51Did flags byte.
 ///
 /// Existing identifiers were issued with those bits zeroed, so they decode as
@@ -167,16 +173,41 @@ pub(crate) enum Terms {
     Unknown,
 }
 
+/// The terms table from the specification, which is the whole of the
+/// definition of which index is which document. It is published at
+/// <https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md#terms>
+/// and this is the only place in the crate that carries it.
+///
+/// One row per terms document, holding the index the payload carries, the
+/// name for it and the address it stands for. A new terms document is one
+/// new row here and one new variant of [`Terms`], and nothing else in the
+/// crate changes. That is the point of the byte being an index rather than
+/// a version number, so the cost of a new document is a row and not a
+/// search for every place a number was written down.
+///
+/// [`Terms::NotStated`] and [`Terms::Unknown`] are deliberately absent.
+/// Neither names a document, so neither has an address, and a lookup that
+/// finds no row is the answer for both.
+///
+/// Each address names an exact version rather than a landing page, because
+/// a document at an unversioned address can be edited afterwards and a
+/// receiver has to know the document that was in force when the identifier
+/// was made.
+const TERMS_TABLE: &[(u8, Terms, &str)] =
+    &[(1, Terms::ModelTermsForMarketing2, "https://m4ow.uk/mtm/2.txt")];
+
 impl Terms {
     /// Decode the terms from the index byte that follows the match key. An
     /// index this crate does not know decodes as [`Terms::Unknown`] and
     /// never as [`Terms::NotStated`].
     fn from_index(index: u8) -> Terms {
-        match index {
-            0 => Terms::NotStated,
-            1 => Terms::ModelTermsForMarketing2,
-            _ => Terms::Unknown,
+        if index == NOT_STATED_INDEX {
+            return Terms::NotStated;
         }
+        TERMS_TABLE
+            .iter()
+            .find(|(row_index, _, _)| *row_index == index)
+            .map_or(Terms::Unknown, |(_, terms, _)| *terms)
     }
 
     /// The address of the terms document, or `None` where there is none to
@@ -184,10 +215,10 @@ impl Terms {
     /// address is answered and never fetched, and the caller decides what
     /// to do with it.
     fn url(self) -> Option<&'static str> {
-        match self {
-            Terms::NotStated | Terms::Unknown => None,
-            Terms::ModelTermsForMarketing2 => Some("https://m4ow.uk/mtm/2.txt"),
-        }
+        TERMS_TABLE
+            .iter()
+            .find(|(_, terms, _)| *terms == self)
+            .map(|(_, _, url)| *url)
     }
 }
 
@@ -358,7 +389,7 @@ impl FodId {
         let terms_index = payload
             .get(MATCH_KEY_OFFSET + value_length)
             .copied()
-            .unwrap_or(0);
+            .unwrap_or(NOT_STATED_INDEX);
         Ok(FodId {
             owid,
             flags,
@@ -468,5 +499,63 @@ impl FromStr for FodId {
 
     fn from_str(s: &str) -> Result<Self> {
         FodId::from_base64(s)
+    }
+}
+#[cfg(test)]
+mod terms_table_tests {
+    use super::{Terms, NOT_STATED_INDEX, TERMS_TABLE};
+
+    /// Every row reads back through the pair of lookups it feeds, so a row
+    /// whose index and variant were mistyped apart is caught here rather
+    /// than by a caller reading no address for a document this crate is
+    /// meant to know.
+    #[test]
+    fn every_row_round_trips_through_the_lookups() {
+        for (index, terms, url) in TERMS_TABLE {
+            assert_eq!(Terms::from_index(*index), *terms, "index {index}");
+            assert_eq!(terms.url(), Some(*url), "{terms:?}");
+            assert!(url.starts_with("https://"), "{url} is not https");
+        }
+    }
+
+    /// No row may claim index 0. That index says the terms are not stated,
+    /// which names no document, so a row there would give an address to an
+    /// identifier that states none.
+    #[test]
+    fn no_row_claims_the_not_stated_index() {
+        assert!(TERMS_TABLE.iter().all(|(index, _, _)| *index != NOT_STATED_INDEX));
+        assert_eq!(Terms::from_index(NOT_STATED_INDEX), Terms::NotStated);
+        assert_eq!(Terms::NotStated.url(), None);
+    }
+
+    /// One index may stand for one document only. Two rows sharing an index
+    /// would make which document an identifier was created under depend on
+    /// the order the table happens to be written in.
+    #[test]
+    fn no_index_appears_twice() {
+        for (position, (index, _, _)) in TERMS_TABLE.iter().enumerate() {
+            assert!(
+                !TERMS_TABLE[position + 1..]
+                    .iter()
+                    .any(|(later, _, _)| later == index),
+                "index {index} appears more than once"
+            );
+        }
+    }
+
+    /// An index the table does not carry is Unknown and never NotStated,
+    /// and it answers with no address rather than one built from the
+    /// number, since that would name a document nobody wrote.
+    #[test]
+    fn an_index_outside_the_table_is_unknown_with_no_address() {
+        for index in 0..=u8::MAX {
+            let known = index == NOT_STATED_INDEX
+                || TERMS_TABLE.iter().any(|(row, _, _)| *row == index);
+            if known {
+                continue;
+            }
+            assert_eq!(Terms::from_index(index), Terms::Unknown, "index {index}");
+            assert_eq!(Terms::from_index(index).url(), None, "index {index}");
+        }
     }
 }
