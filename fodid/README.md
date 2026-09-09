@@ -55,17 +55,40 @@ The byte after the match key says which terms document the 51Did was created
 under, so that the terms travel with the identifier rather than beside it. It
 is an index into a table published in the
 [specification](https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md)
-and is not a version number, read through `FodId::terms` as a named `Terms`
-value, through `FodId::terms_index` as the index itself, and through
-`FodId::terms_url` as the address of the document.
+and is not a version number. `FodId::terms` answers with the address of the
+document, so a caller never handles the byte.
+
+| Index | Document | `FodId::terms` |
+| --- | --- | --- |
+| `0` | Not stated in the identifier | `None` |
+| `1` | Model Terms for Marketing, version 2 | `Some("https://m4ow.uk/mtm/2.txt")` |
+| any other | One this crate cannot name | `None` |
 
 An identifier whose payload ends at the match key carries no terms byte, and
-a missing byte is index 0, being `Terms::NotStated`, so absence and zero say
-the same thing. An index added to the specification after this release is
-`Terms::Unknown` and never `Terms::NotStated`, because terms are stated and
-this crate cannot say which, and the index itself stays available so a caller
-can say which one it could not read. This crate answers with the address and
-never fetches it.
+a missing byte is index 0, which answers with no address. An index added to
+the specification after this release answers with no address as well, and no
+address is ever built from an index this crate cannot name, since that would
+name a document nobody wrote. A caller therefore cannot tell an index of
+zero from an index this crate cannot name, which is deliberate, because both
+lead to the same place. This crate answers with the address and never
+fetches it.
+
+## The payload version
+
+Bits 4 and 5 of the flags byte say which payload layout the identifier
+follows, and this crate reads version 0. A payload naming version 1, 2 or 3
+is refused with `Error::UnsupportedPayloadVersion`, which names the version
+it found.
+
+No field is read under the layout this crate knows once the version says
+otherwise. A later version exists precisely because a field moved, so
+reading such a payload here would answer with values that are wrong rather
+than absent, which is worse than refusing. A version that nothing checks
+protects nothing.
+
+The version is not exposed. Either this crate read the layout, in which case
+the accessors are the answer, or it did not, in which case there is no
+identifier to read fields from.
 
 ## Payload layout
 
@@ -113,9 +136,7 @@ fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::
 
     // The terms the identifier was created under, and the address of that
     // document where this crate knows the index.
-    let terms = fod_id.terms();             // Terms
-    let terms_index = fod_id.terms_index(); // u8
-    let terms_url = fod_id.terms_url();     // Option<&'static str>
+    let terms = fod_id.terms();             // Option<&'static str>
 
     // Inherited OWID level fields and operations, available through Deref.
     let domain = fod_id.domain();
@@ -126,7 +147,7 @@ fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::
         == SignatureStatus::Valid;
 
     let _ = (flags, license_id, match_key, domain, round_trip, genuine);
-    let _ = (terms, terms_index, terms_url);
+    let _ = terms;
     Ok(())
 }
 ```

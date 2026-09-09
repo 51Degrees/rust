@@ -62,17 +62,29 @@
 //! The byte after the match key says which terms document the 51Did was
 //! created under, so that the terms travel with the identifier rather than
 //! beside it. It is an index into a table published in the specification and
-//! is not a version number, read through [`FodId::terms`] as a named
-//! [`Terms`] value, through [`FodId::terms_index`] as the index itself, and
-//! through [`FodId::terms_url`] as the address of the document.
+//! is not a version number, and [`FodId::terms`] answers with the address of
+//! the document, so a caller never handles the byte.
 //!
 //! An identifier whose payload ends at the match key carries no terms byte,
-//! and a missing byte is index 0, being [`Terms::NotStated`], so absence and
-//! zero say the same thing. An index added to the specification after this
-//! release is [`Terms::Unknown`] and never [`Terms::NotStated`], because
-//! terms are stated and this crate cannot say which, and the index itself
-//! stays available so a caller can say which one it could not read. This
-//! crate answers with the address and never fetches it.
+//! and a missing byte is index 0, which answers with no address. An index
+//! added to the specification after this release answers with no address as
+//! well, and no address is ever built from an index this crate cannot name,
+//! since that would name a document nobody wrote. A caller therefore cannot
+//! tell an index of zero from an index this crate cannot name, which is
+//! deliberate, because both lead to the same place. This crate answers with
+//! the address and never fetches it.
+//!
+//! ## The payload version
+//!
+//! Bits 4 and 5 of the flags byte say which payload layout the identifier
+//! follows, and this crate reads version 0. A payload naming version 1, 2 or
+//! 3 is refused with [`Error::UnsupportedPayloadVersion`], which names the
+//! version it found. No field is read under the layout this crate knows once
+//! the version says otherwise, because a later version exists precisely
+//! because a field moved, so reading such a payload here would answer with
+//! values that are wrong rather than absent. The version is not exposed,
+//! because either this crate read the layout or there is no identifier to
+//! read fields from.
 //!
 //! ## Payload layout
 //!
@@ -162,11 +174,9 @@
 //! let license_id: u32 = fod_id.license_id();
 //! let match_key: &[u8] = fod_id.match_key(); // the match key to compare (32 or 16 bytes)
 //!
-//! // The terms the identifier was created under, and the address of that
-//! // document where this crate knows the index.
-//! let terms = fod_id.terms();
-//! let terms_index: u8 = fod_id.terms_index();
-//! let terms_url: Option<&str> = fod_id.terms_url();
+//! // The address of the terms document the identifier was created under,
+//! // and None where it names none this crate knows.
+//! let terms: Option<&str> = fod_id.terms();
 //!
 //! // Inherited OWID level fields and operations, available through Deref.
 //! let domain = fod_id.domain();
@@ -176,7 +186,7 @@
 //! let status = fod_id.verify_status_with_public_key(public_pem, &[]);
 //! let genuine = status == SignatureStatus::Valid;
 //! # let _ = (flags, id_type, license_id, match_key, domain, round_trip, genuine);
-//! # let _ = (terms, terms_index, terms_url);
+//! # let _ = terms;
 //! # Ok(())
 //! # }
 //! ```
@@ -289,8 +299,8 @@ mod fodid;
 
 pub use error::{Error, Result};
 pub use fodid::{
-    FodId, IdType, Terms, FLAGS_OFFSET, GUID_LENGTH, HEADER_LENGTH, LICENSE_ID_LENGTH,
-    LICENSE_ID_OFFSET, MATCH_KEY_LENGTH, MATCH_KEY_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
+    FodId, IdType, FLAGS_OFFSET, GUID_LENGTH, HEADER_LENGTH, LICENSE_ID_LENGTH, LICENSE_ID_OFFSET,
+    MATCH_KEY_LENGTH, MATCH_KEY_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
 };
 
 // The obsolete names for the match key constants, re-exported so callers
