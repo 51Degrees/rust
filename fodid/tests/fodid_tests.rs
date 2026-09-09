@@ -861,10 +861,10 @@ fn reserved_type_exposes_remaining_payload_best_effort() {
 
 #[test]
 fn a_payload_ending_at_the_match_key_states_no_terms() {
-    // An identifier issued before the terms existed ends at the match key.
-    // A missing byte is index 0, which says the terms are not stated in the
-    // identifier, so such an identifier reads exactly as it did before the
-    // byte existed and answers index 0.
+    // There is no byte after the match key to read. A missing byte is index
+    // 0, which says the terms are not stated in the identifier, so such an
+    // identifier answers index 0 and every other field reads as it does with
+    // the byte present.
     let fixture = Fixture::new();
     let result = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload()));
     let fod_id = assert_parsed(&result);
@@ -873,7 +873,7 @@ fn a_payload_ending_at_the_match_key_states_no_terms() {
     assert_eq!(fod_id.terms_index(), 0);
     assert_eq!(fod_id.terms_url(), None);
 
-    // Every field that was readable before is unchanged.
+    // Every other field reads as it does with the byte present.
     assert_eq!(fod_id.flags(), CANONICAL_FLAGS);
     assert_eq!(fod_id.license_id(), CANONICAL_LICENSE_ID);
     assert_eq!(fod_id.match_key(), &canonical_hash());

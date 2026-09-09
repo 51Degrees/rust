@@ -125,9 +125,9 @@ impl IdType {
 /// published, because repointing one would rewrite what an identifier
 /// already issued says it agreed to.
 ///
-/// An identifier issued before the terms existed has a payload that ends at
-/// the match key, and a missing byte is read as index 0, so absence and zero
-/// say the same thing and neither has to be told apart from the other.
+/// An identifier whose payload ends at the match key carries no terms byte,
+/// and a missing byte is read as index 0, so absence and zero say the same
+/// thing and neither has to be told apart from the other.
 ///
 /// The table is published at
 /// <https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md>,
@@ -135,7 +135,7 @@ impl IdType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Terms {
     /// Index 0. The terms are not stated in the identifier, which is also
-    /// how an identifier issued before the byte existed reads.
+    /// how an identifier whose payload ends at the match key reads.
     ///
     /// This does not mean the identifier is unrestricted. It means the
     /// identifier does not carry the answer, so the answer has to come from
@@ -316,10 +316,10 @@ impl FodId {
             });
         }
         let match_key = payload[MATCH_KEY_OFFSET..MATCH_KEY_OFFSET + value_length].to_vec();
-        // The terms index is the byte after the match key. A payload issued
-        // before the terms existed ends at the match key, and a missing byte
-        // is index 0, which says the terms are not stated in the identifier,
-        // so absence and zero are one answer.
+        // The terms index is the byte after the match key, so where it sits
+        // follows the match key length the type selects. A missing byte is
+        // index 0, which says the terms are not stated in the identifier, so
+        // absence and zero are one answer.
         //
         // A reserved type has no assigned match key length, so its value is
         // every byte after the header and there is no byte left for the
@@ -377,9 +377,8 @@ impl FodId {
 
     /// The terms document the identifier was created under, read from the
     /// byte after the match key. A payload that ends at the match key reads
-    /// as [`Terms::NotStated`], so an identifier issued before the byte
-    /// existed answers as one that states no terms. See [`Terms`] for what
-    /// each value means.
+    /// as [`Terms::NotStated`], which says no terms are stated in it. See
+    /// [`Terms`] for what each value means.
     pub fn terms(&self) -> Terms {
         Terms::from_index(self.terms_index)
     }

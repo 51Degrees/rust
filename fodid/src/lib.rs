@@ -66,8 +66,8 @@
 //! [`Terms`] value, through [`FodId::terms_index`] as the index itself, and
 //! through [`FodId::terms_url`] as the address of the document.
 //!
-//! An identifier issued before the terms existed ends at the match key, and
-//! a missing byte is index 0, being [`Terms::NotStated`], so absence and
+//! An identifier whose payload ends at the match key carries no terms byte,
+//! and a missing byte is index 0, being [`Terms::NotStated`], so absence and
 //! zero say the same thing. An index added to the specification after this
 //! release is [`Terms::Unknown`] and never [`Terms::NotStated`], because
 //! terms are stated and this crate cannot say which, and the index itself
