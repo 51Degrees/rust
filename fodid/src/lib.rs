@@ -57,6 +57,35 @@
 //! - [`IdType::Random`] carries a 16-byte server-generated GUID.
 //! - [`IdType::Reserved`] is not yet assigned and is parsed best effort.
 //!
+//! ## The terms the identifier was created under
+//!
+//! The byte after the match key says which terms document the 51Did was
+//! created under, so that the terms travel with the identifier rather than
+//! beside it. It is an index into a table published in the specification and
+//! is not a version number, and [`FodId::terms`] answers with the address of
+//! the document, so a caller never handles the byte.
+//!
+//! An identifier whose payload ends at the match key carries no terms byte,
+//! and a missing byte is index 0, which answers with no address. An index
+//! added to the specification after this release answers with no address as
+//! well, and no address is ever built from an index this crate cannot name,
+//! since that would name a document nobody wrote. A caller therefore cannot
+//! tell an index of zero from an index this crate cannot name, which is
+//! deliberate, because both lead to the same place. This crate answers with
+//! the address and never fetches it.
+//!
+//! ## The payload version
+//!
+//! Bits 4 and 5 of the flags byte say which payload layout the identifier
+//! follows, and this crate reads version 0. A payload naming version 1, 2 or
+//! 3 is refused with [`Error::UnsupportedPayloadVersion`], which names the
+//! version it found. No field is read under the layout this crate knows once
+//! the version says otherwise, because a later version exists precisely
+//! because a field moved, so reading such a payload here would answer with
+//! values that are wrong rather than absent. The version is not exposed,
+//! because either this crate read the layout or there is no identifier to
+//! read fields from.
+//!
 //! ## Payload layout
 //!
 //! | Offset | Length | Field                                              |
@@ -65,14 +94,18 @@
 //! |      1 |      4 | LicenseId (`u32` little endian)                    |
 //! |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
 //! |      5 |     16 | Value: GUID (Random)                               |
+//! |     37 |      1 | Terms, an index (Probabilistic, HashedEmail)       |
+//! |     21 |      1 | Terms, an index (Random)                           |
 //!
 //! These lengths are lower bounds. The payload must hold the 5 byte header
 //! before the type can be read, and then the value the type requires, being
 //! 16 GUID bytes for a random identifier and 32 hash bytes for a
-//! probabilistic or hashed email one. A payload may carry more bytes after
-//! the value, and this crate accepts them and leaves them in place. There
-//! is no upper bound on a 51Did in this crate, so a reader built today keeps
-//! reading identifiers issued in a newer, longer shape.
+//! probabilistic or hashed email one. The terms byte follows the value, so
+//! where it sits depends on the value length the type requires, and a
+//! payload that ends at the value carries none. A payload may carry more
+//! bytes after the terms, and this crate accepts them and leaves them in
+//! place. There is no upper bound on a 51Did in this crate, so a reader
+//! built today keeps reading identifiers issued in a newer, longer shape.
 //!
 //! [`FodId`] [`Deref`](std::ops::Deref)s to the underlying [`Owid`], so
 //! a `FodId` can be used directly for all OWID level concerns (domain, date,
@@ -141,6 +174,10 @@
 //! let license_id: u32 = fod_id.license_id();
 //! let match_key: &[u8] = fod_id.match_key(); // the match key to compare (32 or 16 bytes)
 //!
+//! // The address of the terms document the identifier was created under,
+//! // and None where it names none this crate knows.
+//! let terms: Option<&str> = fod_id.terms();
+//!
 //! // Inherited OWID level fields and operations, available through Deref.
 //! let domain = fod_id.domain();
 //! let round_trip = fod_id.as_base64()?;
@@ -149,6 +186,7 @@
 //! let status = fod_id.verify_status_with_public_key(public_pem, &[]);
 //! let genuine = status == SignatureStatus::Valid;
 //! # let _ = (flags, id_type, license_id, match_key, domain, round_trip, genuine);
+//! # let _ = terms;
 //! # Ok(())
 //! # }
 //! ```

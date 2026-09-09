@@ -36,8 +36,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// outcome. Each one is a named status a caller can branch on directly,
 /// without matching on message text, and together they are the 51Did status
 /// vocabulary, being the OWID one (carried unchanged inside
-/// [`Error::Parse`]) plus the two 51Did statuses [`Error::PayloadTooShort`]
-/// and [`Error::InvalidTypePayloadLength`].
+/// [`Error::Parse`]) plus the three 51Did statuses
+/// [`Error::PayloadTooShort`], [`Error::InvalidTypePayloadLength`] and
+/// [`Error::UnsupportedPayloadVersion`].
 ///
 /// A successful read says nothing about the signature. Whether the bytes
 /// are a 51Did and whether the signature is genuine are two questions with
@@ -81,6 +82,18 @@ pub enum Error {
         /// The number of payload bytes actually present.
         actual: usize,
     },
+    /// Bits 4 and 5 of the flags byte name a payload layout version this
+    /// crate does not know, so no field is read.
+    ///
+    /// A later version exists precisely because a field moved, so reading
+    /// the payload under the layout this crate knows would answer with
+    /// values that are wrong rather than absent, which is worse than
+    /// refusing.
+    UnsupportedPayloadVersion {
+        /// The version the payload named, being 1, 2 or 3, since 0 is the
+        /// layout this crate reads.
+        version: u8,
+    },
     /// An OWID operation other than a read failed, for example serialising
     /// the envelope again or verifying its signature. Wraps the error type of
     /// the OWID library compiled into this crate, re-exported as
@@ -108,6 +121,11 @@ impl fmt::Display for Error {
                 "InvalidTypePayloadLength: a {id_type:?} 51Did needs at least \
                  {expected} payload bytes and {actual} are present"
             ),
+            Error::UnsupportedPayloadVersion { version } => write!(
+                f,
+                "UnsupportedPayloadVersion: 51Did payload version {version} \
+                 is not one this crate can read"
+            ),
             Error::Owid(e) => write!(f, "OWID operation failed because {e}"),
         }
     }
@@ -118,7 +136,9 @@ impl std::error::Error for Error {
         match self {
             Error::Parse(e) => Some(e),
             Error::Owid(e) => Some(e),
-            Error::PayloadTooShort { .. } | Error::InvalidTypePayloadLength { .. } => None,
+            Error::PayloadTooShort { .. }
+            | Error::InvalidTypePayloadLength { .. }
+            | Error::UnsupportedPayloadVersion { .. } => None,
         }
     }
 }

@@ -74,6 +74,17 @@ pub const RANDOM_PAYLOAD_LENGTH: usize = HEADER_LENGTH + GUID_LENGTH;
 /// payloads have a shorter minimum, see [`RANDOM_PAYLOAD_LENGTH`].
 pub const PAYLOAD_LENGTH: usize = MATCH_KEY_OFFSET + MATCH_KEY_LENGTH;
 
+/// The payload layout version this crate reads, carried in bits 4 and 5 of
+/// the flags byte. Any other version is refused with
+/// [`Error::UnsupportedPayloadVersion`] rather than read under this layout.
+pub(crate) const SUPPORTED_PAYLOAD_VERSION: u8 = 0;
+
+/// The Terms index that says the terms are not stated in the identifier. A
+/// payload ending at the match key reads as this, so absence and a zero
+/// byte mean the same thing and nothing has to tell them apart. It is not a
+/// row in [`TERMS_TABLE`] because it names no document.
+const NOT_STATED_INDEX: u8 = 0;
+
 /// The identifier type carried in bits 6-7 of the 51Did flags byte.
 ///
 /// Existing identifiers were issued with those bits zeroed, so they decode as
@@ -106,6 +117,113 @@ impl IdType {
     }
 }
 
+/// The terms document a 51Did was created under, carried in the byte that
+/// follows the match key, so that the terms travel with the identifier
+/// rather than beside it.
+///
+/// The byte is an index into the table below and is not a version number.
+/// An index is used so that a later document can live at any address, rather
+/// than only at an address the specification could compose from a number.
+///
+/// | Index | Document                             | Address                     |
+/// |------:|--------------------------------------|-----------------------------|
+/// |     0 | Not stated in the identifier         | None                        |
+/// |     1 | Model Terms for Marketing, version 2 | `https://m4ow.uk/mtm/2.txt` |
+///
+/// A new terms document is a new index in that table, and every package has
+/// to be released to know it, which is the cost of a receiver being able to
+/// trust what it reads. An index is never reused or repointed once
+/// published, because repointing one would rewrite what an identifier
+/// already issued says it agreed to.
+///
+/// An identifier whose payload ends at the match key carries no terms byte,
+/// and a missing byte is read as index 0, so absence and zero say the same
+/// thing and neither has to be told apart from the other.
+///
+/// The table is published at
+/// <https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md>,
+/// which is the authority rather than this summary.
+///
+/// This enumeration is not public, and neither is the index behind it. The
+/// crate turns the index into the address that [`FodId::terms`] answers
+/// with, so a caller never handles the byte, and the names here are the ones
+/// the specification gives so that every package describes one document the
+/// same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Terms {
+    /// Index 0. The terms are not stated in the identifier, which is also
+    /// how an identifier whose payload ends at the match key reads.
+    ///
+    /// This does not mean the identifier is unrestricted. It means the
+    /// identifier does not carry the answer, so the answer has to come from
+    /// what accompanies it, being the Terms Document Locator in an OpenRTB
+    /// request or whatever the surrounding protocol provides. The usage
+    /// says where an identifier may go and the terms say which document it
+    /// was created under, and a receiver needs both.
+    NotStated,
+    /// Index 1. The Model Terms for Marketing, version 2, whose address is
+    /// answered by [`FodId::terms`].
+    ModelTermsForMarketing2,
+    /// An index added to the specification after this release, which this
+    /// crate cannot name.
+    ///
+    /// It answers with no address, as [`Terms::NotStated`] does, because
+    /// no address may be built from an index this crate cannot name, since
+    /// that would name a document nobody wrote.
+    Unknown,
+}
+
+/// The terms table from the specification, which is the whole of the
+/// definition of which index is which document. It is published at
+/// <https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md#terms>
+/// and this is the only place in the shipped code that carries it. The
+/// tests write the address out again on purpose, so that a test never
+/// compares the reader with itself.
+///
+/// One row per terms document, holding the index the payload carries, the
+/// name for it and the address it stands for. A new terms document is one
+/// new row here and one new variant of [`Terms`], and nothing else in the
+/// crate changes. That is the point of the byte being an index rather than
+/// a version number, so the cost of a new document is a row and not a
+/// search for every place a number was written down.
+///
+/// [`Terms::NotStated`] and [`Terms::Unknown`] are deliberately absent.
+/// Neither names a document, so neither has an address, and a lookup that
+/// finds no row is the answer for both.
+///
+/// Each address names an exact version rather than a landing page, because
+/// a document at an unversioned address can be edited afterwards and a
+/// receiver has to know the document that was in force when the identifier
+/// was made.
+const TERMS_TABLE: &[(u8, Terms, &str)] =
+    &[(1, Terms::ModelTermsForMarketing2, "https://m4ow.uk/mtm/2.txt")];
+
+impl Terms {
+    /// Decode the terms from the index byte that follows the match key. An
+    /// index this crate does not know decodes as [`Terms::Unknown`] and
+    /// never as [`Terms::NotStated`].
+    fn from_index(index: u8) -> Terms {
+        if index == NOT_STATED_INDEX {
+            return Terms::NotStated;
+        }
+        TERMS_TABLE
+            .iter()
+            .find(|(row_index, _, _)| *row_index == index)
+            .map_or(Terms::Unknown, |(_, terms, _)| *terms)
+    }
+
+    /// The address of the terms document, or `None` where there is none to
+    /// give, being index 0 and an index this crate does not know. The
+    /// address is answered and never fetched, and the caller decides what
+    /// to do with it.
+    fn url(self) -> Option<&'static str> {
+        TERMS_TABLE
+            .iter()
+            .find(|(_, terms, _)| *terms == self)
+            .map(|(_, _, url)| *url)
+    }
+}
+
 /// A parsed 51Did: an [`Owid`] envelope whose payload encodes the fields of a
 /// 51Degrees identifier.
 ///
@@ -120,13 +238,30 @@ impl IdType {
 /// |      1 |      4 | LicenseId (`u32` little endian)                    |
 /// |      5 |     32 | Match key: SHA-256 (Probabilistic, HashedEmail)    |
 /// |      5 |     16 | Match key: GUID (Random)                           |
+/// |     37 |      1 | Terms, an index (Probabilistic, HashedEmail)       |
+/// |     21 |      1 | Terms, an index (Random)                           |
 ///
 /// The match key is read through [`match_key`](FodId::match_key). For a
 /// [`IdType::Random`] identifier it is a GUID, otherwise a SHA-256.
 ///
+/// The terms byte follows the match key, so where it sits depends on the
+/// match key length the type requires. It is read through
+/// [`terms`](FodId::terms), which answers with the address of the document,
+/// and a payload that ends at the match key carries no terms byte and
+/// answers with no address.
+///
+/// Bits 4 and 5 of the flags byte say which payload layout the identifier
+/// follows, and this crate reads version 0. A payload naming any other
+/// version is refused with [`Error::UnsupportedPayloadVersion`] rather than
+/// read under the layout this crate knows, because a later version exists
+/// precisely because a field moved, so reading one here would answer with
+/// values that are wrong rather than absent. The version is not exposed,
+/// because a caller has nothing to decide with it.
+///
 /// The lengths in the table are minimums. A payload may carry more bytes
-/// after the match key, which this reader accepts and leaves in place, reachable
-/// through [`payload`](Owid::payload). There is no upper bound in this crate.
+/// after the fields above, which this reader accepts and leaves in place,
+/// reachable through [`payload`](Owid::payload). There is no upper bound in
+/// this crate.
 ///
 /// `FodId` [`Deref`]s to [`Owid`], so the OWID level fields and operations
 /// (`domain()`, `date()`, `payload()`, `signature()`, `as_base64`,
@@ -143,6 +278,7 @@ pub struct FodId {
     flags: u8,
     license_id: u32,
     match_key: Vec<u8>,
+    terms_index: u8,
 }
 
 impl FodId {
@@ -190,8 +326,10 @@ impl FodId {
     /// [`IdType::Random`], [`MATCH_KEY_LENGTH`] for
     /// [`IdType::Probabilistic`] and [`IdType::HashedEmail`]). A
     /// [`IdType::Reserved`] payload has no defined value length and is read
-    /// best effort. Bytes after the value are accepted and left in the
-    /// payload, because a longer payload is a newer shape rather than a fault.
+    /// best effort, taking every byte after the header as its value, so a
+    /// reserved identifier states no terms until that length is assigned.
+    /// Bytes after the value are accepted and left in the payload, because a
+    /// longer payload is a newer shape rather than a fault.
     ///
     /// # Errors
     ///
@@ -207,6 +345,18 @@ impl FodId {
             });
         }
         let flags = payload[FLAGS_OFFSET];
+        // The version is read before any field, because a later version
+        // exists precisely because a field moved. Reading a payload of a
+        // version this crate does not know under the layout it does know
+        // would answer with values that are wrong rather than absent, which
+        // is worse than refusing, and a version that nothing checks
+        // protects nothing.
+        let payload_version = (flags >> 4) & 0b11;
+        if payload_version != SUPPORTED_PAYLOAD_VERSION {
+            return Err(Error::UnsupportedPayloadVersion {
+                version: payload_version,
+            });
+        }
         let license_id = u32::from_le_bytes(
             payload[LICENSE_ID_OFFSET..LICENSE_ID_OFFSET + LICENSE_ID_LENGTH]
                 .try_into()
@@ -228,11 +378,26 @@ impl FodId {
             });
         }
         let match_key = payload[MATCH_KEY_OFFSET..MATCH_KEY_OFFSET + value_length].to_vec();
+        // The terms index is the byte after the match key, so where it sits
+        // follows the match key length the type selects. A missing byte is
+        // index 0, which says the terms are not stated in the identifier, so
+        // absence and zero are one answer.
+        //
+        // A reserved type has no assigned match key length, so its value is
+        // every byte after the header and there is no byte left for the
+        // terms to be taken from. Such an identifier reads as index 0, which
+        // is correct rather than a fault, and it stops being a special case
+        // as soon as a reserved type is assigned a length.
+        let terms_index = payload
+            .get(MATCH_KEY_OFFSET + value_length)
+            .copied()
+            .unwrap_or(NOT_STATED_INDEX);
         Ok(FodId {
             owid,
             flags,
             license_id,
             match_key,
+            terms_index,
         })
     }
 
@@ -270,6 +435,30 @@ impl FodId {
     #[deprecated(note = "renamed to match_key")]
     pub fn hash(&self) -> &[u8] {
         self.match_key()
+    }
+
+    /// The address of the terms document the identifier was created under,
+    /// read from the byte after the match key.
+    ///
+    /// The byte is an index into a table in the specification and this
+    /// crate turns the index into the address, so a caller never handles
+    /// the byte. The address is answered and never fetched, and it is never
+    /// an empty string and never built from the index, so `Some` means this
+    /// crate knows the document and the caller can rely on the address it
+    /// holds.
+    ///
+    /// `None` covers both an index of zero, which says the terms are not
+    /// stated in the identifier, and an index added to the table after this
+    /// release, which this crate cannot name. A caller cannot tell those
+    /// two apart, which is deliberate, because both lead to the same place,
+    /// being that the identifier does not say which terms it was created
+    /// under and the answer has to come from somewhere else.
+    ///
+    /// No address does not mean the identifier is unrestricted. Where an
+    /// identifier may go is a separate question [`usage`](FodId::usage)
+    /// answers.
+    pub fn terms(&self) -> Option<&'static str> {
+        Terms::from_index(self.terms_index).url()
     }
 
     /// A reference to the underlying OWID envelope.
@@ -312,5 +501,63 @@ impl FromStr for FodId {
 
     fn from_str(s: &str) -> Result<Self> {
         FodId::from_base64(s)
+    }
+}
+#[cfg(test)]
+mod terms_table_tests {
+    use super::{Terms, NOT_STATED_INDEX, TERMS_TABLE};
+
+    /// Every row reads back through the pair of lookups it feeds, so a row
+    /// whose index and variant were mistyped apart is caught here rather
+    /// than by a caller reading no address for a document this crate is
+    /// meant to know.
+    #[test]
+    fn every_row_round_trips_through_the_lookups() {
+        for (index, terms, url) in TERMS_TABLE {
+            assert_eq!(Terms::from_index(*index), *terms, "index {index}");
+            assert_eq!(terms.url(), Some(*url), "{terms:?}");
+            assert!(url.starts_with("https://"), "{url} is not https");
+        }
+    }
+
+    /// No row may claim index 0. That index says the terms are not stated,
+    /// which names no document, so a row there would give an address to an
+    /// identifier that states none.
+    #[test]
+    fn no_row_claims_the_not_stated_index() {
+        assert!(TERMS_TABLE.iter().all(|(index, _, _)| *index != NOT_STATED_INDEX));
+        assert_eq!(Terms::from_index(NOT_STATED_INDEX), Terms::NotStated);
+        assert_eq!(Terms::NotStated.url(), None);
+    }
+
+    /// One index may stand for one document only. Two rows sharing an index
+    /// would make which document an identifier was created under depend on
+    /// the order the table happens to be written in.
+    #[test]
+    fn no_index_appears_twice() {
+        for (position, (index, _, _)) in TERMS_TABLE.iter().enumerate() {
+            assert!(
+                !TERMS_TABLE[position + 1..]
+                    .iter()
+                    .any(|(later, _, _)| later == index),
+                "index {index} appears more than once"
+            );
+        }
+    }
+
+    /// An index the table does not carry is Unknown and never NotStated,
+    /// and it answers with no address rather than one built from the
+    /// number, since that would name a document nobody wrote.
+    #[test]
+    fn an_index_outside_the_table_is_unknown_with_no_address() {
+        for index in 0..=u8::MAX {
+            let known = index == NOT_STATED_INDEX
+                || TERMS_TABLE.iter().any(|(row, _, _)| *row == index);
+            if known {
+                continue;
+            }
+            assert_eq!(Terms::from_index(index), Terms::Unknown, "index {index}");
+            assert_eq!(Terms::from_index(index).url(), None, "index {index}");
+        }
     }
 }
