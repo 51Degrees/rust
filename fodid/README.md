@@ -49,6 +49,24 @@ and meaning of the match key:
 - `IdType::Random` carries a 16-byte server-generated GUID.
 - `IdType::Reserved` is not yet assigned and is parsed best effort.
 
+## The terms the identifier was created under
+
+The byte after the match key says which terms document the 51Did was created
+under, so that the terms travel with the identifier rather than beside it. It
+is an index into a table published in the
+[specification](https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md)
+and is not a version number, read through `FodId::terms` as a named `Terms`
+value, through `FodId::terms_index` as the index itself, and through
+`FodId::terms_url` as the address of the document.
+
+An identifier issued before the terms existed ends at the match key, and a
+missing byte is index 0, being `Terms::NotStated`, so absence and zero say the
+same thing. An index added to the specification after this release is
+`Terms::Unknown` and never `Terms::NotStated`, because terms are stated and
+this crate cannot say which, and the index itself stays available so a caller
+can say which one it could not read. This crate answers with the address and
+never fetches it.
+
 ## Payload layout
 
 | Offset | Length | Field                                              |
@@ -57,11 +75,15 @@ and meaning of the match key:
 |      1 |      4 | LicenseId (`u32` little endian)                    |
 |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
 |      5 |     16 | Value: GUID (Random)                               |
+|     37 |      1 | Terms, an index (Probabilistic, HashedEmail)       |
+|     21 |      1 | Terms, an index (Random)                           |
 
 These lengths are lower bounds. The payload must hold the 5 byte header
 before the type can be read, and then the value the type requires, being 16
 GUID bytes for a random identifier and 32 hash bytes for a probabilistic or
-hashed email one. A payload may carry more bytes after the value, which this
+hashed email one. The terms byte follows the value, so where it sits depends
+on the value length the type requires, and a payload that ends at the value
+carries none. A payload may carry more bytes after the terms, which this
 crate accepts and leaves in place. There is no upper bound on a 51Did in this
 crate, so a reader built today keeps reading identifiers issued in a newer,
 longer shape.
@@ -89,6 +111,12 @@ fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::
     let license_id = fod_id.license_id(); // u32
     let match_key = fod_id.match_key();  // the match key bytes (SHA-256 or GUID)
 
+    // The terms the identifier was created under, and the address of that
+    // document where this crate knows the index.
+    let terms = fod_id.terms();             // Terms
+    let terms_index = fod_id.terms_index(); // u8
+    let terms_url = fod_id.terms_url();     // Option<&'static str>
+
     // Inherited OWID level fields and operations, available through Deref.
     let domain = fod_id.domain();
     let round_trip = fod_id.as_base64()?;
@@ -98,6 +126,7 @@ fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::
         == SignatureStatus::Valid;
 
     let _ = (flags, license_id, match_key, domain, round_trip, genuine);
+    let _ = (terms, terms_index, terms_url);
     Ok(())
 }
 ```

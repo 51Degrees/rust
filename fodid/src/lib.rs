@@ -57,6 +57,23 @@
 //! - [`IdType::Random`] carries a 16-byte server-generated GUID.
 //! - [`IdType::Reserved`] is not yet assigned and is parsed best effort.
 //!
+//! ## The terms the identifier was created under
+//!
+//! The byte after the match key says which terms document the 51Did was
+//! created under, so that the terms travel with the identifier rather than
+//! beside it. It is an index into a table published in the specification and
+//! is not a version number, read through [`FodId::terms`] as a named
+//! [`Terms`] value, through [`FodId::terms_index`] as the index itself, and
+//! through [`FodId::terms_url`] as the address of the document.
+//!
+//! An identifier issued before the terms existed ends at the match key, and
+//! a missing byte is index 0, being [`Terms::NotStated`], so absence and
+//! zero say the same thing. An index added to the specification after this
+//! release is [`Terms::Unknown`] and never [`Terms::NotStated`], because
+//! terms are stated and this crate cannot say which, and the index itself
+//! stays available so a caller can say which one it could not read. This
+//! crate answers with the address and never fetches it.
+//!
 //! ## Payload layout
 //!
 //! | Offset | Length | Field                                              |
@@ -65,14 +82,18 @@
 //! |      1 |      4 | LicenseId (`u32` little endian)                    |
 //! |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
 //! |      5 |     16 | Value: GUID (Random)                               |
+//! |     37 |      1 | Terms, an index (Probabilistic, HashedEmail)       |
+//! |     21 |      1 | Terms, an index (Random)                           |
 //!
 //! These lengths are lower bounds. The payload must hold the 5 byte header
 //! before the type can be read, and then the value the type requires, being
 //! 16 GUID bytes for a random identifier and 32 hash bytes for a
-//! probabilistic or hashed email one. A payload may carry more bytes after
-//! the value, and this crate accepts them and leaves them in place. There
-//! is no upper bound on a 51Did in this crate, so a reader built today keeps
-//! reading identifiers issued in a newer, longer shape.
+//! probabilistic or hashed email one. The terms byte follows the value, so
+//! where it sits depends on the value length the type requires, and a
+//! payload that ends at the value carries none. A payload may carry more
+//! bytes after the terms, and this crate accepts them and leaves them in
+//! place. There is no upper bound on a 51Did in this crate, so a reader
+//! built today keeps reading identifiers issued in a newer, longer shape.
 //!
 //! [`FodId`] [`Deref`](std::ops::Deref)s to the underlying [`Owid`], so
 //! a `FodId` can be used directly for all OWID level concerns (domain, date,
@@ -141,6 +162,12 @@
 //! let license_id: u32 = fod_id.license_id();
 //! let match_key: &[u8] = fod_id.match_key(); // the match key to compare (32 or 16 bytes)
 //!
+//! // The terms the identifier was created under, and the address of that
+//! // document where this crate knows the index.
+//! let terms = fod_id.terms();
+//! let terms_index: u8 = fod_id.terms_index();
+//! let terms_url: Option<&str> = fod_id.terms_url();
+//!
 //! // Inherited OWID level fields and operations, available through Deref.
 //! let domain = fod_id.domain();
 //! let round_trip = fod_id.as_base64()?;
@@ -149,6 +176,7 @@
 //! let status = fod_id.verify_status_with_public_key(public_pem, &[]);
 //! let genuine = status == SignatureStatus::Valid;
 //! # let _ = (flags, id_type, license_id, match_key, domain, round_trip, genuine);
+//! # let _ = (terms, terms_index, terms_url);
 //! # Ok(())
 //! # }
 //! ```
@@ -261,8 +289,8 @@ mod fodid;
 
 pub use error::{Error, Result};
 pub use fodid::{
-    FodId, IdType, FLAGS_OFFSET, GUID_LENGTH, HEADER_LENGTH, LICENSE_ID_LENGTH, LICENSE_ID_OFFSET,
-    MATCH_KEY_LENGTH, MATCH_KEY_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
+    FodId, IdType, Terms, FLAGS_OFFSET, GUID_LENGTH, HEADER_LENGTH, LICENSE_ID_LENGTH,
+    LICENSE_ID_OFFSET, MATCH_KEY_LENGTH, MATCH_KEY_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
 };
 
 // The obsolete names for the match key constants, re-exported so callers

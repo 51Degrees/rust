@@ -106,6 +106,82 @@ impl IdType {
     }
 }
 
+/// The terms document a 51Did was created under, carried in the byte that
+/// follows the match key, so that the terms travel with the identifier
+/// rather than beside it.
+///
+/// The byte is an index into the table below and is not a version number.
+/// An index is used so that a later document can live at any address, rather
+/// than only at an address the specification could compose from a number.
+///
+/// | Index | Document                             | Address                     |
+/// |------:|--------------------------------------|-----------------------------|
+/// |     0 | Not stated in the identifier         | None                        |
+/// |     1 | Model Terms for Marketing, version 2 | `https://m4ow.uk/mtm/2.txt` |
+///
+/// A new terms document is a new index in that table, and every package has
+/// to be released to know it, which is the cost of a receiver being able to
+/// trust what it reads. An index is never reused or repointed once
+/// published, because repointing one would rewrite what an identifier
+/// already issued says it agreed to.
+///
+/// An identifier issued before the terms existed has a payload that ends at
+/// the match key, and a missing byte is read as index 0, so absence and zero
+/// say the same thing and neither has to be told apart from the other.
+///
+/// The table is published at
+/// <https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md>,
+/// which is the authority rather than this summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Terms {
+    /// Index 0. The terms are not stated in the identifier, which is also
+    /// how an identifier issued before the byte existed reads.
+    ///
+    /// This does not mean the identifier is unrestricted. It means the
+    /// identifier does not carry the answer, so the answer has to come from
+    /// what accompanies it, being the Terms Document Locator in an OpenRTB
+    /// request or whatever the surrounding protocol provides. The usage
+    /// says where an identifier may go and the terms say which document it
+    /// was created under, and a receiver needs both.
+    NotStated,
+    /// Index 1. The Model Terms for Marketing, version 2, whose address is
+    /// answered by [`terms_url`](FodId::terms_url).
+    ModelTermsForMarketingVersion2,
+    /// An index added to the specification after this release, which this
+    /// crate cannot name.
+    ///
+    /// It is not [`Terms::NotStated`], because terms are stated and this
+    /// crate cannot say which, and a caller treating the two alike would
+    /// read an identifier created under terms as one created under none.
+    /// Read the index itself with [`terms_index`](FodId::terms_index), then
+    /// either update this crate or refuse the identifier.
+    Unknown,
+}
+
+impl Terms {
+    /// Decode the terms from the index byte that follows the match key. An
+    /// index this crate does not know decodes as [`Terms::Unknown`] and
+    /// never as [`Terms::NotStated`].
+    fn from_index(index: u8) -> Terms {
+        match index {
+            0 => Terms::NotStated,
+            1 => Terms::ModelTermsForMarketingVersion2,
+            _ => Terms::Unknown,
+        }
+    }
+
+    /// The address of the terms document, or `None` where there is none to
+    /// give, being index 0 and an index this crate does not know. The
+    /// address is answered and never fetched, and the caller decides what
+    /// to do with it.
+    fn url(self) -> Option<&'static str> {
+        match self {
+            Terms::NotStated | Terms::Unknown => None,
+            Terms::ModelTermsForMarketingVersion2 => Some("https://m4ow.uk/mtm/2.txt"),
+        }
+    }
+}
+
 /// A parsed 51Did: an [`Owid`] envelope whose payload encodes the fields of a
 /// 51Degrees identifier.
 ///
@@ -120,13 +196,22 @@ impl IdType {
 /// |      1 |      4 | LicenseId (`u32` little endian)                    |
 /// |      5 |     32 | Match key: SHA-256 (Probabilistic, HashedEmail)    |
 /// |      5 |     16 | Match key: GUID (Random)                           |
+/// |     37 |      1 | Terms, an index (Probabilistic, HashedEmail)       |
+/// |     21 |      1 | Terms, an index (Random)                           |
 ///
 /// The match key is read through [`match_key`](FodId::match_key). For a
 /// [`IdType::Random`] identifier it is a GUID, otherwise a SHA-256.
 ///
+/// The terms byte follows the match key, so where it sits depends on the
+/// match key length the type requires. It is read through
+/// [`terms`](FodId::terms), [`terms_index`](FodId::terms_index) and
+/// [`terms_url`](FodId::terms_url), and a payload that ends at the match key
+/// carries no terms byte and reads as [`Terms::NotStated`].
+///
 /// The lengths in the table are minimums. A payload may carry more bytes
-/// after the match key, which this reader accepts and leaves in place, reachable
-/// through [`payload`](Owid::payload). There is no upper bound in this crate.
+/// after the fields above, which this reader accepts and leaves in place,
+/// reachable through [`payload`](Owid::payload). There is no upper bound in
+/// this crate.
 ///
 /// `FodId` [`Deref`]s to [`Owid`], so the OWID level fields and operations
 /// (`domain()`, `date()`, `payload()`, `signature()`, `as_base64`,
@@ -143,6 +228,7 @@ pub struct FodId {
     flags: u8,
     license_id: u32,
     match_key: Vec<u8>,
+    terms_index: u8,
 }
 
 impl FodId {
@@ -190,8 +276,10 @@ impl FodId {
     /// [`IdType::Random`], [`MATCH_KEY_LENGTH`] for
     /// [`IdType::Probabilistic`] and [`IdType::HashedEmail`]). A
     /// [`IdType::Reserved`] payload has no defined value length and is read
-    /// best effort. Bytes after the value are accepted and left in the
-    /// payload, because a longer payload is a newer shape rather than a fault.
+    /// best effort, taking every byte after the header as its value, so a
+    /// reserved identifier states no terms until that length is assigned.
+    /// Bytes after the value are accepted and left in the payload, because a
+    /// longer payload is a newer shape rather than a fault.
     ///
     /// # Errors
     ///
@@ -228,11 +316,20 @@ impl FodId {
             });
         }
         let match_key = payload[MATCH_KEY_OFFSET..MATCH_KEY_OFFSET + value_length].to_vec();
+        // The terms index is the byte after the match key. A payload issued
+        // before the terms existed ends at the match key, and a missing byte
+        // is index 0, which says the terms are not stated in the identifier,
+        // so absence and zero are one answer.
+        let terms_index = payload
+            .get(MATCH_KEY_OFFSET + value_length)
+            .copied()
+            .unwrap_or(0);
         Ok(FodId {
             owid,
             flags,
             license_id,
             match_key,
+            terms_index,
         })
     }
 
@@ -270,6 +367,38 @@ impl FodId {
     #[deprecated(note = "renamed to match_key")]
     pub fn hash(&self) -> &[u8] {
         self.match_key()
+    }
+
+    /// The terms document the identifier was created under, read from the
+    /// byte after the match key. A payload that ends at the match key reads
+    /// as [`Terms::NotStated`], so an identifier issued before the byte
+    /// existed answers as one that states no terms. See [`Terms`] for what
+    /// each value means.
+    pub fn terms(&self) -> Terms {
+        Terms::from_index(self.terms_index)
+    }
+
+    /// The raw index behind [`terms`](FodId::terms), being the byte after
+    /// the match key, or 0 where the payload ends at the match key.
+    ///
+    /// This is the one raw value the surface carries, and it is here
+    /// because a caller meeting an index added after this release would
+    /// otherwise hold [`Terms::Unknown`] and no way to find out what it
+    /// stands for, so it could neither look the document up by hand nor
+    /// report which index it could not read.
+    pub fn terms_index(&self) -> u8 {
+        self.terms_index
+    }
+
+    /// The address of the terms document the identifier was created under,
+    /// or `None` where there is none to give, being [`Terms::NotStated`]
+    /// and an index this crate does not know.
+    ///
+    /// The address is answered and never fetched, and it is never an empty
+    /// string and never built from the index, so `Some` means this crate
+    /// knows the document and the caller can rely on the address it holds.
+    pub fn terms_url(&self) -> Option<&'static str> {
+        self.terms().url()
     }
 
     /// A reference to the underlying OWID envelope.

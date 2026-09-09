@@ -28,7 +28,7 @@
 //! no value came back, and the status names the reason. Reading never
 //! touches a key, so none of the failure cases here constructs one.
 
-use fodid::{Creator, Crypto, Error, FodId, IdType, Owid, ParseStatus, SignatureStatus};
+use fodid::{Creator, Crypto, Error, FodId, IdType, Owid, ParseStatus, SignatureStatus, Terms};
 
 const TEST_DOMAIN: &str = "51degrees.com";
 
@@ -74,6 +74,26 @@ fn typed_payload(flags: u8, value_len: usize) -> Vec<u8> {
     for (i, b) in payload[fodid::MATCH_KEY_OFFSET..].iter_mut().enumerate() {
         *b = 0x50 + i as u8;
     }
+    payload
+}
+
+/// The terms index the specification gives to the Model Terms for Marketing,
+/// version 2, and the address that index stands for. Both are written out
+/// here rather than taken from the crate, so the test checks the crate
+/// against the specification rather than against itself.
+const MODEL_TERMS_INDEX: u8 = 1;
+const MODEL_TERMS_URL: &str = "https://m4ow.uk/mtm/2.txt";
+
+/// An index no release of this crate knows, standing in for one added to the
+/// specification after this one.
+const UNKNOWN_TERMS_INDEX: u8 = 200;
+
+/// The canonical payload with a terms index byte after the match key, which
+/// is the shape issued once the terms exist. The byte is appended by hand,
+/// because the offset it lands at is what these tests are checking.
+fn payload_with_terms(index: u8) -> Vec<u8> {
+    let mut payload = canonical_payload();
+    payload.push(index);
     payload
 }
 
@@ -837,4 +857,228 @@ fn reserved_type_exposes_remaining_payload_best_effort() {
     let result = FodId::from_base64(&fixture.signed_owid_base64(payload));
     let fod_id = assert_parsed(&result);
     assert!(fod_id.match_key().is_empty());
+}
+
+#[test]
+fn a_payload_ending_at_the_match_key_states_no_terms() {
+    // An identifier issued before the terms existed ends at the match key.
+    // A missing byte is index 0, which says the terms are not stated in the
+    // identifier, so such an identifier reads exactly as it did before the
+    // byte existed and answers index 0.
+    let fixture = Fixture::new();
+    let result = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload()));
+    let fod_id = assert_parsed(&result);
+
+    assert_eq!(fod_id.terms(), Terms::NotStated);
+    assert_eq!(fod_id.terms_index(), 0);
+    assert_eq!(fod_id.terms_url(), None);
+
+    // Every field that was readable before is unchanged.
+    assert_eq!(fod_id.flags(), CANONICAL_FLAGS);
+    assert_eq!(fod_id.license_id(), CANONICAL_LICENSE_ID);
+    assert_eq!(fod_id.match_key(), &canonical_hash());
+    // The canonical flags byte selects the hashed email type in bits 6-7.
+    assert_eq!(fod_id.id_type(), IdType::HashedEmail);
+}
+
+#[test]
+fn an_explicit_zero_reads_the_same_as_a_missing_terms_byte() {
+    // Absence and zero say the same thing, so nothing has to tell them
+    // apart and no presence flag is needed.
+    let fixture = Fixture::new();
+    let absent = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload())).unwrap();
+    let zero = FodId::from_base64(&fixture.signed_owid_base64(payload_with_terms(0))).unwrap();
+
+    assert_eq!(absent.terms(), zero.terms());
+    assert_eq!(absent.terms_index(), zero.terms_index());
+    assert_eq!(absent.terms_url(), zero.terms_url());
+    assert_eq!(zero.terms(), Terms::NotStated);
+
+    // The payloads still differ by the byte, which stays in place.
+    assert_eq!(absent.payload().len() + 1, zero.payload().len());
+}
+
+#[test]
+fn index_one_is_the_model_terms_for_marketing_and_carries_its_address() {
+    let fixture = Fixture::new();
+    let payload = payload_with_terms(MODEL_TERMS_INDEX);
+    let result = FodId::from_base64(&fixture.signed_owid_base64(payload));
+    let fod_id = assert_parsed(&result);
+
+    assert_eq!(fod_id.terms(), Terms::ModelTermsForMarketingVersion2);
+    assert_eq!(fod_id.terms_index(), MODEL_TERMS_INDEX);
+    assert_eq!(fod_id.terms_url(), Some(MODEL_TERMS_URL));
+    assert_eq!(fod_id.match_key(), &canonical_hash());
+}
+
+#[test]
+fn an_index_this_crate_does_not_know_is_reported_and_has_no_address() {
+    // A caller meeting an index added after this release has to be able to
+    // say which index it could not read, so the raw index is answered
+    // whether or not the named value is known.
+    let fixture = Fixture::new();
+    let payload = payload_with_terms(UNKNOWN_TERMS_INDEX);
+    let result = FodId::from_base64(&fixture.signed_owid_base64(payload));
+    let fod_id = assert_parsed(&result);
+
+    assert_eq!(fod_id.terms_index(), UNKNOWN_TERMS_INDEX);
+    assert_eq!(fod_id.terms(), Terms::Unknown);
+    assert_eq!(fod_id.terms_url(), None);
+    assert_ne!(fod_id.terms(), Terms::NotStated);
+}
+
+#[test]
+fn no_terms_stated_and_an_unknown_index_are_told_apart() {
+    // Zero says no terms are stated, whilst an unknown index says terms are
+    // stated that this crate cannot name. A caller that confused the two
+    // would read an identifier created under terms as one created under
+    // none, so the two answer differently in all three members.
+    let fixture = Fixture::new();
+    let stated_none =
+        FodId::from_base64(&fixture.signed_owid_base64(payload_with_terms(0))).unwrap();
+    let unknown =
+        FodId::from_base64(&fixture.signed_owid_base64(payload_with_terms(UNKNOWN_TERMS_INDEX)))
+            .unwrap();
+
+    assert_ne!(stated_none.terms(), unknown.terms());
+    assert_ne!(stated_none.terms_index(), unknown.terms_index());
+    assert_eq!(stated_none.terms(), Terms::NotStated);
+    assert_eq!(unknown.terms(), Terms::Unknown);
+
+    // Neither carries an address, and that shared answer is the reason the
+    // named value and the index have to be read to tell them apart.
+    assert_eq!(stated_none.terms_url(), None);
+    assert_eq!(unknown.terms_url(), None);
+}
+
+#[test]
+fn every_terms_index_decodes_as_the_specification_publishes_it() {
+    // The published table holds two indexes today. Everything else is an
+    // index added later, whatever its value, including the one immediately
+    // after the last published index and the largest a byte can hold.
+    let fixture = Fixture::new();
+    let cases = [
+        (0u8, Terms::NotStated, None),
+        (
+            1,
+            Terms::ModelTermsForMarketingVersion2,
+            Some(MODEL_TERMS_URL),
+        ),
+        (2, Terms::Unknown, None),
+        (UNKNOWN_TERMS_INDEX, Terms::Unknown, None),
+        (255, Terms::Unknown, None),
+    ];
+    for (index, expected_terms, expected_url) in cases {
+        let payload = payload_with_terms(index);
+        let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+
+        assert_eq!(fod_id.terms(), expected_terms, "index {index}");
+        assert_eq!(fod_id.terms_index(), index, "index {index}");
+        assert_eq!(fod_id.terms_url(), expected_url, "index {index}");
+    }
+}
+
+#[test]
+fn the_terms_byte_is_read_after_the_match_key_for_both_match_key_lengths() {
+    // The terms byte follows the match key, so where it sits moves with the
+    // length the identifier type requires. Reading it at a fixed offset
+    // would take a hash byte for a random identifier.
+    let fixture = Fixture::new();
+    let cases = [
+        (
+            PROBABILISTIC_FLAGS,
+            IdType::Probabilistic,
+            fodid::MATCH_KEY_LENGTH,
+        ),
+        (RANDOM_FLAGS, IdType::Random, fodid::GUID_LENGTH),
+        (
+            HASHED_EMAIL_FLAGS,
+            IdType::HashedEmail,
+            fodid::MATCH_KEY_LENGTH,
+        ),
+    ];
+    for (flags, id_type, value_len) in cases {
+        let mut payload = typed_payload(flags, value_len);
+        payload.push(MODEL_TERMS_INDEX);
+        let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+
+        assert_eq!(fod_id.id_type(), id_type);
+        assert_eq!(fod_id.match_key().len(), value_len, "{id_type:?}");
+        assert_eq!(fod_id.match_key()[0], 0x50, "{id_type:?}");
+        assert_eq!(
+            fod_id.match_key()[value_len - 1],
+            0x50 + (value_len as u8 - 1),
+            "{id_type:?}"
+        );
+        assert_eq!(fod_id.terms_index(), MODEL_TERMS_INDEX, "{id_type:?}");
+        assert_eq!(
+            fod_id.terms(),
+            Terms::ModelTermsForMarketingVersion2,
+            "{id_type:?}"
+        );
+        assert_eq!(fod_id.terms_url(), Some(MODEL_TERMS_URL), "{id_type:?}");
+    }
+}
+
+#[test]
+fn a_creator_context_after_the_terms_leaves_both_the_match_key_and_terms_read() {
+    // The terms sit between the match key and the creator context, so a
+    // payload carrying a context proves the byte is taken from the right
+    // offset rather than from the end of the payload. The context bytes are
+    // arbitrary here, because their meaning belongs to the issuer and this
+    // crate leaves them in the payload untouched.
+    let fixture = Fixture::new();
+    for context_len in [1usize, 40, 300] {
+        let mut payload = payload_with_terms(MODEL_TERMS_INDEX);
+        payload.extend((0..context_len).map(|i| 0xC0 | (i as u8 & 0x0F)));
+        let expected_payload = payload.clone();
+
+        let result = FodId::from_base64(&fixture.signed_owid_base64(payload));
+        let fod_id = assert_parsed(&result);
+
+        assert_eq!(fod_id.match_key(), &canonical_hash(), "{context_len}");
+        assert_eq!(fod_id.terms_index(), MODEL_TERMS_INDEX, "{context_len}");
+        assert_eq!(
+            fod_id.terms(),
+            Terms::ModelTermsForMarketingVersion2,
+            "{context_len}"
+        );
+        assert_eq!(fod_id.terms_url(), Some(MODEL_TERMS_URL), "{context_len}");
+        assert_eq!(fod_id.license_id(), CANONICAL_LICENSE_ID, "{context_len}");
+        assert_eq!(
+            fod_id.payload(),
+            expected_payload.as_slice(),
+            "{context_len}"
+        );
+    }
+}
+
+#[test]
+fn a_reserved_identifier_states_no_terms() {
+    // A reserved type has no defined match key length, so every byte after
+    // the header is read as its value best effort and there is no byte the
+    // terms could be taken from. Index 0 is the answer, being the same one
+    // an identifier that ends at its match key gives.
+    let fixture = Fixture::new();
+    let mut payload = typed_payload(RESERVED_FLAGS, 8);
+    payload.push(MODEL_TERMS_INDEX);
+    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+
+    assert_eq!(fod_id.id_type(), IdType::Reserved);
+    assert_eq!(fod_id.terms(), Terms::NotStated);
+    assert_eq!(fod_id.terms_index(), 0);
+    assert_eq!(fod_id.terms_url(), None);
+}
+
+#[test]
+fn the_terms_survive_a_base64_round_trip() {
+    let fixture = Fixture::new();
+    let payload = payload_with_terms(MODEL_TERMS_INDEX);
+    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+
+    let round_tripped = FodId::from_base64(&fod_id.as_base64().unwrap()).unwrap();
+
+    assert_eq!(round_tripped.terms(), fod_id.terms());
+    assert_eq!(round_tripped.terms_index(), fod_id.terms_index());
+    assert_eq!(round_tripped.terms_url(), fod_id.terms_url());
 }
