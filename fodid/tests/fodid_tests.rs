@@ -905,7 +905,7 @@ fn index_one_is_the_model_terms_for_marketing_and_carries_its_address() {
     let result = FodId::from_base64(&fixture.signed_owid_base64(payload));
     let fod_id = assert_parsed(&result);
 
-    assert_eq!(fod_id.terms(), Terms::ModelTermsForMarketingVersion2);
+    assert_eq!(fod_id.terms(), Terms::ModelTermsForMarketing2);
     assert_eq!(fod_id.terms_index(), MODEL_TERMS_INDEX);
     assert_eq!(fod_id.terms_url(), Some(MODEL_TERMS_URL));
     assert_eq!(fod_id.match_key(), &canonical_hash());
@@ -959,11 +959,7 @@ fn every_terms_index_decodes_as_the_specification_publishes_it() {
     let fixture = Fixture::new();
     let cases = [
         (0u8, Terms::NotStated, None),
-        (
-            1,
-            Terms::ModelTermsForMarketingVersion2,
-            Some(MODEL_TERMS_URL),
-        ),
+        (1, Terms::ModelTermsForMarketing2, Some(MODEL_TERMS_URL)),
         (2, Terms::Unknown, None),
         (UNKNOWN_TERMS_INDEX, Terms::Unknown, None),
         (255, Terms::Unknown, None),
@@ -1013,7 +1009,7 @@ fn the_terms_byte_is_read_after_the_match_key_for_both_match_key_lengths() {
         assert_eq!(fod_id.terms_index(), MODEL_TERMS_INDEX, "{id_type:?}");
         assert_eq!(
             fod_id.terms(),
-            Terms::ModelTermsForMarketingVersion2,
+            Terms::ModelTermsForMarketing2,
             "{id_type:?}"
         );
         assert_eq!(fod_id.terms_url(), Some(MODEL_TERMS_URL), "{id_type:?}");
@@ -1040,7 +1036,7 @@ fn a_creator_context_after_the_terms_leaves_both_the_match_key_and_terms_read() 
         assert_eq!(fod_id.terms_index(), MODEL_TERMS_INDEX, "{context_len}");
         assert_eq!(
             fod_id.terms(),
-            Terms::ModelTermsForMarketingVersion2,
+            Terms::ModelTermsForMarketing2,
             "{context_len}"
         );
         assert_eq!(fod_id.terms_url(), Some(MODEL_TERMS_URL), "{context_len}");

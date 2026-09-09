@@ -146,7 +146,7 @@ pub enum Terms {
     NotStated,
     /// Index 1. The Model Terms for Marketing, version 2, whose address is
     /// answered by [`terms_url`](FodId::terms_url).
-    ModelTermsForMarketingVersion2,
+    ModelTermsForMarketing2,
     /// An index added to the specification after this release, which this
     /// crate cannot name.
     ///
@@ -165,7 +165,7 @@ impl Terms {
     fn from_index(index: u8) -> Terms {
         match index {
             0 => Terms::NotStated,
-            1 => Terms::ModelTermsForMarketingVersion2,
+            1 => Terms::ModelTermsForMarketing2,
             _ => Terms::Unknown,
         }
     }
@@ -177,7 +177,7 @@ impl Terms {
     fn url(self) -> Option<&'static str> {
         match self {
             Terms::NotStated | Terms::Unknown => None,
-            Terms::ModelTermsForMarketingVersion2 => Some("https://m4ow.uk/mtm/2.txt"),
+            Terms::ModelTermsForMarketing2 => Some("https://m4ow.uk/mtm/2.txt"),
         }
     }
 }
@@ -320,6 +320,12 @@ impl FodId {
         // before the terms existed ends at the match key, and a missing byte
         // is index 0, which says the terms are not stated in the identifier,
         // so absence and zero are one answer.
+        //
+        // A reserved type has no assigned match key length, so its value is
+        // every byte after the header and there is no byte left for the
+        // terms to be taken from. Such an identifier reads as index 0, which
+        // is correct rather than a fault, and it stops being a special case
+        // as soon as a reserved type is assigned a length.
         let terms_index = payload
             .get(MATCH_KEY_OFFSET + value_length)
             .copied()
