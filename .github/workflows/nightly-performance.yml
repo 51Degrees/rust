@@ -150,12 +150,16 @@ jobs:
       #    (so the full render path is exercised) but suppresses the final
       #    `git push`, so a manually dispatched dry run leaves nothing outside
       #    this CI job. The `dryrun` input is empty on scheduled runs, which
-      #    parse to `false`, so the nightly cron always publishes. Best-effort:
-      #    on a repository without run history the comparison has too few points
-      #    and simply records the current figures, so a failure here must not
-      #    fail the job.
+      #    parse to `false`, so the nightly cron always publishes.
+      #
+      #    This step is allowed to fail the job. The shared
+      #    compare-performance.ps1 distinguishes its outcomes by exit code:
+      #    the benign "not enough history yet" case exits 0, a genuine
+      #    performance regression exits 1, and an infrastructure failure (for
+      #    example an inability to switch to the images branch) exits 2. None of
+      #    those should be silently swallowed, so `continue-on-error` is false.
       - name: Compare performance and render graphs
-        continue-on-error: true
+        continue-on-error: false
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
