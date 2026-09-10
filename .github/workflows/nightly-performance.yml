@@ -180,7 +180,6 @@ jobs:
             @{ Name = "DeviceDetection-OnPremise"; RunPerformance = $true },
             @{ Name = "IpIntelligence-OnPremise";  RunPerformance = $true }
           )
-          $PSNativeCommandUseErrorActionPreference = $true
           # The performance run resolves examples/Cargo.lock against source.toml
           # (the local-path patch), which rewrites this tracked lockfile. The
           # shared compare step publishes graphs by switching to an orphan images
