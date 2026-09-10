@@ -181,6 +181,15 @@ jobs:
             @{ Name = "IpIntelligence-OnPremise";  RunPerformance = $true }
           )
           $PSNativeCommandUseErrorActionPreference = $true
+          # The performance run resolves examples/Cargo.lock against source.toml
+          # (the local-path patch), which rewrites this tracked lockfile. The
+          # shared compare step publishes graphs by switching to an orphan images
+          # branch, and git aborts that switch while a tracked file has
+          # uncommitted changes. Restore the committed lockfile so the tree is
+          # clean before the switch. Only this one file is touched by the run;
+          # git's "changes would be overwritten" error enumerates every colliding
+          # tracked file, and it lists only examples/Cargo.lock.
+          git -C rust checkout -- examples/Cargo.lock
           ./common-ci/steps/compare-performance.ps1 `
             -RepoName 'rust' `
             -OrgName '51Degrees' `
