@@ -167,6 +167,7 @@ jobs:
             @{ Name = "DeviceDetection-OnPremise"; RunPerformance = $true },
             @{ Name = "IpIntelligence-OnPremise";  RunPerformance = $true }
           )
+          $PSNativeCommandUseErrorActionPreference = $true
           ./common-ci/steps/compare-performance.ps1 `
             -RepoName 'rust' `
             -OrgName '51Degrees' `
