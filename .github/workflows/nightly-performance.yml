@@ -20,12 +20,6 @@ on:
   workflow_dispatch:
     inputs:
       dryrun:
-        description: >-
-          Render the performance graphs but do not push them anywhere outside
-          this CI job (no commit to the gh-images / perf-images branch).
-          Scheduled runs always publish; this toggle only affects manual
-          dispatch.
-        required: false
         type: boolean
         default: false
 
