@@ -22,6 +22,18 @@ on:
       dryrun:
         type: boolean
         default: false
+      common-ci-ref:
+        type: string
+        description: "common-ci branch/tag/sha to use (default: main)"
+        default: ''
+      dd-cxx-ref:
+        type: string
+        description: "device-detection-cxx branch/tag/sha to use (default: main)"
+        default: ''
+      ipi-cxx-ref:
+        type: string
+        description: "ip-intelligence-cxx branch/tag/sha to use (default: main)"
+        default: ''
 
 jobs:
   performance:
@@ -54,6 +66,7 @@ jobs:
         with:
           repository: 51Degrees/common-ci
           path: common-ci
+          ref: ${{ inputs.common-ci-ref }}
 
       # 3. The C/C++ source repositories the -sys crates compile, plus the data
       #    submodules the performance examples read. They are checked out as
@@ -68,6 +81,7 @@ jobs:
         with:
           repository: 51Degrees/device-detection-cxx
           path: device-detection-cxx
+          ref: ${{ inputs.dd-cxx-ref }}
           submodules: recursive
 
       - name: Checkout ip-intelligence-cxx
@@ -75,6 +89,7 @@ jobs:
         with:
           repository: 51Degrees/ip-intelligence-cxx
           path: ip-intelligence-cxx
+          ref: ${{ inputs.ipi-cxx-ref }}
           submodules: recursive
 
       # 3a. The data files (.hash, .ipi) and the User-Agent / evidence records are
