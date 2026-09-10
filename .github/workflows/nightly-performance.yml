@@ -172,6 +172,7 @@ jobs:
             -OrgName '51Degrees' `
             -AllOptions $options `
             -Branch '${{ github.ref_name }}' `
+            -ErrorAction Stop `
             -DryRun $DryRun `
             -Publish
 
