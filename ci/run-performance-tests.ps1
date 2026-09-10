@@ -10,6 +10,23 @@ param(
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
+Push-Location "ip-intelligence-cxx/ip-intelligence-data"
+try {
+    Write-Host "Entering $PWD"
+    # Remove old Asn file (if exists)
+    $AsnFilePath = "51Degrees-IPIV4AsnIpiV41.ipi"
+    if (Test-Path -Type Leaf -Path $AsnFilePath) {
+        Remove-Item -Path $AsnFilePath
+        Write-Host "Deleted $AsnFilePath"
+    }
+    
+    Write-Host "Loading free IPI data files..."
+    & ./get-lite-file-from-azure.ps1
+} finally {
+    Write-Host "Leaving $PWD"
+    Pop-Location
+}
+
 # Runs the 51Degrees Rust on-premise performance examples in release and writes
 # their throughput figures into results_<Name>.json files, in the same
 # `{ HigherIsBetter = @{ metric = value } }` shape the shared
