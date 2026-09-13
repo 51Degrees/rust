@@ -195,8 +195,11 @@ pub(crate) enum Terms {
 /// a document at an unversioned address can be edited afterwards and a
 /// receiver has to know the document that was in force when the identifier
 /// was made.
-const TERMS_TABLE: &[(u8, Terms, &str)] =
-    &[(1, Terms::ModelTermsForMarketing2, "https://m4ow.uk/mtm/2.txt")];
+const TERMS_TABLE: &[(u8, Terms, &str)] = &[(
+    1,
+    Terms::ModelTermsForMarketing2,
+    "https://m4ow.uk/mtm/2.txt",
+)];
 
 impl Terms {
     /// Decode the terms from the index byte that follows the match key. An
@@ -525,7 +528,9 @@ mod terms_table_tests {
     /// identifier that states none.
     #[test]
     fn no_row_claims_the_not_stated_index() {
-        assert!(TERMS_TABLE.iter().all(|(index, _, _)| *index != NOT_STATED_INDEX));
+        assert!(TERMS_TABLE
+            .iter()
+            .all(|(index, _, _)| *index != NOT_STATED_INDEX));
         assert_eq!(Terms::from_index(NOT_STATED_INDEX), Terms::NotStated);
         assert_eq!(Terms::NotStated.url(), None);
     }
@@ -551,8 +556,8 @@ mod terms_table_tests {
     #[test]
     fn an_index_outside_the_table_is_unknown_with_no_address() {
         for index in 0..=u8::MAX {
-            let known = index == NOT_STATED_INDEX
-                || TERMS_TABLE.iter().any(|(row, _, _)| *row == index);
+            let known =
+                index == NOT_STATED_INDEX || TERMS_TABLE.iter().any(|(row, _, _)| *row == index);
             if known {
                 continue;
             }
