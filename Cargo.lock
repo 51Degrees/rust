@@ -765,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "fodid"
-version = "4.5.3"
+version = "4.5.4"
 dependencies = [
  "base64",
  "chrono",
