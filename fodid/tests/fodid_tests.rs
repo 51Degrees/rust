@@ -28,7 +28,9 @@
 //! no value came back, and the status names the reason. Reading never
 //! touches a key, so none of the failure cases here constructs one.
 
-use fodid::{Creator, Crypto, Error, FodId, IdType, Owid, ParseStatus, SignatureStatus};
+use fodid::{Creator, Crypto, Error, FodId, IdType, Owid, ParseStatus, SignatureStatus, Usage};
+
+mod layout;
 
 const TEST_DOMAIN: &str = "51degrees.com";
 
@@ -44,8 +46,8 @@ const HASHED_EMAIL_FLAGS: u8 = 0b1000_0011;
 const RESERVED_FLAGS: u8 = 0b1100_0000;
 
 /// The stable 32-byte hash used across the field-level assertions: 0x20..0x3F.
-fn canonical_hash() -> [u8; fodid::MATCH_KEY_LENGTH] {
-    let mut hash = [0u8; fodid::MATCH_KEY_LENGTH];
+fn canonical_hash() -> [u8; layout::MATCH_KEY_LENGTH] {
+    let mut hash = [0u8; layout::MATCH_KEY_LENGTH];
     for (i, b) in hash.iter_mut().enumerate() {
         *b = 0x20 + i as u8;
     }
@@ -55,11 +57,11 @@ fn canonical_hash() -> [u8; fodid::MATCH_KEY_LENGTH] {
 /// A canonical 37-byte 51Did payload with flags = 0xA5,
 /// licenseId = 0x12345678 (little endian) and the canonical hash.
 fn canonical_payload() -> Vec<u8> {
-    let mut payload = vec![0u8; fodid::PAYLOAD_LENGTH];
-    payload[fodid::FLAGS_OFFSET] = CANONICAL_FLAGS;
-    payload[fodid::LICENSE_ID_OFFSET..fodid::LICENSE_ID_OFFSET + fodid::LICENSE_ID_LENGTH]
+    let mut payload = vec![0u8; layout::PAYLOAD_LENGTH];
+    payload[layout::FLAGS_OFFSET] = CANONICAL_FLAGS;
+    payload[layout::LICENSE_ID_OFFSET..layout::LICENSE_ID_OFFSET + layout::LICENSE_ID_LENGTH]
         .copy_from_slice(&CANONICAL_LICENSE_ID.to_le_bytes());
-    payload[fodid::MATCH_KEY_OFFSET..fodid::MATCH_KEY_OFFSET + fodid::MATCH_KEY_LENGTH]
+    payload[layout::MATCH_KEY_OFFSET..layout::MATCH_KEY_OFFSET + layout::MATCH_KEY_LENGTH]
         .copy_from_slice(&canonical_hash());
     payload
 }
@@ -67,14 +69,26 @@ fn canonical_payload() -> Vec<u8> {
 /// Build a payload of `value_len` value bytes after the header, with the given
 /// flags byte and the canonical license id. The value bytes run 0x50, 0x51, ...
 fn typed_payload(flags: u8, value_len: usize) -> Vec<u8> {
-    let mut payload = vec![0u8; fodid::HEADER_LENGTH + value_len];
-    payload[fodid::FLAGS_OFFSET] = flags;
-    payload[fodid::LICENSE_ID_OFFSET..fodid::LICENSE_ID_OFFSET + fodid::LICENSE_ID_LENGTH]
+    let mut payload = vec![0u8; layout::HEADER_LENGTH + value_len];
+    payload[layout::FLAGS_OFFSET] = flags;
+    payload[layout::LICENSE_ID_OFFSET..layout::LICENSE_ID_OFFSET + layout::LICENSE_ID_LENGTH]
         .copy_from_slice(&CANONICAL_LICENSE_ID.to_le_bytes());
-    for (i, b) in payload[fodid::MATCH_KEY_OFFSET..].iter_mut().enumerate() {
+    for (i, b) in payload[layout::MATCH_KEY_OFFSET..].iter_mut().enumerate() {
         *b = 0x50 + i as u8;
     }
     payload
+}
+
+/// Asserts the canonical flags byte both as the byte the envelope carries
+/// and as the values the typed accessors read out of it. Bits 6-7 are 10, so
+/// the type is hashed email, and the usage bits are 101, so the highest usage
+/// granted is personalized, set directly rather than from a consent string.
+#[track_caller]
+fn assert_canonical_flags(fod_id: &FodId) {
+    assert_eq!(CANONICAL_FLAGS, fod_id.payload()[layout::FLAGS_OFFSET]);
+    assert_eq!(IdType::HashedEmail, fod_id.id_type());
+    assert_eq!(Usage::Personalized, fod_id.usage());
+    assert!(!fod_id.usage_from_consent());
 }
 
 /// Generates a key pair and exposes the PEM forms, used to set up each test.
@@ -157,22 +171,6 @@ fn assert_parsed(result: &fodid::Result<FodId>) -> &FodId {
 }
 
 #[test]
-fn constants_are_internally_consistent() {
-    assert_eq!(
-        fodid::MATCH_KEY_OFFSET + fodid::MATCH_KEY_LENGTH,
-        fodid::PAYLOAD_LENGTH
-    );
-    assert_eq!(
-        fodid::LICENSE_ID_OFFSET + fodid::LICENSE_ID_LENGTH,
-        fodid::MATCH_KEY_OFFSET
-    );
-    assert_eq!(
-        fodid::HEADER_LENGTH + fodid::GUID_LENGTH,
-        fodid::RANDOM_PAYLOAD_LENGTH
-    );
-}
-
-#[test]
 fn fod_id_derefs_to_owid() {
     let fixture = Fixture::new();
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload())).unwrap();
@@ -190,19 +188,10 @@ fn constructor_from_base64_unpacks_all_three_fields() {
     let result = FodId::from_base64(&base64);
     let fod_id = assert_parsed(&result);
 
-    assert_eq!(CANONICAL_FLAGS, fod_id.flags());
+    assert_canonical_flags(fod_id);
     assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id());
     assert_eq!(&canonical_hash(), fod_id.match_key());
     assert_eq!(TEST_DOMAIN, fod_id.domain());
-}
-
-#[test]
-#[allow(deprecated)]
-fn obsolete_hash_returns_match_key() {
-    let fixture = Fixture::new();
-    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload())).unwrap();
-
-    assert_eq!(fod_id.match_key(), fod_id.hash());
 }
 
 #[test]
@@ -216,7 +205,7 @@ fn constructor_from_bytes_unpacks_all_three_fields() {
     let result = FodId::from_byte_array(&bytes);
     let fod_id = assert_parsed(&result);
 
-    assert_eq!(CANONICAL_FLAGS, fod_id.flags());
+    assert_canonical_flags(fod_id);
     assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id());
     assert_eq!(&canonical_hash(), fod_id.match_key());
     assert_eq!(TEST_DOMAIN, fod_id.domain());
@@ -231,7 +220,7 @@ fn constructor_from_owid_unpacks_all_three_fields() {
     let result = FodId::from_owid(owid);
     let fod_id = assert_parsed(&result);
 
-    assert_eq!(CANONICAL_FLAGS, fod_id.flags());
+    assert_canonical_flags(fod_id);
     assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id());
     assert_eq!(&canonical_hash(), fod_id.match_key());
     assert_eq!(expected.domain(), fod_id.domain());
@@ -246,7 +235,7 @@ fn license_id_is_little_endian() {
     let fixture = Fixture::new();
     let mut payload = canonical_payload();
     // 0x01 0x00 0x00 0x00 little endian -> 1
-    payload[fodid::LICENSE_ID_OFFSET..fodid::LICENSE_ID_OFFSET + 4]
+    payload[layout::LICENSE_ID_OFFSET..layout::LICENSE_ID_OFFSET + 4]
         .copy_from_slice(&[0x01, 0x00, 0x00, 0x00]);
 
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
@@ -258,7 +247,7 @@ fn license_id_is_little_endian() {
 fn license_id_max_value_is_little_endian() {
     let fixture = Fixture::new();
     let mut payload = canonical_payload();
-    payload[fodid::LICENSE_ID_OFFSET..fodid::LICENSE_ID_OFFSET + 4]
+    payload[layout::LICENSE_ID_OFFSET..layout::LICENSE_ID_OFFSET + 4]
         .copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
 
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
@@ -271,7 +260,7 @@ fn license_id_high_bit_set_stays_unsigned() {
     let fixture = Fixture::new();
     let mut payload = canonical_payload();
     // 0x80000000 little endian: 00 00 00 80
-    payload[fodid::LICENSE_ID_OFFSET..fodid::LICENSE_ID_OFFSET + 4]
+    payload[layout::LICENSE_ID_OFFSET..layout::LICENSE_ID_OFFSET + 4]
         .copy_from_slice(&[0x00, 0x00, 0x00, 0x80]);
 
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
@@ -280,25 +269,32 @@ fn license_id_high_bit_set_stays_unsigned() {
 }
 
 #[test]
-fn flags_zero_value_exposed() {
+fn a_flags_byte_of_zero_reads_as_no_usage_and_the_default_type() {
     let fixture = Fixture::new();
     let mut payload = canonical_payload();
-    payload[fodid::FLAGS_OFFSET] = 0x00;
+    payload[layout::FLAGS_OFFSET] = 0x00;
 
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
 
-    assert_eq!(0x00, fod_id.flags());
+    assert_eq!(Usage::None, fod_id.usage());
+    assert!(!fod_id.usage_from_consent());
+    assert_eq!(IdType::Probabilistic, fod_id.id_type());
 }
 
 #[test]
-fn flags_all_bits_set_exposed() {
+fn a_flags_byte_with_every_bit_set_reads_as_the_highest_usage_and_reserved() {
     let fixture = Fixture::new();
     let mut payload = canonical_payload();
-    payload[fodid::FLAGS_OFFSET] = 0xFF;
+    payload[layout::FLAGS_OFFSET] = 0xFF;
 
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
 
-    assert_eq!(0xFF, fod_id.flags());
+    assert_eq!(Usage::Personalized, fod_id.usage());
+    assert!(fod_id.usage_from_consent());
+    assert_eq!(IdType::Reserved, fod_id.id_type());
+    // The byte itself is still reachable through the envelope payload, and
+    // the unused bits 4 and 5 change none of the answers above.
+    assert_eq!(0xFF, fod_id.payload()[layout::FLAGS_OFFSET]);
 }
 
 #[test]
@@ -310,11 +306,11 @@ fn hash_is_independent_of_payload() {
     assert_eq!(&canonical_hash(), fod_id.match_key());
     assert_eq!(
         canonical_hash()[0],
-        fod_id.payload()[fodid::MATCH_KEY_OFFSET]
+        fod_id.payload()[layout::MATCH_KEY_OFFSET]
     );
     assert_eq!(
-        canonical_hash()[fodid::MATCH_KEY_LENGTH - 1],
-        fod_id.payload()[fodid::MATCH_KEY_OFFSET + fodid::MATCH_KEY_LENGTH - 1]
+        canonical_hash()[layout::MATCH_KEY_LENGTH - 1],
+        fod_id.payload()[layout::MATCH_KEY_OFFSET + layout::MATCH_KEY_LENGTH - 1]
     );
 }
 
@@ -356,11 +352,11 @@ fn longer_payload_is_accepted_and_the_value_still_read() {
         let result = FodId::from_base64(&fixture.signed_owid_base64(payload));
         let fod_id = assert_parsed(&result);
 
-        assert_eq!(CANONICAL_FLAGS, fod_id.flags(), "extra {extra}");
+        assert_canonical_flags(fod_id);
         assert_eq!(CANONICAL_LICENSE_ID, fod_id.license_id(), "extra {extra}");
         assert_eq!(&canonical_hash(), fod_id.match_key(), "extra {extra}");
         assert_eq!(
-            fodid::MATCH_KEY_LENGTH,
+            layout::MATCH_KEY_LENGTH,
             fod_id.match_key().len(),
             "extra {extra}"
         );
@@ -382,13 +378,13 @@ fn longer_payload_is_accepted_for_every_identifier_type() {
         (
             PROBABILISTIC_FLAGS,
             IdType::Probabilistic,
-            fodid::MATCH_KEY_LENGTH,
+            layout::MATCH_KEY_LENGTH,
         ),
-        (RANDOM_FLAGS, IdType::Random, fodid::GUID_LENGTH),
+        (RANDOM_FLAGS, IdType::Random, layout::GUID_LENGTH),
         (
             HASHED_EMAIL_FLAGS,
             IdType::HashedEmail,
-            fodid::MATCH_KEY_LENGTH,
+            layout::MATCH_KEY_LENGTH,
         ),
     ];
     for (flags, id_type, value_len) in cases {
@@ -400,7 +396,7 @@ fn longer_payload_is_accepted_for_every_identifier_type() {
         assert_eq!(fod_id.match_key()[0], 0x50, "{id_type:?}");
         assert_eq!(
             fod_id.payload().len(),
-            fodid::HEADER_LENGTH + value_len + 40
+            layout::HEADER_LENGTH + value_len + 40
         );
     }
 }
@@ -411,7 +407,7 @@ fn probabilistic_payload_one_byte_short_is_invalid_type_payload_length() {
     // 36 bytes, one short of the 37 a probabilistic identifier needs.
     let base64 = fixture.signed_owid_base64(typed_payload(
         PROBABILISTIC_FLAGS,
-        fodid::MATCH_KEY_LENGTH - 1,
+        layout::MATCH_KEY_LENGTH - 1,
     ));
 
     let result = FodId::from_base64(&base64);
@@ -420,9 +416,9 @@ fn probabilistic_payload_one_byte_short_is_invalid_type_payload_length() {
         result.unwrap_err(),
         Error::InvalidTypePayloadLength {
             id_type: IdType::Probabilistic,
-            expected: fodid::PAYLOAD_LENGTH,
+            expected: layout::PAYLOAD_LENGTH,
             actual,
-        } if actual == fodid::PAYLOAD_LENGTH - 1
+        } if actual == layout::PAYLOAD_LENGTH - 1
     ));
 }
 
@@ -431,7 +427,7 @@ fn hashed_email_payload_one_byte_short_is_invalid_type_payload_length() {
     let fixture = Fixture::new();
     let base64 = fixture.signed_owid_base64(typed_payload(
         HASHED_EMAIL_FLAGS,
-        fodid::MATCH_KEY_LENGTH - 1,
+        layout::MATCH_KEY_LENGTH - 1,
     ));
 
     let result = FodId::from_base64(&base64);
@@ -440,9 +436,9 @@ fn hashed_email_payload_one_byte_short_is_invalid_type_payload_length() {
         result.unwrap_err(),
         Error::InvalidTypePayloadLength {
             id_type: IdType::HashedEmail,
-            expected: fodid::PAYLOAD_LENGTH,
+            expected: layout::PAYLOAD_LENGTH,
             actual,
-        } if actual == fodid::PAYLOAD_LENGTH - 1
+        } if actual == layout::PAYLOAD_LENGTH - 1
     ));
 }
 
@@ -450,7 +446,7 @@ fn hashed_email_payload_one_byte_short_is_invalid_type_payload_length() {
 fn random_payload_shorter_than_guid_is_invalid_type_payload_length() {
     let fixture = Fixture::new();
     // Header present, but one short of the 16 GUID bytes.
-    let base64 = fixture.signed_owid_base64(typed_payload(RANDOM_FLAGS, fodid::GUID_LENGTH - 1));
+    let base64 = fixture.signed_owid_base64(typed_payload(RANDOM_FLAGS, layout::GUID_LENGTH - 1));
 
     let result = FodId::from_base64(&base64);
     assert_failed(&result, Status::InvalidTypePayloadLength);
@@ -458,9 +454,9 @@ fn random_payload_shorter_than_guid_is_invalid_type_payload_length() {
         result.unwrap_err(),
         Error::InvalidTypePayloadLength {
             id_type: IdType::Random,
-            expected: fodid::RANDOM_PAYLOAD_LENGTH,
+            expected: layout::RANDOM_PAYLOAD_LENGTH,
             actual,
-        } if actual == fodid::RANDOM_PAYLOAD_LENGTH - 1
+        } if actual == layout::RANDOM_PAYLOAD_LENGTH - 1
     ));
 }
 
@@ -477,8 +473,8 @@ fn random_payload_with_only_the_header_is_invalid_type_payload_length() {
         result.unwrap_err(),
         Error::InvalidTypePayloadLength {
             id_type: IdType::Random,
-            expected: fodid::RANDOM_PAYLOAD_LENGTH,
-            actual: fodid::HEADER_LENGTH,
+            expected: layout::RANDOM_PAYLOAD_LENGTH,
+            actual: layout::HEADER_LENGTH,
         }
     ));
 }
@@ -488,10 +484,10 @@ fn payload_shorter_than_the_header_is_payload_too_short() {
     // With fewer than the header's 5 bytes the type cannot even be read, so
     // the answer is the header status whatever the flags byte says.
     let fixture = Fixture::new();
-    for length in 0..fodid::HEADER_LENGTH {
+    for length in 0..layout::HEADER_LENGTH {
         let mut payload = vec![0u8; length];
         if length > 0 {
-            payload[fodid::FLAGS_OFFSET] = RANDOM_FLAGS;
+            payload[layout::FLAGS_OFFSET] = RANDOM_FLAGS;
         }
         let base64 = fixture.signed_owid_base64(payload);
 
@@ -501,7 +497,7 @@ fn payload_shorter_than_the_header_is_payload_too_short() {
             matches!(
                 result.unwrap_err(),
                 Error::PayloadTooShort {
-                    expected: fodid::HEADER_LENGTH,
+                    expected: layout::HEADER_LENGTH,
                     actual,
                 } if actual == length
             ),
@@ -516,10 +512,10 @@ fn constructor_from_owid_short_payload_errors() {
     // same checks as the other reading routes.
     let fixture = Fixture::new();
 
-    let result = FodId::from_owid(fixture.signed_owid(vec![0u8; fodid::HEADER_LENGTH - 1]));
+    let result = FodId::from_owid(fixture.signed_owid(vec![0u8; layout::HEADER_LENGTH - 1]));
     assert_failed(&result, Status::PayloadTooShort);
 
-    let result = FodId::from_owid(fixture.signed_owid(vec![0u8; fodid::PAYLOAD_LENGTH - 1]));
+    let result = FodId::from_owid(fixture.signed_owid(vec![0u8; layout::PAYLOAD_LENGTH - 1]));
     assert_failed(&result, Status::InvalidTypePayloadLength);
 }
 
@@ -528,13 +524,13 @@ fn constructor_from_bytes_short_payload_errors() {
     let fixture = Fixture::new();
 
     let bytes = fixture
-        .signed_owid(vec![0u8; fodid::HEADER_LENGTH - 1])
+        .signed_owid(vec![0u8; layout::HEADER_LENGTH - 1])
         .as_byte_array()
         .unwrap();
     assert_failed(&FodId::from_byte_array(&bytes), Status::PayloadTooShort);
 
     let bytes = fixture
-        .signed_owid(vec![0u8; fodid::PAYLOAD_LENGTH - 1])
+        .signed_owid(vec![0u8; layout::PAYLOAD_LENGTH - 1])
         .as_byte_array()
         .unwrap();
     assert_failed(
@@ -715,7 +711,7 @@ fn a_cryptographically_invalid_51did_parses_and_then_verifies_as_invalid() {
     let mut bytes = envelope.as_byte_array().unwrap();
     // The payload is the 37 bytes before the signature. Flip a bit in the
     // hash without changing any length.
-    let hash_start = bytes.len() - signature_length - fodid::MATCH_KEY_LENGTH;
+    let hash_start = bytes.len() - signature_length - layout::MATCH_KEY_LENGTH;
     bytes[hash_start] ^= 0x01;
 
     let result = FodId::from_byte_array(&bytes);
@@ -775,7 +771,9 @@ fn base64_roundtrip_preserves_all_fields() {
     let fod_id1 = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload())).unwrap();
     let fod_id2 = FodId::from_base64(&fod_id1.as_base64().unwrap()).unwrap();
 
-    assert_eq!(fod_id1.flags(), fod_id2.flags());
+    assert_eq!(fod_id1.usage(), fod_id2.usage());
+    assert_eq!(fod_id1.usage_from_consent(), fod_id2.usage_from_consent());
+    assert_eq!(fod_id1.id_type(), fod_id2.id_type());
     assert_eq!(fod_id1.license_id(), fod_id2.license_id());
     assert_eq!(fod_id1.match_key(), fod_id2.match_key());
     assert_eq!(fod_id1.domain(), fod_id2.domain());
@@ -790,13 +788,13 @@ fn id_type_decodes_from_flag_bits_6_and_7() {
         (
             PROBABILISTIC_FLAGS,
             IdType::Probabilistic,
-            fodid::MATCH_KEY_LENGTH,
+            layout::MATCH_KEY_LENGTH,
         ),
-        (RANDOM_FLAGS, IdType::Random, fodid::GUID_LENGTH),
+        (RANDOM_FLAGS, IdType::Random, layout::GUID_LENGTH),
         (
             HASHED_EMAIL_FLAGS,
             IdType::HashedEmail,
-            fodid::MATCH_KEY_LENGTH,
+            layout::MATCH_KEY_LENGTH,
         ),
     ];
     for (flags, expected_type, value_len) in cases {
@@ -808,16 +806,53 @@ fn id_type_decodes_from_flag_bits_6_and_7() {
     }
 }
 
+/// The usage is the highest granted, because the bits are cumulative. A
+/// mask for the non-marketing bit alone would say yes for every marketing
+/// identifier, which is the wrong answer for a data protection decision.
+#[test]
+fn usage_is_the_highest_granted() {
+    let fixture = Fixture::new();
+    let cases = [
+        (0b000, Usage::None, None),
+        (0b001, Usage::NonMarketing, Some("non-marketing")),
+        (0b011, Usage::Standard, Some("standard")),
+        (0b111, Usage::Personalized, Some("personalized")),
+    ];
+    for (bits, expected, id_usage) in cases {
+        let payload = typed_payload(RANDOM_FLAGS | bits, layout::GUID_LENGTH);
+        let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+        assert_eq!(fod_id.usage(), expected, "usage bits {bits:#05b}");
+        assert_eq!(fod_id.usage().id_usage(), id_usage);
+        assert_eq!(
+            fod_id.id_type(),
+            IdType::Random,
+            "the type bits are untouched"
+        );
+        assert!(!fod_id.usage_from_consent());
+    }
+}
+
+/// Bit 3 records that the usage came from a consent string rather than
+/// being stated, and reads independently of which usage it is.
+#[test]
+fn usage_from_consent_is_bit_three() {
+    let fixture = Fixture::new();
+    let payload = typed_payload(RANDOM_FLAGS | 0b1011, layout::GUID_LENGTH);
+    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+    assert!(fod_id.usage_from_consent());
+    assert_eq!(fod_id.usage(), Usage::Standard);
+}
+
 #[test]
 fn random_identifier_carries_a_16_byte_guid() {
     let fixture = Fixture::new();
-    let payload = typed_payload(RANDOM_FLAGS, fodid::GUID_LENGTH);
+    let payload = typed_payload(RANDOM_FLAGS, layout::GUID_LENGTH);
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
 
     assert_eq!(fod_id.id_type(), IdType::Random);
-    assert_eq!(fod_id.match_key().len(), fodid::GUID_LENGTH);
+    assert_eq!(fod_id.match_key().len(), layout::GUID_LENGTH);
     assert_eq!(fod_id.match_key()[0], 0x50);
-    assert_eq!(fod_id.match_key()[fodid::GUID_LENGTH - 1], 0x50 + 15);
+    assert_eq!(fod_id.match_key()[layout::GUID_LENGTH - 1], 0x50 + 15);
 }
 
 #[test]

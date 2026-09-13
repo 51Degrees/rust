@@ -51,7 +51,8 @@
 //! Both are exposed in two forms: the raw base64 string
 //! ([`FodIdData::id_prob_global`]), and the parsed
 //! [`FodId`] ([`FodIdData::id_prob_global_fod_id`]) which unpacks
-//! the envelope's payload (flags, license id, the 32-byte hash) and the OWID
+//! the envelope's payload (the usage, the identifier type, the license id and
+//! the match key) and the OWID
 //! domain, date and signature. The parsing reuses the [`fodid`] reader, so the
 //! envelope handling is identical whether a 51Did arrives from the cloud or is
 //! read from a stored cookie.
