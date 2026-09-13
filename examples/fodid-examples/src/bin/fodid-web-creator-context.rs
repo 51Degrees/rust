@@ -80,7 +80,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use examples_web_shared::serve_css;
-use fodid_client::{DidClient, Error as ClientError, RedeemResult};
+use fodid_client::{DidClient, Error as ClientError, RedeemResult, SignatureOutcome};
 use fodid::FodId;
 use serde::Deserialize;
 
@@ -183,14 +183,11 @@ struct RedeemQuery {
     challenge: String,
 }
 
-/// The server-side step. The client is blocking and the handler runs on the
-/// async runtime, so the work moves to a blocking thread.
+/// The server-side step. The client is asynchronous, so the handler awaits
+/// it directly. Its transport is not Send, which is why the work must stay
+/// on this task rather than moving to a blocking thread as it once did.
 async fn redeem(State(demo): State<Demo>, Query(query): Query<RedeemQuery>) -> Response {
-    let client = demo.client.clone();
-    match tokio::task::spawn_blocking(move || redeem_with(&client, &query)).await {
-        Ok(response) => response,
-        Err(error) => gateway_error(&error.to_string()),
-    }
+    redeem_with(&demo.client, &query).await
 }
 
 /// The lines a developer copies into their own server. The licence key is
@@ -199,7 +196,7 @@ async fn redeem(State(demo): State<Demo>, Query(query): Query<RedeemQuery>) -> R
 /// (`signature`, `context`, `factors` when present, `verifiedAt`,
 /// `secondsSinceVerified`) plus one extra field, `serverSignature`, with the
 /// outcome of this server's own offline signature check.
-fn redeem_with(client: &DidClient, query: &RedeemQuery) -> Response {
+async fn redeem_with(client: &DidClient, query: &RedeemQuery) -> Response {
     // 1. Parse. The page sends the URL-safe alphabet, which is accepted.
     let fod_id = match FodId::from_base64(&query.fodid) {
         Ok(fod_id) => fod_id,
@@ -219,7 +216,10 @@ fn redeem_with(client: &DidClient, query: &RedeemQuery) -> Response {
     };
     // 3. Redeem the sealed result with the licence key and pass the typed
     //    verdict to the page.
-    match client.redeem(&fod_id, &query.result, &query.challenge).await {
+    match client
+        .redeem(&fod_id, &query.result, Some(query.challenge.as_str()))
+        .await
+    {
         Ok(result) => redeem_response(&result, server_signature),
         Err(error) => client_error(error),
     }
@@ -229,29 +229,39 @@ fn redeem_with(client: &DidClient, query: &RedeemQuery) -> Response {
 /// `serverSignature` added. A field the cloud did not send is not invented.
 fn redeem_response(result: &RedeemResult, server_signature: &str) -> Response {
     let mut body = serde_json::Map::new();
-    if let Some(signature) = result.signature.as_str() {
-        body.insert("signature".to_owned(), signature.into());
+    match result.signature() {
+        SignatureOutcome::Verified => {
+            body.insert("signature".to_owned(), "verified".into());
+        }
+        SignatureOutcome::Invalid => {
+            body.insert("signature".to_owned(), "invalid".into());
+        }
+        // The cloud sent no signature, and one is not invented.
+        SignatureOutcome::Unknown => {}
     }
-    body.insert("context".to_owned(), result.context_value.clone().into());
-    if let Some(factors) = &result.factors {
+    body.insert(
+        "context".to_owned(),
+        result.context_value().map(|v| v.to_owned()).into(),
+    );
+    if let Some(factors) = result.factors() {
         let factors: serde_json::Map<String, serde_json::Value> = factors
             .iter()
-            .map(|(name, outcome)| (name.clone(), outcome.as_str().into()))
+            .map(|(name, outcome)| (name.clone(), outcome.as_cloud().into()))
             .collect();
         body.insert("factors".to_owned(), factors.into());
     }
-    if let Some(verified_at) = result.verified_at {
+    if let Some(verified_at) = result.verified_at() {
         body.insert(
             "verifiedAt".to_owned(),
             verified_at.format("%Y-%m-%dT%H:%M:%SZ").to_string().into(),
         );
     }
-    if let Some(seconds) = result.seconds_since_verified {
+    if let Some(seconds) = result.seconds_since_verified() {
         body.insert("secondsSinceVerified".to_owned(), seconds.into());
     }
     body.insert("serverSignature".to_owned(), server_signature.into());
     json_response(
-        StatusCode::from_u16(result.status_code).unwrap_or(StatusCode::OK),
+        StatusCode::from_u16(result.status()).unwrap_or(StatusCode::OK),
         serde_json::Value::Object(body),
     )
 }
@@ -264,15 +274,19 @@ fn redeem_response(result: &RedeemResult, server_signature: &str) -> Response {
 /// error naming the fault.
 fn client_error(error: ClientError) -> Response {
     match error {
-        ClientError::NotSupported => (
+        // The host does not offer the creator context at all.
+        ClientError::NotSupported(_) => (
             StatusCode::NOT_FOUND,
             "The service does not offer the creator context.",
         )
             .into_response(),
-        ClientError::InvalidIdentifier(message) => {
+        // Something the caller sent was not usable, which is the page's
+        // fault rather than the cloud's, so it reads as a bad request.
+        ClientError::InvalidArgument(message) => {
             errors_response(StatusCode::BAD_REQUEST, &message)
         }
-        ClientError::Http { status, body } => {
+        // Any other status the cloud sent, relayed with its own body.
+        ClientError::UnexpectedStatus { status, body, .. } => {
             let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
             let content_type = if body.trim_start().starts_with(['{', '[']) {
                 "application/json"
@@ -353,7 +367,9 @@ async fn main() -> anyhow::Result<()> {
     if let Some(endpoint) = examples_shared::cloud_endpoint_from_env() {
         builder = builder.endpoint(endpoint);
     }
-    let client = builder.build();
+    // build() answers a Result now, and a demo that cannot construct its
+    // client has nothing to show, so it says why and stops.
+    let client = builder.build().context("building the 51Did client")?;
 
     // A fixed local port for the runnable binary, which PORT overrides when
     // that port is taken.
