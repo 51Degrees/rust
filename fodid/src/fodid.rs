@@ -458,8 +458,9 @@ impl FodId {
     /// under and the answer has to come from somewhere else.
     ///
     /// No address does not mean the identifier is unrestricted. Where an
-    /// identifier may go is a separate question [`usage`](FodId::usage)
-    /// answers.
+    /// identifier may go is a separate question, answered by the usage
+    /// bits in [`flags`](FodId::flags), which still bar a non-marketing
+    /// identifier from a demand source.
     pub fn terms(&self) -> Option<&'static str> {
         Terms::from_index(self.terms_index).url()
     }
