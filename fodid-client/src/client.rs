@@ -690,6 +690,19 @@ mod tests {
         }
     }
 
+    /// The payload header and match key lengths, taken from the
+    /// specification at
+    /// <https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md>
+    /// rather than from the crate.
+    ///
+    /// `fodid` does not publish its offsets and lengths, because the only
+    /// use a caller has for an offset is to read a field out of the payload
+    /// by hand and that is how the usage comes out wrong. A test that builds
+    /// a payload byte by byte needs them, and taking them from the reader
+    /// would make the fixture agree with the reader whatever either said.
+    const HEADER_LENGTH: usize = 5;
+    const MATCH_KEY_LENGTH: usize = 32;
+
     /// A signing key pair standing in for the cloud's, and the 51Did it
     /// signs.
     struct Fixture {
@@ -702,7 +715,7 @@ mod tests {
             let crypto = Crypto::new();
             let public_pem = crypto.public_key_pem().expect("export public key");
             let creator = Creator::new("51degrees.com", crypto).expect("create creator");
-            let payload = vec![0u8; fodid::HEADER_LENGTH + fodid::MATCH_KEY_LENGTH];
+            let payload = vec![0u8; HEADER_LENGTH + MATCH_KEY_LENGTH];
             let owid = creator.create(payload).expect("sign the envelope");
             let fod_id = FodId::from_owid(owid).expect("a 51Did");
             Self { public_pem, fod_id }
