@@ -55,12 +55,17 @@ pub struct ExampleOptions {
 }
 
 impl ExampleOptions {
-    /// Default options for a resource key: the sample origin and the public
-    /// cloud endpoint.
+    /// Default options for a resource key: the sample origin and the cloud
+    /// endpoint from the environment, or the public cloud when unset.
     pub fn with_resource_key(resource_key: String) -> Self {
         ExampleOptions {
             resource_key,
-            endpoint: None,
+            // The cloud endpoint. Unset, the cloud request engine reads
+            // 51DEGREES_CLOUD_ENDPOINT itself, and it is passed here as well so the
+            // choice is visible. A host other than cloud.51degrees.com is an on
+            // premise web server or a privately hosted 51Degrees cloud (see
+            // examples_shared::CLOUD_ENDPOINT_ENV_VAR).
+            endpoint: examples_shared::cloud_endpoint_from_env(),
             cloud_request_origin: Some(CLOUD_REQUEST_ORIGIN.to_owned()),
         }
     }

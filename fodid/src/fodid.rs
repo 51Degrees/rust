@@ -497,6 +497,19 @@ impl FodId {
         &self.match_key
     }
 
+    /// The identifier in the URL-safe base64 alphabet without padding, the
+    /// form to put in a URL without any further encoding. It is the inverse
+    /// of the normalisation [`from_base64`](FodId::from_base64) applies, so
+    /// the value reads back to the same envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Owid`] if the envelope cannot be encoded, which only
+    /// happens to an envelope that has never been signed.
+    pub fn as_base64_url(&self) -> Result<String> {
+        Ok(to_base64_url(&self.owid.as_base64()?))
+    }
+
     /// The address of the terms document the identifier was created under,
     /// read from the byte after the match key.
     ///
@@ -530,6 +543,15 @@ impl FodId {
     pub fn into_owid(self) -> Owid {
         self.owid
     }
+}
+
+/// The inverse of [`from_base64_url`]: the URL-safe alphabet without padding.
+pub(crate) fn to_base64_url(standard: &str) -> String {
+    standard
+        .replace('+', "-")
+        .replace('/', "_")
+        .trim_end_matches('=')
+        .to_owned()
 }
 
 impl Deref for FodId {
