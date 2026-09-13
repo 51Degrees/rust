@@ -29,6 +29,7 @@ CRATES=(
   fiftyone-ip-intelligence-sys
   fiftyone-pipeline-core
   fodid
+  fodid-client
   fiftyone-caching
   fiftyone-native
   fiftyone-pipeline-engines
