@@ -1,6 +1,6 @@
 [package]
 name = "fiftyone-fodid-cloud"
-version = "4.5.2"
+version = "4.5.3"
 description = "Cloud engine that unpacks the 51Degrees identifier (51Did / FODid) block from the cloud JSON response into typed data."
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,7 @@ fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
 # the cloud path never uses, so this crate builds for wasm32-wasip1.
 fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines", default-features = false }
 fiftyone-cloud-request-engine = { version = "4.5.2", path = "../cloud-request-engine", default-features = false }
-fodid = { version = "4.5.2", path = "../fodid" }
+fodid = { version = "4.5.3", path = "../fodid" }
 serde_json.workspace = true
 once_cell.workspace = true
 
@@ -26,9 +26,10 @@ once_cell.workspace = true
 reqwest-client = ["fiftyone-cloud-request-engine/reqwest-client"]
 
 [dev-dependencies]
-# Used by the integration test to mint a real signed 51Did envelope, so the
-# parsed-identifier path is exercised end-to-end.
-owid.workspace = true
+# The tests create a real signed 51Did envelope to stand in for the cloud,
+# which needs the OWID creator types fodid exposes under its creator
+# feature.
+fodid = { version = "4.5.3", path = "../fodid", features = ["creator"] }
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the

@@ -88,6 +88,7 @@ path, so cloud-only users and most of CI build without a C compiler.
 | [`fodid-examples`](examples/fodid-examples) | Runnable 51Did examples: the creator context web demo, which verifies a 51Did from the browser and redeems the encrypted verdict on the server. |
 | [`examples-benches`](examples/benches) | Criterion micro-benchmarks guarding the DD, IPI and JavaScript-builder throughput budgets. |
 | [`fodid`](fodid) | Standalone reader for the 51Did (51Degrees Identifier) returned by the cloud, described in the [identifiers documentation](https://51degrees.com/documentation/_identifiers__index.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=readme.md&utm_term=51did). It parses the OWID envelope and is independent of the pipeline stack. |
+| [`fodid-client`](fodid-client) | The server side of the 51Did two-step verification: fetches and caches the signing keys, verifies a signature offline or through the cloud, and redeems the sealed creator context result a browser relays, with the typed outcomes the other 51Did packages report. Builds without a network stack by default; the `reqwest-client` feature turns on the built-in transport. |
 
 ## Feature notes
 
@@ -241,6 +242,14 @@ axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).a
 
 ## Building
 
+The `fodid` crate compiles the OWID library in from the `owid-rust` submodule,
+so place that source once per clone before building:
+
+```sh
+git submodule update --init
+pwsh ./ci/copy-owid-source.ps1
+```
+
 ```sh
 cargo build --workspace
 cargo test --workspace --all-features
@@ -312,10 +321,13 @@ export EXAMPLE_LANG="rust"
 dotnet test --filter TestCategory=Contract
 ```
 
-The `fodid` crate depends on the
-[`owid`](https://github.com/SWAN-community/owid-rust) crate (the OWID envelope
-library a 51Did is built on), consumed as a git dependency. A network
-connection is required the first time the dependency is fetched.
+The `fodid` crate compiles the OWID envelope library (the library a 51Did is
+built on) into itself from the `owid-rust` submodule
+(https://github.com/51Degrees/owid-rust), so no OWID crate has to exist on
+any registry. After cloning, run `git submodule update --init` and then
+`pwsh ./ci/copy-owid-source.ps1` (PowerShell 7, on any platform) to place the
+source under `fodid/src/owid`, which git ignores. Run the script again after
+moving the submodule to another commit.
 
 ## Editor and IDE setup
 

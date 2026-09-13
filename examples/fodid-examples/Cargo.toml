@@ -22,7 +22,11 @@ examples-web-shared = { version = "4.5.2", path = "../examples-web-shared" }
 # The 51Did reader and, with the `cloud` feature, its cloud client, which
 # the server-side redeem step goes through. Referenced from this repository
 # so the example tests the branch it sits on.
-fodid = { version = "4.5.2", path = "../../fodid", features = ["cloud"] }
+fodid = { version = "4.5", path = "../../fodid" }
+# The client moved out of fodid into its own crate, so the example takes
+# both: the reader for the identifier and the client for the two-step
+# verification and the redeem.
+fodid-client = { version = "4.5", path = "../../fodid-client" }
 
 # axum 0.8 matches the version the other web examples use, so no second major
 # version is pulled into the graph.

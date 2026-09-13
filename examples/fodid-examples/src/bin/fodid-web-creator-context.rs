@@ -80,7 +80,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use examples_web_shared::serve_css;
-use fodid::client::{ClientError, DidClient, RedeemResult};
+use fodid_client::{DidClient, Error as ClientError, RedeemResult};
 use fodid::FodId;
 use serde::Deserialize;
 
@@ -212,14 +212,14 @@ fn redeem_with(client: &DidClient, query: &RedeemQuery) -> Response {
     };
     // 2. Check the signature here, against the cloud's public key for the
     //    identifier's date. The keys are fetched once and cached.
-    let server_signature = match client.verify_signature(&fod_id) {
+    let server_signature = match client.verify_signature(&fod_id).await {
         Ok(true) => "verified",
         Ok(false) => "invalid",
         Err(error) => return client_error(error),
     };
     // 3. Redeem the sealed result with the licence key and pass the typed
     //    verdict to the page.
-    match client.redeem(&fod_id, &query.result, &query.challenge) {
+    match client.redeem(&fod_id, &query.result, &query.challenge).await {
         Ok(result) => redeem_response(&result, server_signature),
         Err(error) => client_error(error),
     }

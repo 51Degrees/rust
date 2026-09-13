@@ -59,7 +59,9 @@
 //! when it does not, so this test starts covering them automatically once a
 //! paid key is expanded for marketing.
 
-use fodid::FodId;
+use fodid::{FodId, IdType, Usage};
+
+mod layout;
 
 /// The resource-key environment variable names, in the workspace's resolution
 /// order: the aligned name first, then the CI-exported paid and free tiered
@@ -82,30 +84,63 @@ const USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)
 /// reserved for documentation (RFC 5737).
 const CLIENT_IP: &str = "203.0.113.42";
 
-/// A cloud `id.usage` level and whether every resource key must return a 51Did
-/// for it.
-struct Usage {
+/// A cloud `id.usage` level, whether every resource key must return a 51Did
+/// for it, and what the identifier must then say about itself.
+struct UsageCase {
     /// The `id.usage` request value.
     name: &'static str,
     /// Whether a 51Did is required for this usage. Only `non-marketing` is
     /// required today; the marketing usages are validated when returned.
     required: bool,
+    /// The usage the reader must answer with.
+    expected: Usage,
+    /// The terms address the identifier must carry, or `None` where it must
+    /// state none. A non-marketing identifier may not reach a demand source
+    /// at all, so there is nothing for a receiver to agree to.
+    terms: Option<&'static str>,
 }
+
+/// The versioned Model Terms for Marketing document a marketing 51Did is
+/// created under.
+///
+/// Written out here rather than read from the crate, because a test that
+/// asked the crate what it expects would agree with itself whatever the
+/// crate said. The literal is what a receiver has to be able to fetch.
+const MODEL_TERMS_FOR_MARKETING_2: &str = "https://m4ow.uk/mtm/2.txt";
+
+/// IAB TCF v2 consent strings, and the usage the service must derive from
+/// each without the caller stating one.
+///
+/// The first sets all twelve purposes, which is personalized. The second
+/// sets the Appendix 1 standard set, being purposes 1, 2, 7, 8 and 11, which
+/// is standard. Both are the strings the cloud's own IabTcfElement tests use,
+/// repeated here rather than shared, for the same reason as the address
+/// above.
+const CONSENT_STRINGS: &[(&str, Usage)] = &[
+    ("AAAAAAAAAAAAAAAAAAAAAAAAAP_w", Usage::Personalized),
+    ("AAAAAAAAAAAAAAAAAAAAAAAAAMMg", Usage::Standard),
+];
 
 /// The usage levels checked for the resource key. Ordered with the required
 /// `non-marketing` usage first.
-const USAGES: &[Usage] = &[
-    Usage {
+const USAGES: &[UsageCase] = &[
+    UsageCase {
         name: "non-marketing",
         required: true,
+        expected: Usage::NonMarketing,
+        terms: None,
     },
-    Usage {
+    UsageCase {
         name: "standard",
         required: false,
+        expected: Usage::Standard,
+        terms: Some(MODEL_TERMS_FOR_MARKETING_2),
     },
-    Usage {
+    UsageCase {
         name: "personalized",
         required: false,
+        expected: Usage::Personalized,
+        terms: Some(MODEL_TERMS_FOR_MARKETING_2),
     },
 ];
 
@@ -123,41 +158,116 @@ fn resource_key() -> Option<String> {
 /// Calls the cloud JSON endpoint for the given `id.usage` and returns the
 /// parsed response body.
 fn request_usage(resource_key: &str, usage: &str) -> serde_json::Value {
+    request_with(resource_key, "id.usage", usage)
+}
+
+/// Calls the cloud JSON endpoint with one extra query parameter and returns
+/// the parsed response body.
+fn request_with(resource_key: &str, name: &str, value: &str) -> serde_json::Value {
     let body = ureq::get(CLOUD_JSON_URL)
         .query("resource", resource_key)
         .query("user-agent", USER_AGENT)
         .query("client-ip", CLIENT_IP)
-        .query("id.usage", usage)
+        .query(name, value)
         .call()
-        .unwrap_or_else(|e| panic!("cloud request for id.usage={usage} should succeed: {e}"))
+        .unwrap_or_else(|e| panic!("cloud request for {name}={value} should succeed: {e}"))
         .into_string()
         .expect("cloud response should be readable");
     serde_json::from_str(&body).expect("cloud response should be JSON")
 }
 
+/// A consent management platform sends an IAB TCF consent string and no usage
+/// of its own. The service decodes the string, decides the usage from the
+/// purposes it grants, and records in the identifier that it did so, which is
+/// bit 3 of the flags byte.
+///
+/// This is the half a caller cannot state for itself. An identifier whose
+/// usage was stated in the request and one whose usage was decoded from a
+/// consent string are both legitimate, and they are different assertions
+/// about how the permission was obtained, so a receiver has to be able to
+/// tell them apart. The service signs the answer, and this proves the two
+/// ends agree about which bit it is and which way round it reads.
+///
+/// Marked `#[ignore]` for the same reason as the test above.
+#[test]
+#[ignore = "live cloud test: set 51DEGREES_RESOURCE_KEY and run with `--include-ignored` (see module docs)"]
+fn consent_string_sets_the_usage_from_consent_bit() {
+    let Some(resource_key) = resource_key() else {
+        panic!(
+            "no resource key found for the live cloud 51Did test. See the              message on resource_key_returns_51did_for_supported_usages for              how to set one."
+        );
+    };
+
+    let mut proven = 0;
+    for (tc_string, expected) in CONSENT_STRINGS {
+        // No id.usage is sent. A stated usage wins over a consent string, so
+        // sending one would leave the bit clear and this would prove the
+        // opposite of what it says.
+        let response = request_with(&resource_key, "tcstring", tc_string);
+
+        let Some(fodid) = response.get("fodid") else {
+            eprintln!(
+                "consent string granting {expected:?}: no 'fodid' element                  returned, so this key is not entitled to that marketing usage"
+            );
+            continue;
+        };
+
+        for name in ["idprobglobal", "idproblic"] {
+            if let Some(value) = string_field(fodid, name) {
+                // A consent string granting a marketing usage produces a
+                // marketing identifier, so the terms travel with it too.
+                assert_valid_51did(
+                    &format!("consent/{expected:?}/{name}"),
+                    value,
+                    Some(MODEL_TERMS_FOR_MARKETING_2),
+                    *expected,
+                    true,
+                );
+                proven += 1;
+            }
+        }
+    }
+
+    // Rust has no inconclusive result, so this says plainly what the run did
+    // rather than leaving a pass to be read as proof.
+    if proven == 0 {
+        eprintln!(
+            "NOTHING PROVEN: this resource key returned no identifier for              either consent string, so the usage-from-consent bit was never              read. Use a key entitled to the standard or personalized usage."
+        );
+    } else {
+        eprintln!("Usage-from-consent read on {proven} identifier(s).");
+    }
+}
+
 /// Asserts that `base64` is a real 51Did: a signed OWID envelope whose payload
 /// carries the three 51Did fields, including the 32-byte probabilistic hash.
-fn assert_valid_51did(label: &str, base64: &str) {
+fn assert_valid_51did(
+    label: &str,
+    base64: &str,
+    expected_terms: Option<&str>,
+    expected_usage: Usage,
+    from_consent: bool,
+) {
     assert!(!base64.is_empty(), "{label} should not be empty");
 
     let fod_id = FodId::from_base64(base64)
         .unwrap_or_else(|e| panic!("{label} should parse as a 51Did: {e}"));
 
     // A 51Did wraps a payload of at least PAYLOAD_LENGTH bytes carrying a
-    // HASH_LENGTH byte probabilistic value, inside a domain bearing envelope.
+    // MATCH_KEY_LENGTH byte probabilistic value, inside a domain bearing envelope.
     assert_eq!(
-        fod_id.hash().len(),
-        fodid::HASH_LENGTH,
+        fod_id.match_key().len(),
+        layout::MATCH_KEY_LENGTH,
         "{label}: hash length"
     );
     assert!(
-        fod_id.payload.len() >= fodid::PAYLOAD_LENGTH,
+        fod_id.payload().len() >= layout::PAYLOAD_LENGTH,
         "{label}: payload length {} is below the {} byte minimum",
-        fod_id.payload.len(),
-        fodid::PAYLOAD_LENGTH
+        fod_id.payload().len(),
+        layout::PAYLOAD_LENGTH
     );
     assert!(
-        !fod_id.domain.is_empty(),
+        !fod_id.domain().is_empty(),
         "{label}: domain should not be empty"
     );
 
@@ -166,16 +276,76 @@ fn assert_valid_51did(label: &str, base64: &str) {
     let round_trip = fod_id.as_base64().expect("should re-encode");
     let reparsed = FodId::from_base64(&round_trip).expect("should re-parse");
     assert_eq!(
-        fod_id.hash(),
-        reparsed.hash(),
+        fod_id.match_key(),
+        reparsed.match_key(),
         "{label}: hash should survive a base64 round trip"
     );
 
-    let hash_hex: String = fod_id.hash().iter().map(|b| format!("{b:02x}")).collect();
+    // The terms travel with the identifier, so a receiver can read what it
+    // was created under without asking anyone. A payload that stops at the
+    // match key reads as no terms, which is why this is the assertion that
+    // fails where the service has not been updated to write the byte.
+    assert_eq!(
+        fod_id.terms(),
+        expected_terms,
+        "{label}: expected the terms to be {expected_terms:?} and the \
+         identifier carries {:?}. Where this reads None for a marketing \
+         usage the service that answered is older than the release that \
+         writes the Terms byte.",
+        fod_id.terms()
+    );
+    assert_eq!(
+        reparsed.terms(),
+        expected_terms,
+        "{label}: terms should survive a base64 round trip"
+    );
+
+    // The flags byte, read through the accessors rather than by masking.
+    // The usage values are cumulative, being 001, 011 and 111, so a caller
+    // masking the byte for the non-marketing bit reads every marketing
+    // identifier as non-marketing. These assertions are the alignment
+    // between what the service wrote and what this crate answers.
+    assert_eq!(
+        fod_id.usage(),
+        expected_usage,
+        "{label}: the service was asked for a {expected_usage:?} identifier \
+         and this reads as {:?}",
+        fod_id.usage()
+    );
+    assert_eq!(
+        fod_id.usage_from_consent(),
+        from_consent,
+        "{label}: expected the usage to be recorded as {}, and it reads as {}",
+        if from_consent {
+            "derived from a consent string"
+        } else {
+            "stated by the caller"
+        },
+        if fod_id.usage_from_consent() {
+            "derived from a consent string"
+        } else {
+            "stated by the caller"
+        }
+    );
+    assert_eq!(
+        fod_id.id_type(),
+        IdType::Probabilistic,
+        "{label}: an idprob* value must be a probabilistic identifier and \
+         this reads as {:?}",
+        fod_id.id_type()
+    );
+
+    let hash_hex: String = fod_id
+        .match_key()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     println!(
-        "{label}: domain={} flags={:#04x} license_id={:#010x} hash={hash_hex}",
-        fod_id.domain,
-        fod_id.flags(),
+        "{label}: domain={} usage={:?} from_consent={} type={:?} license_id={:#010x} hash={hash_hex}",
+        fod_id.domain(),
+        fod_id.usage(),
+        fod_id.usage_from_consent(),
+        fod_id.id_type(),
         fod_id.license_id()
     );
 }
@@ -244,9 +414,13 @@ fn resource_key_returns_51did_for_supported_usages() {
         // idprobglobal is the global 51Did for this usage. It is required for
         // non-marketing and validated when a marketing usage returns it.
         match string_field(fodid, "idprobglobal") {
-            Some(idprobglobal) => {
-                assert_valid_51did(&format!("{}/idprobglobal", usage.name), idprobglobal)
-            }
+            Some(idprobglobal) => assert_valid_51did(
+                &format!("{}/idprobglobal", usage.name),
+                idprobglobal,
+                usage.terms,
+                usage.expected,
+                false,
+            ),
             None if usage.required => {
                 panic!(
                     "id.usage={}: no idprobglobal returned. fodid element: {fodid}",
@@ -263,7 +437,13 @@ fn resource_key_returns_51did_for_supported_usages() {
         // idproblic is scoped to the caller's license and is validated whenever
         // it is returned.
         if let Some(idproblic) = string_field(fodid, "idproblic") {
-            assert_valid_51did(&format!("{}/idproblic", usage.name), idproblic);
+            assert_valid_51did(
+                &format!("{}/idproblic", usage.name),
+                idproblic,
+                usage.terms,
+                usage.expected,
+                false,
+            );
         }
     }
 }
