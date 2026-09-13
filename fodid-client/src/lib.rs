@@ -75,14 +75,25 @@
 //! check did not pass, as a [`SignatureCheck`], and only
 //! [`SignatureCheck::Invalid`] means the identifier should be distrusted.
 //!
+//! ## Awaiting the client
+//!
+//! Every method that may reach the network is `async` and is awaited. The
+//! crate carries no async runtime of its own, so the futures run on
+//! whatever runtime the host has, and they are not required to be `Send`,
+//! so a single-threaded host such as a `wasm32-wasip1` edge runtime can
+//! await them. Concurrent callers that each find the key cache needs
+//! fetching share one fetch rather than each making their own.
+//!
 //! ## Transport
 //!
-//! Every request goes through the [`DidHttpClient`] trait. The crate builds
-//! without any network stack by default, so it compiles for
-//! `wasm32-wasip1` and a host such as an edge runtime supplies its own
-//! transport through [`DidClientBuilder::http_client`]. The `reqwest-client`
-//! feature turns on the built-in `ReqwestClient`, a blocking `reqwest`
-//! client, which the builder uses when no transport is given.
+//! Every request goes through the [`DidHttpClient`] trait, whose one
+//! method returns a [`LocalBoxFuture`]. The crate builds without any
+//! network stack by default, so it compiles for `wasm32-wasip1` and a host
+//! such as an edge runtime supplies its own transport through
+//! [`DidClientBuilder::http_client`]. The `reqwest-client` feature turns on
+//! the built-in `ReqwestClient`, an asynchronous `reqwest` client with
+//! rustls that runs on a tokio runtime, which the builder uses when no
+//! transport is given.
 //!
 //! Credentials never travel in a URL. The resource key is part of the
 //! route, as the endpoints accept, and the licence key travels only in the
@@ -95,7 +106,7 @@
 //! use fodid::FodId;
 //! use fodid_client::{ContextOutcome, DidClient, DidHttpClient};
 //!
-//! # fn run(
+//! # async fn run(
 //! #     transport: Arc<dyn DidHttpClient>,
 //! #     encoded_51did: &str,
 //! #     sealed_result: &str,
@@ -111,7 +122,7 @@
 //! let fod_id = FodId::from_base64(encoded_51did)?;
 //!
 //! // Step one happened in the browser. Step two is the redemption.
-//! let outcome = client.redeem(&fod_id, sealed_result, None)?;
+//! let outcome = client.redeem(&fod_id, sealed_result, None).await?;
 //! match outcome.context() {
 //!     ContextOutcome::Verified => { /* same connection as at creation */ }
 //!     ContextOutcome::Mismatch => {
@@ -140,7 +151,7 @@ pub use client::{
     KEY_CACHE_LIFETIME, MAXIMUM_ENCODED_LENGTH, USER_AGENT,
 };
 pub use error::{Error, Result};
-pub use http::{DidHttpClient, DidHttpRequest, DidHttpResponse, HttpMethod};
+pub use http::{DidHttpClient, DidHttpRequest, DidHttpResponse, HttpMethod, LocalBoxFuture};
 pub use key::{
     candidates_for_date, in_force_at, parse_keys, DidPublicKey, BOUNDARY_TOLERANCE_MINUTES,
 };
