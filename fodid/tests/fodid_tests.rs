@@ -1181,3 +1181,85 @@ fn the_payload_version_is_read_apart_from_the_usage_and_type_bits() {
         }
     }
 }
+
+#[test]
+fn from_base64_ignores_surrounding_whitespace() {
+    let fixture = Fixture::new();
+    // A payload chosen so the encoding needs padding, which the URL-safe
+    // form leaves out and the reader works back from the stripped length.
+    let mut payload = canonical_payload();
+    for (i, b) in payload[layout::MATCH_KEY_OFFSET..].iter_mut().enumerate() {
+        *b = 0xFB + (i as u8 % 5);
+    }
+    let standard = fixture.signed_owid_base64(payload);
+    assert!(standard.ends_with('='));
+    let url_safe = standard
+        .replace('+', "-")
+        .replace('/', "_")
+        .trim_end_matches('=')
+        .to_owned();
+
+    let expected = FodId::from_base64(&standard).unwrap();
+    for clean in [&standard, &url_safe] {
+        for spaced in [
+            format!("{clean}\n"),
+            format!(" {clean}"),
+            format!("{clean} "),
+            format!("\r\n\t {clean} \t\r\n"),
+        ] {
+            assert_eq!(FodId::from_base64(&spaced).unwrap(), expected);
+        }
+    }
+}
+
+#[test]
+fn from_base64_accepts_both_alphabets_with_or_without_padding() {
+    let fixture = Fixture::new();
+    // A payload chosen so the encoding carries both `+` and `/` and needs
+    // padding, which the assertions below check rather than assume.
+    let mut payload = canonical_payload();
+    for (i, b) in payload[layout::MATCH_KEY_OFFSET..].iter_mut().enumerate() {
+        *b = 0xFB + (i as u8 % 5);
+    }
+    let standard = fixture.signed_owid_base64(payload);
+    assert!(standard.contains('+') || standard.contains('/'));
+    assert!(standard.ends_with('='));
+
+    let url_safe_padded = standard.replace('+', "-").replace('/', "_");
+    let url_safe = url_safe_padded.trim_end_matches('=').to_owned();
+    assert_ne!(url_safe, standard);
+
+    let expected = FodId::from_base64(&standard).unwrap();
+    assert_eq!(FodId::from_base64(&url_safe_padded).unwrap(), expected);
+    assert_eq!(FodId::from_base64(&url_safe).unwrap(), expected);
+    // Padding stripped from the standard alphabet is restored too.
+    assert_eq!(
+        FodId::from_base64(standard.trim_end_matches('=')).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn as_base64_url_round_trips_and_carries_no_padding_or_standard_symbols() {
+    let fixture = Fixture::new();
+    let mut payload = canonical_payload();
+    for (i, b) in payload[layout::MATCH_KEY_OFFSET..].iter_mut().enumerate() {
+        *b = 0xFB + (i as u8 % 5);
+    }
+    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+
+    let url_safe = fod_id.as_base64_url().unwrap();
+    assert!(!url_safe.contains('+'));
+    assert!(!url_safe.contains('/'));
+    assert!(!url_safe.contains('='));
+    assert_eq!(
+        url_safe,
+        fod_id
+            .as_base64()
+            .unwrap()
+            .replace('+', "-")
+            .replace('/', "_")
+            .trim_end_matches('=')
+    );
+    assert_eq!(FodId::from_base64(&url_safe).unwrap(), fod_id);
+}
