@@ -359,8 +359,15 @@ impl FodId {
     /// the payload cannot hold the 51Did header, or
     /// [`Error::InvalidTypePayloadLength`] if the payload is shorter than
     /// the minimum for its identifier type.
+    /// Either base64 alphabet is accepted, standard or URL-safe, with or
+    /// without padding, because a 51Did travels in URLs and comes back in
+    /// the alphabet whoever sent it chose. Leading and trailing whitespace
+    /// is stripped first, so a value carrying a trailing newline from a
+    /// file, a header or a copied link reads back to the same envelope as
+    /// the clean form.
+    ///
     pub fn from_base64(base64: &str) -> Result<Self> {
-        Self::from_owid(Owid::from_base64(base64)?)
+        Self::from_owid(Owid::from_base64(&from_base64_url(base64.trim()))?)
     }
 
     /// Reads a 51Did from the raw bytes of an OWID envelope, without verifying
@@ -497,6 +504,19 @@ impl FodId {
         &self.match_key
     }
 
+    /// The identifier in the URL-safe base64 alphabet without padding, the
+    /// form to put in a URL without any further encoding. It is the inverse
+    /// of the normalisation [`from_base64`](FodId::from_base64) applies, so
+    /// the value reads back to the same envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Owid`] if the envelope cannot be encoded, which only
+    /// happens to an envelope that has never been signed.
+    pub fn as_base64_url(&self) -> Result<String> {
+        Ok(to_base64_url(&self.owid.as_base64()?))
+    }
+
     /// The address of the terms document the identifier was created under,
     /// read from the byte after the match key.
     ///
@@ -530,6 +550,31 @@ impl FodId {
     pub fn into_owid(self) -> Owid {
         self.owid
     }
+}
+
+/// Restores a string in the URL-safe base64 alphabet to the standard alphabet
+/// with padding. `-` becomes `+`, `_` becomes `/`, and `==` or `=` is added
+/// when the length modulo 4 is 2 or 3. A value already in the standard
+/// alphabet with padding passes through unchanged. The caller strips
+/// surrounding whitespace first, because the padding is worked out from the
+/// length.
+pub(crate) fn from_base64_url(value: &str) -> String {
+    let mut standard = value.replace('-', "+").replace('_', "/");
+    match standard.len() % 4 {
+        2 => standard.push_str("=="),
+        3 => standard.push('='),
+        _ => {}
+    }
+    standard
+}
+
+/// The inverse of [`from_base64_url`]: the URL-safe alphabet without padding.
+pub(crate) fn to_base64_url(standard: &str) -> String {
+    standard
+        .replace('+', "-")
+        .replace('/', "_")
+        .trim_end_matches('=')
+        .to_owned()
 }
 
 impl Deref for FodId {
