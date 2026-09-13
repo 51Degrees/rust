@@ -48,11 +48,14 @@ ureq = "2"
 serde_json = "1"
 
 [lints.rust]
-# The OWID module keeps the library's `fetch` and `endpoints` feature gates,
-# which this crate does not declare and never turns on. Naming them here tells
-# the compiler they are expected, so the checked cfg lint stays on for every
-# other name instead of being switched off for the module.
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("endpoints", "fetch"))'] }
+# The OWID module keeps the library's own feature gates, which this crate does
+# not declare and never turns on. Naming them here tells the compiler they are
+# expected, so the checked cfg lint stays on for every other name instead of
+# being switched off for the module. `reqwest-fetch` is named although no
+# copied file carries it yet, because it arrives with the asynchronous fetch
+# in SWAN-community/owid-rust 10, and without it the three gates in the copied
+# mod.rs fail `cargo clippy -- -D warnings` the moment the submodule moves.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("endpoints", "fetch", "reqwest-fetch"))'] }
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the

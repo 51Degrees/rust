@@ -61,6 +61,8 @@
 
 use fodid::FodId;
 
+mod layout;
+
 /// The resource-key environment variable names, in the workspace's resolution
 /// order: the aligned name first, then the CI-exported paid and free tiered
 /// names. Mirrors `examples-shared::keys::resource_key_from_env`.
@@ -147,14 +149,14 @@ fn assert_valid_51did(label: &str, base64: &str) {
     // MATCH_KEY_LENGTH byte probabilistic value, inside a domain bearing envelope.
     assert_eq!(
         fod_id.match_key().len(),
-        fodid::MATCH_KEY_LENGTH,
+        layout::MATCH_KEY_LENGTH,
         "{label}: hash length"
     );
     assert!(
-        fod_id.payload().len() >= fodid::PAYLOAD_LENGTH,
+        fod_id.payload().len() >= layout::PAYLOAD_LENGTH,
         "{label}: payload length {} is below the {} byte minimum",
         fod_id.payload().len(),
-        fodid::PAYLOAD_LENGTH
+        layout::PAYLOAD_LENGTH
     );
     assert!(
         !fod_id.domain().is_empty(),
@@ -177,9 +179,11 @@ fn assert_valid_51did(label: &str, base64: &str) {
         .map(|b| format!("{b:02x}"))
         .collect();
     println!(
-        "{label}: domain={} flags={:#04x} license_id={:#010x} hash={hash_hex}",
+        "{label}: domain={} usage={:?} from_consent={} type={:?} license_id={:#010x} hash={hash_hex}",
         fod_id.domain(),
-        fod_id.flags(),
+        fod_id.usage(),
+        fod_id.usage_from_consent(),
+        fod_id.id_type(),
         fod_id.license_id()
     );
 }
