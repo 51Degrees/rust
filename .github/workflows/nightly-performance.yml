@@ -41,8 +41,11 @@ jobs:
           path: rust
           submodules: recursive
 
-      # 2. The shared common-ci scripts (the Rust performance adapter and the
-      #    comparison step).
+      # 2. The shared comparison step, which reads the results of earlier runs
+      #    and charts them. The performance adapter itself lives in this
+      #    repository, in ci/, because it serves only this repository and a
+      #    folder named rust in common-ci collides with the clone of a
+      #    repository named rust (51Degrees/rust#50).
       - name: Checkout common-ci
         uses: actions/checkout@v4
         with:
@@ -112,7 +115,7 @@ jobs:
       #    rust/test-results/performance-summary in the common-ci schema.
       - name: Run performance and write results
         shell: pwsh
-        run: ./common-ci/rust/run-performance-tests.ps1 -RepoName rust
+        run: ./rust/ci/run-performance-tests.ps1 -RepoName rust
 
       - name: Upload Performance Results Artifact
         uses: actions/upload-artifact@v4
