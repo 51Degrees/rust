@@ -18,6 +18,22 @@ on:
     # 02:00 UTC daily.
     - cron: '0 2 * * *'
   workflow_dispatch:
+    inputs:
+      dryrun:
+        type: boolean
+        default: false
+      common-ci-ref:
+        type: string
+        description: "common-ci branch/tag/sha to use (default: main)"
+        default: ''
+      dd-cxx-ref:
+        type: string
+        description: "device-detection-cxx branch/tag/sha to use (default: main)"
+        default: ''
+      ipi-cxx-ref:
+        type: string
+        description: "ip-intelligence-cxx branch/tag/sha to use (default: main)"
+        default: ''
 
 jobs:
   performance:
@@ -41,13 +57,16 @@ jobs:
           path: rust
           submodules: recursive
 
-      # 2. The shared common-ci scripts (the Rust performance adapter and the
-      #    comparison step).
+      # 2. common-ci, checked out for the shared comparison step
+      #    (steps/compare-performance.ps1). The Rust performance adapter itself
+      #    now lives in this repo at ci/run-performance-tests.ps1 (see
+      #    ci/missing-ci-scripts.md); only the comparison step is shared.
       - name: Checkout common-ci
         uses: actions/checkout@v4
         with:
           repository: 51Degrees/common-ci
           path: common-ci
+          ref: ${{ inputs.common-ci-ref }}
 
       # 3. The C/C++ source repositories the -sys crates compile, plus the data
       #    submodules the performance examples read. They are checked out as
@@ -62,6 +81,7 @@ jobs:
         with:
           repository: 51Degrees/device-detection-cxx
           path: device-detection-cxx
+          ref: ${{ inputs.dd-cxx-ref }}
           submodules: recursive
 
       - name: Checkout ip-intelligence-cxx
@@ -69,6 +89,7 @@ jobs:
         with:
           repository: 51Degrees/ip-intelligence-cxx
           path: ip-intelligence-cxx
+          ref: ${{ inputs.ipi-cxx-ref }}
           submodules: recursive
 
       # 3a. The data files (.hash, .ipi) and the User-Agent / evidence records are
@@ -112,7 +133,7 @@ jobs:
       #    rust/test-results/performance-summary in the common-ci schema.
       - name: Run performance and write results
         shell: pwsh
-        run: ./common-ci/rust/run-performance-tests.ps1 -RepoName rust
+        run: ./rust/ci/run-performance-tests.ps1 -RepoName rust
 
       - name: Upload Performance Results Artifact
         uses: actions/upload-artifact@v4
@@ -125,15 +146,27 @@ jobs:
       #    `main`, commit them to the `gh-images` branch (other branches use a
       #    `perf-images/<branch>` prefix). The documentation benchmarks page
       #    embeds those images by raw URL, so without `-Publish` the Rust graphs
-      #    never appear. Best-effort: on a repository without run history the
-      #    comparison has too few points and simply records the current figures,
-      #    so a failure here must not fail the job.
+      #    never appear. `-DryRun` still renders and commits the graphs locally
+      #    (so the full render path is exercised) but suppresses the final
+      #    `git push`, so a manually dispatched dry run leaves nothing outside
+      #    this CI job. The `dryrun` input is empty on scheduled runs, which
+      #    parse to `false`, so the nightly cron always publishes.
+      #
+      #    This step is allowed to fail the job. The shared
+      #    compare-performance.ps1 distinguishes its outcomes by exit code:
+      #    the benign "not enough history yet" case exits 0, a genuine
+      #    performance regression exits 1, and an infrastructure failure (for
+      #    example an inability to switch to the images branch) exits 2. None of
+      #    those should be silently swallowed, so `continue-on-error` is false.
       - name: Compare performance and render graphs
-        continue-on-error: true
+        continue-on-error: false
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # The dryrun input is only set on manual dispatch; default it to
+          # false so scheduled runs publish normally.
+          $DryRun = [bool]::Parse( "${{ inputs.dryrun || 'false' }}" )
           # Committing the rendered graphs onto the gh-images branch needs a git
           # identity, which a bare runner checkout does not configure; use the
           # github-actions bot identity so the commit succeeds.
@@ -147,11 +180,22 @@ jobs:
             @{ Name = "DeviceDetection-OnPremise"; RunPerformance = $true },
             @{ Name = "IpIntelligence-OnPremise";  RunPerformance = $true }
           )
+          # The performance run resolves examples/Cargo.lock against source.toml
+          # (the local-path patch), which rewrites this tracked lockfile. The
+          # shared compare step publishes graphs by switching to an orphan images
+          # branch, and git aborts that switch while a tracked file has
+          # uncommitted changes. Restore the committed lockfile so the tree is
+          # clean before the switch. Only this one file is touched by the run;
+          # git's "changes would be overwritten" error enumerates every colliding
+          # tracked file, and it lists only examples/Cargo.lock.
+          git -C rust checkout -- examples/Cargo.lock
           ./common-ci/steps/compare-performance.ps1 `
             -RepoName 'rust' `
             -OrgName '51Degrees' `
             -AllOptions $options `
             -Branch '${{ github.ref_name }}' `
+            -ErrorAction Stop `
+            -DryRun $DryRun `
             -Publish
 
       - name: Escape Branch Name
