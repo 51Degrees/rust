@@ -10,7 +10,13 @@ param(
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
-Push-Location "ip-intelligence-cxx/ip-intelligence-data"
+# The ip-intelligence-cxx checkout is a sibling of the repo directory (CI
+# checks this repo out into $RepoName next to it; a local run passes "." from
+# the repo root, whose parent is the workspace holding the sibling checkout).
+# Resolve the ASN data directory against $RepoName rather than the caller's
+# current directory, so both invocations find it.
+$AsnDataDir = Join-Path $RepoName "../ip-intelligence-cxx/ip-intelligence-data"
+Push-Location $AsnDataDir
 try {
     Write-Host "Entering $PWD"
     # Remove old Asn file (if exists)
