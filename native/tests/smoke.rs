@@ -280,6 +280,40 @@ mod device_detection {
         }
     }
 
+    /// With the property value index built (the in-memory profiles build it),
+    /// a property the matched profile holds no value for reads back empty,
+    /// not as the values of the properties stored before it. The index used
+    /// to be left uninitialised for such entries, which gave an iPhone a
+    /// high-entropy values script of "Apple|Mobile Safari|17.0|...".
+    #[test]
+    fn missing_profile_value_is_empty_with_the_value_index() {
+        let Some(data_file) = dd_lite_data_file() else {
+            eprintln!("no Lite Hash data file found; skipping value index test");
+            return;
+        };
+        let manager = dd::Manager::open(&data_file, PerformanceProfile::HighPerformance)
+            .expect("the Lite data file loads in memory");
+        if manager
+            .required_property_index("JavascriptGetHighEntropyValues")
+            .is_none()
+        {
+            eprintln!("data file has no JavascriptGetHighEntropyValues; skipping");
+            return;
+        }
+        let mut results = manager.create_results().expect("results should allocate");
+        results
+            .process_user_agent(MOBILE_USER_AGENT)
+            .expect("processing a user agent should not raise an exception");
+        let value = results
+            .value_as_string("JavascriptGetHighEntropyValues", "|")
+            .expect("reading the script should not error")
+            .unwrap_or_default();
+        assert!(
+            !value.contains('|'),
+            "Safari needs no high-entropy values script, got '{value}'"
+        );
+    }
+
     /// An unknown property reads back as no value rather than an error, the
     /// contract the safe API promises.
     #[test]
