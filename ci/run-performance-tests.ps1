@@ -27,7 +27,13 @@ try {
     }
     
     Write-Host "Loading free IPI data files..."
-    & ./get-lite-file-from-azure.ps1
+    # -Force re-downloads the .gz archive rather than re-extracting whatever is
+    # already on disk: the Azure script gates its download on the .gz, not the
+    # .ipi, so on a persisted workspace a stale archive would otherwise be
+    # silently re-extracted and the delete above would refresh nothing. -Asn
+    # fetches the ASN file the performance example reads
+    # (51DEGREES_IPI_PATH).
+    & ./get-lite-file-from-azure.ps1 -Force -Asn
 } finally {
     Write-Host "Leaving $PWD"
     Pop-Location
