@@ -130,6 +130,9 @@ mod device_detection {
     const DESKTOP_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
         AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
+    /// A representative iPhone Safari user agent.
+    const MOBILE_USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)         AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+
     /// Open the Lite Hash data file through the safe API. Both products are
     /// linked in this binary, and they now coexist, so a load failure is a real
     /// fault rather than a skip. The data file presence is environmental, so the
@@ -200,6 +203,81 @@ mod device_detection {
             .value_as_string("IsMobile", ",")
             .expect("reading IsMobile should not error");
         assert_eq!(value.as_deref(), Some("False"));
+    }
+
+    /// A query User-Agent is matched in preference to the header, which is how
+    /// a caller supplies a User-Agent for off-line processing.
+    #[test]
+    fn query_user_agent_takes_precedence_over_the_header() {
+        let Some(data_file) = dd_lite_data_file() else {
+            eprintln!("no Lite Hash data file found; skipping query precedence test");
+            return;
+        };
+        let manager = open_loaded(&data_file);
+        let mut results = manager.create_results().expect("results should allocate");
+
+        let evidence = Evidence::builder()
+            .add("header.user-agent", DESKTOP_USER_AGENT)
+            .add("query.user-agent", MOBILE_USER_AGENT)
+            .build();
+        results
+            .process_evidence(&evidence)
+            .expect("processing evidence should not raise an exception");
+
+        let value = results
+            .value_as_string("IsMobile", ",")
+            .expect("reading IsMobile should not error");
+        assert_eq!(value.as_deref(), Some("True"));
+    }
+
+    /// Evidence the engine expands during processing (a high-entropy values
+    /// blob, which it turns into client hint headers) and client-side
+    /// override values are accepted, and the pooled evidence array can be
+    /// reused afterwards for evidence of a different shape.
+    #[test]
+    fn client_side_evidence_is_accepted_and_the_array_reused() {
+        let Some(data_file) = dd_lite_data_file() else {
+            eprintln!("no Lite Hash data file found; skipping client-side evidence test");
+            return;
+        };
+        let manager = open_loaded(&data_file);
+        // Base64 of {"brands":[{"brand":"Google Chrome","version":"124"}],
+        // "fullVersionList":[{"brand":"Google Chrome","version":"124.0.6367.91"}],
+        // "mobile":false,"model":"","platform":"Windows",
+        // "platformVersion":"15.0.0","architecture":"x86","bitness":"64"}
+        let ghev = "eyJicmFuZHMiOlt7ImJyYW5kIjoiR29vZ2xlIENocm9tZSIsInZlcnNpb24iOiIxMjQifV0s\
+            ImZ1bGxWZXJzaW9uTGlzdCI6W3siYnJhbmQiOiJHb29nbGUgQ2hyb21lIiwidmVyc2lvbiI6IjEy\
+            NC4wLjYzNjcuOTEifV0sIm1vYmlsZSI6ZmFsc2UsIm1vZGVsIjoiIiwicGxhdGZvcm0iOiJXaW5k\
+            b3dzIiwicGxhdGZvcm1WZXJzaW9uIjoiMTUuMC4wIiwiYXJjaGl0ZWN0dXJlIjoieDg2IiwiYml0\
+            bmVzcyI6IjY0In0=";
+        for _ in 0..3 {
+            let mut results = manager.create_results().expect("results should allocate");
+            let evidence = Evidence::builder()
+                .add("header.user-agent", DESKTOP_USER_AGENT)
+                .add("query.51d_gethighentropyvalues", ghev)
+                .add("query.51d_screenpixelswidth", "1234")
+                .add("cookie.51d_screenpixelsheight", "567")
+                .build();
+            results
+                .process_evidence(&evidence)
+                .expect("client-side evidence should not raise an exception");
+            let value = results
+                .value_as_string("IsMobile", ",")
+                .expect("reading IsMobile should not error");
+            assert_eq!(value.as_deref(), Some("False"));
+
+            let mut results = manager.create_results().expect("results should allocate");
+            let evidence = Evidence::builder()
+                .add("header.user-agent", MOBILE_USER_AGENT)
+                .build();
+            results
+                .process_evidence(&evidence)
+                .expect("processing evidence should not raise an exception");
+            let value = results
+                .value_as_string("IsMobile", ",")
+                .expect("reading IsMobile should not error");
+            assert_eq!(value.as_deref(), Some("True"));
+        }
     }
 
     /// An unknown property reads back as no value rather than an error, the
