@@ -272,12 +272,13 @@ try {
     }
     $passed = $true
 } finally {
+    # Read the includes while the example is still running.
+    if (-not $passed -and $example -and -not $example.HasExited -and $url) {
+        Show-Includes -Url $url -Directory $Logs
+    }
     if ($example -and -not $example.HasExited) {
         Stop-Process -Id $example.Id -Force
         $example.WaitForExit()
-    }
-    if (-not $passed -and $example -and $url) {
-        Show-Includes -Url $url -Directory $Logs
     }
     if (-not $passed) {
         foreach ($name in "stdout.txt", "stderr.txt") {
