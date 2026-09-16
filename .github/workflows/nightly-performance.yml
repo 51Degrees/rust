@@ -156,11 +156,11 @@ jobs:
       #    parse to `false`, so the nightly cron always publishes.
       #
       #    This step is allowed to fail the job. The shared
-      #    compare-performance.ps1 distinguishes its outcomes by exit code:
-      #    the benign "not enough history yet" case exits 0, a genuine
-      #    performance regression exits 1, and an infrastructure failure (for
-      #    example an inability to switch to the images branch) exits 2. None of
-      #    those should be silently swallowed, so `continue-on-error` is false.
+      #    compare-performance.ps1 exits 0 when it succeeds (including the benign
+      #    "not enough history yet" case) and non-zero otherwise, whether that is
+      #    a genuine performance regression or an infrastructure failure such as
+      #    an inability to switch to the images branch. Neither should be
+      #    silently swallowed, so `continue-on-error` is false.
       - name: Compare performance and render graphs
         continue-on-error: false
         shell: pwsh
