@@ -10,6 +10,35 @@ param(
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 
+# The ip-intelligence-cxx checkout is a sibling of the repo directory (CI
+# checks this repo out into $RepoName next to it; a local run passes "." from
+# the repo root, whose parent is the workspace holding the sibling checkout).
+# Resolve the ASN data directory against $RepoName rather than the caller's
+# current directory, so both invocations find it.
+$AsnDataDir = Join-Path $RepoName "../ip-intelligence-cxx/ip-intelligence-data"
+Push-Location $AsnDataDir
+try {
+    Write-Host "Entering $PWD"
+    # Remove old Asn file (if exists)
+    $AsnFilePath = "51Degrees-IPIV4AsnIpiV41.ipi"
+    if (Test-Path -Type Leaf -Path $AsnFilePath) {
+        Remove-Item -Path $AsnFilePath
+        Write-Host "Deleted $AsnFilePath"
+    }
+    
+    Write-Host "Loading free IPI data files..."
+    # -Force re-downloads the .gz archive rather than re-extracting whatever is
+    # already on disk: the Azure script gates its download on the .gz, not the
+    # .ipi, so on a persisted workspace a stale archive would otherwise be
+    # silently re-extracted and the delete above would refresh nothing. -Asn
+    # fetches the ASN file the performance example reads
+    # (51DEGREES_IPI_PATH).
+    & ./get-lite-file-from-azure.ps1 -Force -Asn
+} finally {
+    Write-Host "Leaving $PWD"
+    Pop-Location
+}
+
 # Runs the 51Degrees Rust on-premise performance examples in release and writes
 # their throughput figures into results_<Name>.json files, in the same
 # `{ HigherIsBetter = @{ metric = value } }` shape the shared

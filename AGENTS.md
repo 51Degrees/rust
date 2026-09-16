@@ -119,6 +119,12 @@ manifest's `include`, so `cargo publish` packages it.
   a real drift is still reported. 51Degrees/rust#52 lifts the pin, by moving
   the bundled asset and `UPSTREAM_PINNED_REF` to the same commit in one pull
   request.
+- `nightly-performance.yml` — nightly (and on-demand) on-premise throughput
+  run that feeds the documentation performance graphs. Its Rust adapter lives
+  in this repo at `ci/run-performance-tests.ps1`; only the shared comparison
+  step (`compare-performance.ps1`) comes from common-ci. See
+  [ci/missing-ci-scripts.md](ci/missing-ci-scripts.md) for how this relates to
+  the org-standard reusable-workflow contract and the planned direction.
 
 ## Conventions and gotchas
 
