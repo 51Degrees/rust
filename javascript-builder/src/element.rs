@@ -95,6 +95,11 @@ const URL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 ///   `Full`. The check is latched off once the property proves unavailable.
 /// - **supports fetch**: true when the device-detection `Fetch` property is
 ///   true. The check is latched off once the property proves unavailable.
+/// - **user prompt**: true when the builder was given a cloud request engine
+///   whose licensed products include 51Did, through
+///   [`JavaScriptBuilderElementBuilder::set_cloud_request_engine`]. The
+///   section it controls sits inside the update section, so it is only
+///   rendered when a callback URL was built as well.
 ///
 /// # Example
 ///
@@ -132,6 +137,9 @@ pub struct JavaScriptBuilderElement {
     object_name: String,
     enable_cookies: bool,
     minify: bool,
+    /// Whether the script carries the user prompt section, decided by the
+    /// builder from the cloud request engine's licensed products.
+    user_prompt: bool,
 
     /// Latches that short-circuit the Promise/Fetch property lookups once they
     /// have proved unavailable. Stored atomically because
@@ -160,6 +168,7 @@ impl JavaScriptBuilderElement {
         object_name: String,
         enable_cookies: bool,
         minify: bool,
+        user_prompt: bool,
     ) -> Self {
         // The template is parsed once at construction. The embedded source is a
         // valid Mustache template, so parsing it cannot fail in practice. The
@@ -186,6 +195,7 @@ impl JavaScriptBuilderElement {
             object_name,
             enable_cookies,
             minify,
+            user_prompt,
             promise_property_available: AtomicBool::new(true),
             fetch_property_available: AtomicBool::new(true),
         }
@@ -407,6 +417,7 @@ impl JavaScriptBuilderElement {
             enable_cookies,
             update_enabled,
             has_delayed_properties,
+            self.user_prompt,
         );
 
         let content = resource.render(&self.template);

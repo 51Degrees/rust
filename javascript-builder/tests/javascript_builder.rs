@@ -28,6 +28,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use fiftyone_cloud_request_engine::{
+    CloudEngineState, CloudHttpClient, CloudHttpRequest, CloudHttpResponse, CloudRequestEngine,
+    LicensedProducts,
+};
 use fiftyone_javascript_builder::{JavaScriptBuilderElement, JAVASCRIPT_BUILDER_DATA_KEY};
 use fiftyone_json_builder::JsonBuilderElement;
 use fiftyone_pipeline_core::{
@@ -305,6 +309,102 @@ fn full_template_renders_through_pipeline() {
     // The output is trimmed at the end, matching the previous engine.
     assert_eq!(js, js.trim_end());
     assert!(js.ends_with("var fod = new fiftyoneDegreesManager();"));
+}
+
+/// A cloud request engine whose accessible products are the supplied JSON. The
+/// state is injected, so the build makes no discovery request, and the stub
+/// transport refuses every call, so the test never reaches the network.
+fn request_engine(accessible_properties: &str) -> CloudRequestEngine {
+    struct NoNetwork;
+    impl CloudHttpClient for NoNetwork {
+        fn send(
+            &self,
+            _request: &CloudHttpRequest,
+        ) -> std::result::Result<CloudHttpResponse, String> {
+            Err("no network in tests".to_owned())
+        }
+    }
+    CloudRequestEngine::builder()
+        .resource_key("test-resource-key")
+        .http_client(Arc::new(NoNetwork))
+        .set_state(CloudEngineState {
+            evidence_keys: Vec::new(),
+            accessible_properties: LicensedProducts::parse(accessible_properties)
+                .expect("valid accessible properties"),
+        })
+        .build()
+        .expect("request engine builds")
+}
+
+/// Render the full template for a JavaScript builder configured from the
+/// supplied request engine, with a host so the update section is present.
+fn render_for_key(engine: &CloudRequestEngine) -> String {
+    run(
+        None,
+        |b| {
+            b.set_minify(false)
+                .set_protocol("https")
+                .unwrap()
+                .set_cloud_request_engine(engine)
+                .build()
+        },
+        &[("header.host", "example.com")],
+    )
+}
+
+#[test]
+fn user_prompt_section_follows_the_keys_licensed_products() {
+    // A statement found only inside the user prompt section of the template.
+    const USER_PROMPT_MARKER: &str = "var answerKeys = [\"id.usage\", \"tcstring\"];";
+
+    // The product name is written the way the cloud service reports it,
+    // "FODid", which differs in case from the "fodid" element data key.
+    let entitled = request_engine(
+        r#"{"Products":{
+            "device":{"Properties":[{"Name":"IsMobile","Type":"Bool"}]},
+            "FODid":{"Properties":[{"Name":"IdProbGlobal","Type":"String"}]}
+        }}"#,
+    );
+    let js = render_for_key(&entitled);
+    assert!(
+        js.contains(USER_PROMPT_MARKER),
+        "a key licensed for 51Did renders the user prompt section"
+    );
+    assert!(!js.contains("{{"));
+    assert!(!js.contains("}}"));
+    assert_eq!(js, js.trim_end());
+    assert!(js.ends_with("var fod = new fiftyoneDegreesManager();"));
+
+    // A key with no 51Did product, and a key whose 51Did product grants no
+    // property, both leave the section out.
+    for unentitled in [
+        r#"{"Products":{"device":{"Properties":[{"Name":"IsMobile","Type":"Bool"}]}}}"#,
+        r#"{"Products":{"FODid":{"Properties":[]}}}"#,
+    ] {
+        let js = render_for_key(&request_engine(unentitled));
+        assert!(
+            !js.contains(USER_PROMPT_MARKER),
+            "a key without 51Did leaves the user prompt section out: {unentitled}"
+        );
+        assert!(!js.contains("{{"));
+        assert!(!js.contains("}}"));
+        assert!(js.ends_with("var fod = new fiftyoneDegreesManager();"));
+    }
+
+    // A builder given no request engine has no licensed products to read, so
+    // the section is left out as well.
+    let js = run(
+        None,
+        |b| b.set_minify(false).build(),
+        &[("header.host", "example.com")],
+    );
+    assert!(!js.contains(USER_PROMPT_MARKER));
+}
+
+#[test]
+fn fodid_product_name_matches_the_51did_engine_data_key() {
+    assert!(fiftyone_javascript_builder::FODID_PRODUCT_NAME
+        .eq_ignore_ascii_case(fiftyone_fodid_cloud::FODID_ELEMENT_DATA_KEY));
 }
 
 #[test]
