@@ -60,7 +60,10 @@ jobs:
       # 2. common-ci, checked out for the shared comparison step
       #    (steps/compare-performance.ps1). The Rust performance adapter itself
       #    now lives in this repo at ci/run-performance-tests.ps1 (see
-      #    ci/missing-ci-scripts.md); only the comparison step is shared.
+      #    ci/missing-ci-scripts.md), because it serves only this repository and
+      #    a folder named rust in common-ci collides with the clone of a
+      #    repository named rust (51Degrees/rust#50); only the comparison step
+      #    is shared.
       - name: Checkout common-ci
         uses: actions/checkout@v4
         with:
