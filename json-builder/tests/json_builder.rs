@@ -40,6 +40,7 @@ use fiftyone_pipeline_core::{
     Result, TypedKey,
 };
 use fiftyone_pipeline_engines::AspectDataBase;
+use fiftyone_pipeline_engines_fiftyone::SequenceElement;
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -737,5 +738,45 @@ fn missing_sequence_keeps_javascript_properties() {
     assert!(
         parse(&json).get("javascriptProperties").is_some(),
         "list kept when no sequence number is supplied"
+    );
+}
+
+/// Run a pipeline of the sequence element, one JavaScript property and the
+/// JSON builder, as the web integration orders them, and say whether the
+/// `javascriptProperties` list was emitted.
+fn javascript_properties_after_sequence_element(sequence: &str) -> bool {
+    let device = TestElement::new("device")
+        .with_property(PropertyMetaData::new(
+            "hint",
+            "device",
+            PropertyValueType::JavaScript,
+        ))
+        .with_value("hint", PropertyValue::JavaScript("x".to_owned()));
+
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(SequenceElement::new()))
+        .add_element(Arc::new(device))
+        .add_element(Arc::new(JsonBuilderElement::new()))
+        .build()
+        .expect("pipeline builds");
+    let mut data =
+        pipeline.create_flow_data_with(Evidence::builder().add("query.sequence", sequence).build());
+    data.process().expect("processing succeeds");
+    let json = data.get(JSON_BUILDER_DATA_KEY).unwrap().json().to_owned();
+    parse(&json).get("javascriptProperties").is_some()
+}
+
+#[test]
+fn cap_uses_the_sequence_after_the_sequence_element_adds_one() {
+    // The sequence element turns a request's sequence of 9 into 10, and the
+    // .NET and Java JSON builders compare that 10 with the cap, so they leave
+    // the list out. Reading the evidence alone compared 9 and kept it.
+    assert!(
+        !javascript_properties_after_sequence_element("9"),
+        "a request sent with sequence 9 is request 10, which is at the cap"
+    );
+    assert!(
+        javascript_properties_after_sequence_element("8"),
+        "a request sent with sequence 8 is request 9, which is below the cap"
     );
 }
