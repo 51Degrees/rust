@@ -248,6 +248,11 @@ impl DeviceDetectionOnPremiseEngine {
             let name = meta.name();
             match results.value_as_string(name, VALUE_SEPARATOR)? {
                 Some(raw) => {
+                    let raw = if name.eq_ignore_ascii_case(JAVASCRIPT_HARDWARE_PROFILE) {
+                        wrap_hardware_profile(raw)
+                    } else {
+                        raw
+                    };
                     // A typed property whose value does not parse (the `Unknown` /
                     // `N/A` no-value sentinels, say) yields `None` and is left
                     // unwritten, so its accessor reports a clean no-value.
@@ -550,6 +555,30 @@ fn native_value(raw: &str, value_type: PropertyValueType) -> Option<PropertyValu
     }
 }
 
+/// The property whose data file value is the body of a script that finds the
+/// Apple device model on the client.
+const JAVASCRIPT_HARDWARE_PROFILE: &str = "JavascriptHardwareProfile";
+
+/// Turn the stored `JavascriptHardwareProfile` body into the script the client
+/// runs, as the device-detection-cxx C++ results wrapper does.
+///
+/// The stored body pushes the profile ids it finds onto a `profileIds` array
+/// that it does not declare, and does not send them anywhere. The wrapper
+/// declares the array first and afterwards writes the ids to the
+/// `51D_ProfileIds` cookie, which the engine reads back as evidence. Without
+/// the wrapper the script fails on the undeclared array, and the include that
+/// carries it stops running. An empty body, which a profile that needs no
+/// script has, is left empty.
+fn wrap_hardware_profile(body: String) -> String {
+    if body.is_empty() {
+        return body;
+    }
+    format!(
+        "var profileIds = []\n{body}\n\
+         document.cookie = \"51D_ProfileIds=\" + profileIds.join(\"|\")"
+    )
+}
+
 /// The evidence key filter for the Hash engine.
 ///
 /// It accepts the fixed device-detection set from
@@ -738,6 +767,17 @@ mod tests {
         assert!(filter.include(UACH_EVIDENCE_COOKIE_KEY));
         // An unrelated header is not part of the device-detection evidence.
         assert!(!filter.include("header.referer"));
+    }
+
+    #[test]
+    fn hardware_profile_is_wrapped_as_the_cpp_wrapper_does() {
+        assert_eq!(
+            wrap_hardware_profile("profileIds.push(1)".to_owned()),
+            "var profileIds = []\nprofileIds.push(1)\n\
+             document.cookie = \"51D_ProfileIds=\" + profileIds.join(\"|\")"
+        );
+        // A profile that needs no script keeps an empty body.
+        assert_eq!(wrap_hardware_profile(String::new()), "");
     }
 
     #[test]
