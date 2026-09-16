@@ -1,0 +1,395 @@
+/* *********************************************************************
+ * This Original Work is copyright of 51 Degrees Mobile Experts Limited.
+ * Copyright 2026 51 Degrees Mobile Experts Limited, Davidson House,
+ * Forbury Square, Reading, Berkshire, United Kingdom RG1 3EU.
+ *
+ * This Original Work is licensed under the European Union Public Licence
+ * (EUPL) v.1.2 and is subject to its terms as set out below.
+ *
+ * If a copy of the EUPL was not distributed with this file, You can obtain
+ * one at https://opensource.org/licenses/EUPL-1.2.
+ *
+ * The 'Compatible Licences' set out in the Appendix to the EUPL (as may be
+ * amended by the European Commission) shall be deemed incompatible for
+ * the purposes of the Work and the provisions of the compatibility
+ * clause in Article 5 of the EUPL shall not apply.
+ *
+ * If using the Work as, or as part of, a network application, by
+ * including the attribution notice(s) required under Article 5 of the EUPL
+ * in the end user terms of the application under an appropriate heading,
+ * such notice(s) shall fulfill the requirements of that article.
+ * ********************************************************************* */
+
+//! The cloud hardware-profile lookup engine (TAC and native-model) and builder.
+
+use std::sync::Arc;
+
+use fiftyone_pipeline_core::{
+    Error, EvidenceKeyFilter, EvidenceKeyFilterWhitelist, FlowData, FlowElement, PropertyMetaData,
+    Result,
+};
+use fiftyone_pipeline_engines::{
+    AspectEngine, AspectPropertyMetaData, EngineDeployment, EngineMissingPropertyContext,
+    MissingPropertyResult,
+};
+
+use fiftyone_cloud_request_engine::CloudRequestEngine;
+
+use crate::dto::map_device_object;
+use crate::meta::{cloud_json, refresh_product_metadata};
+use crate::multi_device::{MultiDeviceData, HARDWARE_DATA_KEY, HARDWARE_ELEMENT_DATA_KEY};
+
+/// A cloud engine that returns the several device profiles matching a single
+/// lookup parameter, such as a Type Allocation Code (TAC) or a native model
+/// name.
+///
+/// It implements the
+/// [hardware-profile-lookup specification](https://github.com/51Degrees/specifications/blob/main/device-detection-specification/pipeline-elements/hardware-profile-lookup-cloud.md).
+///
+/// # Place it after a cloud request engine
+///
+/// Like the single-device [`DeviceDetectionCloudEngine`](crate::DeviceDetectionCloudEngine),
+/// this engine consumes no evidence of its own. It reads the raw JSON a
+/// [`CloudRequestEngine`] stored under the `cloud` data key, slices out the
+/// `hardware.profiles` array, and turns each entry into a
+/// [`DeviceDataBase`](fiftyone_device_detection_shared::DeviceDataBase),
+/// collecting them into a [`MultiDeviceData`] stored under [`HARDWARE_DATA_KEY`].
+/// It must therefore sit *after* a `CloudRequestEngine` in the pipeline.
+///
+/// The lookup parameter is supplied as evidence to the request engine, not to
+/// this engine: `query.tac` for a TAC, `query.nativemodel` for a native model
+/// name. Those values are inputs only and are never returned.
+///
+/// # Resource key requirement
+///
+/// Hardware-profile lookup needs a resource key that grants the
+/// hardware-profile-lookup product (a paid subscription). A key without it
+/// returns the standard single-device `device` block with no `hardware.profiles`,
+/// so this engine produces an empty [`MultiDeviceData`] rather than failing.
+///
+/// # Example
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use fiftyone_pipeline_core::{Evidence, Pipeline};
+/// use fiftyone_cloud_request_engine::CloudRequestEngine;
+/// use fiftyone_device_detection_cloud::{HardwareProfileCloudEngine, HARDWARE_DATA_KEY};
+/// use fiftyone_device_detection_shared::DeviceData;
+///
+/// let request_engine = Arc::new(
+///     CloudRequestEngine::builder()
+///         .resource_key("my-resource-key")
+///         .build()
+///         .unwrap(),
+/// );
+/// let hardware_engine = HardwareProfileCloudEngine::builder()
+///     .cloud_request_engine(request_engine.clone())
+///     .build();
+///
+/// let pipeline = Pipeline::builder()
+///     .add_element(request_engine)
+///     .add_element(Arc::new(hardware_engine))
+///     .build()
+///     .unwrap();
+///
+/// // Supply the TAC as query evidence; the cloud returns the matching profiles.
+/// let mut data = pipeline.create_flow_data_with(
+///     Evidence::builder().add("query.tac", "35925406").build(),
+/// );
+/// data.process().unwrap();
+/// if let Some(hardware) = data.get(HARDWARE_DATA_KEY) {
+///     for profile in hardware.profiles() {
+///         println!("{:?} {:?}", profile.hardware_vendor().value(), profile.hardware_model().value());
+///     }
+/// }
+/// ```
+pub struct HardwareProfileCloudEngine {
+    /// The request engine that fetches the cloud JSON and discovers properties.
+    request_engine: Arc<CloudRequestEngine>,
+
+    /// This engine reads no evidence directly; the request engine before it
+    /// gathers the lookup parameter. An empty whitelist advertises that.
+    evidence_filter: EvidenceKeyFilterWhitelist,
+
+    /// The core property metadata for the hardware aspect. Starts empty and is
+    /// filled from the request engine's accessible properties on first use.
+    properties: Vec<PropertyMetaData>,
+
+    /// The aspect view of the same metadata.
+    aspect_properties: Vec<AspectPropertyMetaData>,
+
+    /// The data tier reported for the hardware product, once discovered.
+    data_source_tier: String,
+}
+
+impl HardwareProfileCloudEngine {
+    /// Start building a hardware-profile cloud engine.
+    pub fn builder() -> HardwareProfileCloudEngineBuilder {
+        HardwareProfileCloudEngineBuilder::new()
+    }
+
+    /// Construct the engine directly from the [`CloudRequestEngine`] that
+    /// precedes it in the pipeline.
+    ///
+    /// Property metadata is not fetched here. It is populated lazily on the first
+    /// [`FlowElement::process`] call, or eagerly by calling
+    /// [`HardwareProfileCloudEngine::refresh_properties`].
+    pub fn new(request_engine: Arc<CloudRequestEngine>) -> Self {
+        HardwareProfileCloudEngine {
+            request_engine,
+            evidence_filter: EvidenceKeyFilterWhitelist::new(Vec::<String>::new()),
+            properties: Vec::new(),
+            aspect_properties: Vec::new(),
+            data_source_tier: String::new(),
+        }
+    }
+
+    /// The cloud request engine this engine reads from.
+    pub fn request_engine(&self) -> &Arc<CloudRequestEngine> {
+        &self.request_engine
+    }
+
+    /// Pull the hardware product's accessible properties from the request engine
+    /// and rebuild this engine's metadata from them.
+    ///
+    /// Triggers the request engine's lazy accessible-properties fetch on first
+    /// call. Returns the number of hardware properties discovered, or an
+    /// [`Error::CloudRequest`] if the request engine could not fetch them. A
+    /// resource key without the hardware-profile-lookup product leaves the
+    /// metadata empty rather than failing.
+    pub fn refresh_properties(&mut self) -> Result<usize> {
+        let (properties, aspect_properties, tier) =
+            refresh_product_metadata(&self.request_engine, HARDWARE_ELEMENT_DATA_KEY)?;
+
+        let count = aspect_properties.len();
+        self.properties = properties;
+        self.aspect_properties = aspect_properties;
+        self.data_source_tier = tier;
+        Ok(count)
+    }
+
+    /// Read the cloud JSON, slice the `hardware.profiles` array, and store the
+    /// resulting [`MultiDeviceData`] under [`HARDWARE_DATA_KEY`].
+    ///
+    /// Returns an [`Error::PipelineConfiguration`] if no cloud request engine ran
+    /// before this engine. An empty or absent JSON response (the request engine
+    /// itself failed and already reported the error) leaves the result
+    /// unpopulated and does not raise a new error.
+    fn populate(&self, data: &mut FlowData) -> Result<()> {
+        let json = match cloud_json(data, "HardwareProfileCloudEngine")? {
+            Some(json) => json,
+            None => return Ok(()),
+        };
+
+        let result = slice_hardware_profiles(&json)?;
+        data.get_or_add(HARDWARE_DATA_KEY, || result)?;
+        Ok(())
+    }
+}
+
+/// Parse the cloud response and build a [`MultiDeviceData`] from its
+/// `hardware.profiles` array.
+///
+/// Each profile object is mapped with the shared [`map_device_object`] so a
+/// profile reads back through the same typed accessors as a single-device
+/// result. A missing `hardware` block or `profiles` array yields an empty
+/// result rather than an error, since that is the normal response from a
+/// resource key without the hardware-profile-lookup product. Returns an
+/// [`Error::CloudRequest`] only when the body is not valid JSON.
+fn slice_hardware_profiles(json: &str) -> Result<MultiDeviceData> {
+    let document: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| Error::CloudRequest {
+            status_code: 0,
+            retry_after_seconds: None,
+            message: format!("failed to parse the cloud hardware-profile response: {e}"),
+        })?;
+
+    let mut result = MultiDeviceData::new();
+
+    let profiles = document
+        .get(HARDWARE_ELEMENT_DATA_KEY)
+        .and_then(|hardware| hardware.get("profiles"))
+        .and_then(|profiles| profiles.as_array());
+
+    if let Some(profiles) = profiles {
+        for profile in profiles {
+            result.push_profile(map_device_object(profile));
+        }
+    }
+
+    Ok(result)
+}
+
+impl FlowElement for HardwareProfileCloudEngine {
+    fn process(&self, data: &mut FlowData) -> Result<()> {
+        self.populate(data)
+    }
+
+    fn data_key(&self) -> &str {
+        HARDWARE_ELEMENT_DATA_KEY
+    }
+
+    fn evidence_key_filter(&self) -> &dyn EvidenceKeyFilter {
+        &self.evidence_filter
+    }
+
+    fn properties(&self) -> &[PropertyMetaData] {
+        &self.properties
+    }
+}
+
+impl AspectEngine for HardwareProfileCloudEngine {
+    fn data_source_tier(&self) -> &str {
+        &self.data_source_tier
+    }
+
+    fn deployment(&self) -> EngineDeployment {
+        EngineDeployment::Cloud
+    }
+
+    fn aspect_properties(&self) -> &[AspectPropertyMetaData] {
+        &self.aspect_properties
+    }
+
+    fn has_loaded_properties(&self) -> bool {
+        self.request_engine.has_loaded_properties()
+    }
+
+    fn missing_property_reason(&self, property_name: &str) -> MissingPropertyResult {
+        let ctx = EngineMissingPropertyContext {
+            element_data_key: self.data_key(),
+            deployment: self.deployment(),
+            data_source_tier: self.data_source_tier(),
+            properties_loaded: self.has_loaded_properties(),
+            properties: self.aspect_properties(),
+        };
+        fiftyone_pipeline_engines::missing_property_reason(property_name, &ctx)
+    }
+}
+
+/// A fluent builder for [`HardwareProfileCloudEngine`].
+///
+/// The cloud request
+/// engine is required, as this engine reads its output and derives its metadata
+/// from it.
+pub struct HardwareProfileCloudEngineBuilder {
+    request_engine: Option<Arc<CloudRequestEngine>>,
+    eager_properties: bool,
+}
+
+impl HardwareProfileCloudEngineBuilder {
+    /// Create an empty builder.
+    pub fn new() -> Self {
+        HardwareProfileCloudEngineBuilder {
+            request_engine: None,
+            eager_properties: false,
+        }
+    }
+
+    /// Set the [`CloudRequestEngine`] this engine reads from and derives its
+    /// metadata from (required). Supply the same `Arc` that is added to the
+    /// pipeline.
+    pub fn cloud_request_engine(mut self, engine: Arc<CloudRequestEngine>) -> Self {
+        self.request_engine = Some(engine);
+        self
+    }
+
+    /// Request that property metadata is fetched from the cloud at
+    /// [`HardwareProfileCloudEngineBuilder::try_build`] time rather than lazily
+    /// on the first process call. A fetch failure is ignored by
+    /// [`HardwareProfileCloudEngineBuilder::build`] (the metadata is then filled
+    /// lazily) but surfaced by [`HardwareProfileCloudEngineBuilder::try_build`].
+    pub fn eager_properties(mut self, eager: bool) -> Self {
+        self.eager_properties = eager;
+        self
+    }
+
+    /// Build the engine, panicking if no cloud request engine was supplied.
+    ///
+    /// Use [`HardwareProfileCloudEngineBuilder::try_build`] for a non-panicking
+    /// variant.
+    pub fn build(self) -> HardwareProfileCloudEngine {
+        self.try_build()
+            .expect("a CloudRequestEngine is required to build a HardwareProfileCloudEngine")
+    }
+
+    /// Build the engine, returning an [`Error::PipelineConfiguration`] if no
+    /// cloud request engine was supplied, or propagating an
+    /// [`Error::CloudRequest`] from eager property discovery when
+    /// [`HardwareProfileCloudEngineBuilder::eager_properties`] was set.
+    pub fn try_build(self) -> Result<HardwareProfileCloudEngine> {
+        let request_engine = self.request_engine.ok_or_else(|| {
+            Error::configuration(
+                "a CloudRequestEngine is required to build a HardwareProfileCloudEngine",
+            )
+        })?;
+
+        let mut engine = HardwareProfileCloudEngine::new(request_engine);
+        if self.eager_properties {
+            engine.refresh_properties()?;
+        }
+        Ok(engine)
+    }
+}
+
+impl Default for HardwareProfileCloudEngineBuilder {
+    fn default() -> Self {
+        HardwareProfileCloudEngineBuilder::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fiftyone_device_detection_shared::DeviceData;
+
+    #[test]
+    fn slice_profiles_reads_each_match() {
+        // The cloud returns matched profiles under the `hardware` key, each a
+        // flat object of property values.
+        let json = r#"{"hardware":{"profiles":[
+            {"hardwarevendor":"Apple","hardwarename":["iPhone 11"],"hardwaremodel":"iPhone11,8"},
+            {"hardwarevendor":"Apple","hardwarename":["iPhone 11 Pro"],"hardwaremodel":"iPhone12,3"}
+        ]}}"#;
+        let result = slice_hardware_profiles(json).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(
+            result.profiles()[0].hardware_vendor().value().unwrap(),
+            "Apple"
+        );
+        assert_eq!(
+            result.profiles()[0].hardware_model().value().unwrap(),
+            "iPhone11,8"
+        );
+        assert_eq!(
+            result.profiles()[1].hardware_model().value().unwrap(),
+            "iPhone12,3"
+        );
+    }
+
+    #[test]
+    fn slice_profiles_no_hardware_block_is_empty() {
+        // A standard single-device response (key without the hardware-profile
+        // product) has no `hardware` block, so the result is empty, not an error.
+        let json = r#"{"device":{"hardwarename":["Desktop"]}}"#;
+        let result = slice_hardware_profiles(json).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn slice_profiles_invalid_json_is_cloud_error() {
+        match slice_hardware_profiles("not json") {
+            Err(Error::CloudRequest { .. }) => {}
+            other => panic!("expected a cloud request error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn try_build_requires_request_engine() {
+        match HardwareProfileCloudEngine::builder().try_build() {
+            Err(Error::PipelineConfiguration { .. }) => {}
+            Err(other) => panic!("expected a configuration error, got {other:?}"),
+            Ok(_) => panic!("expected a configuration error, but build succeeded"),
+        }
+    }
+}

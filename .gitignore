@@ -1,0 +1,28 @@
+# Cargo build output for every workspace in the repo (root and examples/).
+target/
+# Performance results written by the nightly performance workflow.
+/test-results
+*.log
+# The shared browser contract suite, shallow-cloned by
+# ci/run-integration-tests.ps1 (a sibling checkout in CI, but cloned here when
+# the script is run from the repo root locally).
+/selenium-api-tests/
+.DS_Store
+Thumbs.db
+
+# Local working directories of AI coding agents. These hold per-developer
+# session state, handover notes and settings, none of which belong in the
+# repository. The shared, tool-neutral handover lives in AGENTS.md at the root.
+.claude/
+.cursor/
+.windsurf/
+.aider*
+.continue/
+.codeium/
+.gemini/
+.opencode/
+
+# The OWID source that ci/copy-owid-source.ps1 copies into the fodid crate
+# before a build. The owid-rust submodule is the only copy that belongs in
+# the repository.
+/fodid/src/owid/

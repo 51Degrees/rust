@@ -1,0 +1,103 @@
+/* *********************************************************************
+ * This Original Work is copyright of 51 Degrees Mobile Experts Limited.
+ * Copyright 2026 51 Degrees Mobile Experts Limited, Davidson House,
+ * Forbury Square, Reading, Berkshire, United Kingdom RG1 3EU.
+ *
+ * This Original Work is licensed under the European Union Public Licence
+ * (EUPL) v.1.2 and is subject to its terms as set out below.
+ *
+ * If a copy of the EUPL was not distributed with this file, You can obtain
+ * one at https://opensource.org/licenses/EUPL-1.2.
+ *
+ * The 'Compatible Licences' set out in the Appendix to the EUPL (as may be
+ * amended by the European Commission) shall be deemed incompatible for
+ * the purposes of the Work and the provisions of the compatibility
+ * clause in Article 5 of the EUPL shall not apply.
+ *
+ * If using the Work as, or as part of, a network application, by
+ * including the attribution notice(s) required under Article 5 of the EUPL
+ * in the end user terms of the application under an appropriate heading,
+ * such notice(s) shall fulfill the requirements of that article.
+ * ********************************************************************* */
+
+//! The flow element trait: a black box that processes flow data.
+//!
+//! A flow element reads evidence and earlier element data from a
+//! [`crate::FlowData`] and may add its own element data. See the
+//! [conceptual overview](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/conceptual-overview.md#flow-element).
+//!
+//! # Design choice: object-safe `dyn` trait, not an associated type
+//!
+//! A pipeline holds a heterogeneous, ordered list of elements that produce
+//! different element-data types. To store them in a single `Vec` and run them
+//! in order, [`FlowElement`] is kept **object-safe** so the pipeline can hold
+//! `Arc<dyn FlowElement>` trait objects.
+//!
+//! That rules out putting the element-data type as an associated type or a
+//! generic parameter on this trait (either would make `dyn FlowElement`
+//! impossible). Instead the type linkage lives in [`crate::TypedKey<T>`]: a
+//! concrete element exposes a `TypedKey<T>` for its own data through its own
+//! inherent API, and [`crate::FlowData::get`] uses it to downcast. This is the
+//! "no-reflection core" approach from the plan and realises mechanisms 1 and 2
+//! of the
+//! [access-to-results specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/features/access-to-results.md)
+//! without a generic on the stored element.
+//!
+//! # Thread safety
+//!
+//! `process` takes `&self`, so one shared element instance serves many
+//! concurrent flow data, as required by the
+//! [thread-safety specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/features/thread-safety.md#flow-elements).
+//! The trait is therefore `Send + Sync`. Any per-request scratch state must be
+//! created inside `process`; any hot mutable state (for example a reloadable
+//! data file) belongs behind a synchronisation primitive owned by the element.
+
+use crate::error::Result;
+use crate::evidence::EvidenceKeyFilter;
+use crate::flow_data::FlowData;
+use crate::property::PropertyMetaData;
+
+/// The basic building block of a pipeline.
+///
+/// Implementations are shared (`Arc`) and immutable once added to a pipeline,
+/// so the trait requires `Send + Sync`. See the module documentation for the
+/// rationale behind the object-safe design.
+pub trait FlowElement: Send + Sync {
+    /// Process the supplied flow data with this element.
+    ///
+    /// The element reads evidence and earlier element data from `data` and may
+    /// add its own element data via [`crate::FlowData::get_or_add`]. Returning
+    /// `Err` signals a processing failure; the pipeline decides whether to
+    /// propagate or record it according to its `suppress_process_exceptions`
+    /// setting, per the
+    /// [exception-handling specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/features/exception-handling.md#process-function).
+    ///
+    /// `process` takes `&self` so a single element instance can serve many
+    /// concurrent requests.
+    fn process(&self, data: &mut FlowData) -> Result<()>;
+
+    /// The string data key used to store and retrieve this element's data in a
+    /// flow data. This is a specification MUST.
+    fn data_key(&self) -> &str;
+
+    /// A filter describing the evidence keys this element can make use of.
+    ///
+    /// Advertising accepted evidence is a specification MUST. See the
+    /// [advertise-accepted-evidence specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/features/advertize-accepted-evidence.md).
+    /// The pipeline ORs every element's filter together to derive its own
+    /// pipeline-wide filter.
+    fn evidence_key_filter(&self) -> &dyn EvidenceKeyFilter;
+
+    /// Metadata for the properties this element can populate.
+    ///
+    /// Publishing produced properties is a specification MUST. See the
+    /// [properties specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/features/properties.md#property-metadata).
+    fn properties(&self) -> &[PropertyMetaData];
+
+    /// True if this element starts multiple threads internally. Defaults to
+    /// `false`. A pipeline reports itself concurrent if any element does, which
+    /// influences whether thread-safe flow data is needed.
+    fn is_concurrent(&self) -> bool {
+        false
+    }
+}
