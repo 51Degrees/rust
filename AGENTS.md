@@ -113,7 +113,7 @@ manifest's `include`, so `cargo publish` packages it.
 - `mustache-drift.yml` — guards the generated JavaScript resource template.
   Push and pull request builds compare against a pinned upstream commit
   rather than the branch, because the canonical template is being changed by
-  the create last programme, 51Degrees/cloud#373, so comparing against the
+  the create last programme in the cloud service, so comparing against the
   branch would fail work here that has nothing to do with that programme.
   The weekly schedule and a manual run still compare against the branch, so
   a real drift is still reported. 51Degrees/rust#52 lifts the pin, by moving

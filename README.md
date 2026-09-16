@@ -287,7 +287,7 @@ example and checks that the page serves `51Degrees.core.js`, that client-side
 evidence flows back, and that the server renders a real detection result.
 
 CI does not run it here. The browser contract for this SDK runs in the
-[cloud](https://github.com/51Degrees/cloud) repository, in the language matrix
+cloud service's own repository, in the language matrix
 alongside the .NET, Java, Node, Python and PHP examples, against the container
 that run builds. It used to run here against the public cloud, which made this
 the only SDK testing production data rather than the code under review.
