@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // is a 51Did, and says nothing about the signature.
     let fod_id = FodId::from_base64(&base64)?;
     println!("usage     : {:?}", fod_id.usage());
-    println!("consent   : {}", fod_id.usage_from_consent());
+    println!("indirect  : {}", fod_id.usage_is_indirect());
     println!("id_type   : {:?}", fod_id.id_type());
     println!("license_id: {:#010x}", fod_id.license_id());
     println!("match_key : {}", hex(fod_id.match_key()));

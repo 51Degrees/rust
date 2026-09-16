@@ -87,6 +87,13 @@
 //! because either this crate read the layout or there is no identifier to
 //! read fields from.
 //!
+//! ## A payload with no usage
+//!
+//! [`Usage`] has exactly three values. A payload whose usage bits 0 to 2 are
+//! all clear is refused with [`Error::NoUsage`], because every usage the
+//! cloud accepts sets bit 0, so such a payload is damaged or forged, and the
+//! only safe answer to it is not to pass the identifier on.
+//!
 //! ## Payload layout
 //!
 //! The payload is a five byte header, being a flags byte and a four byte
@@ -141,16 +148,18 @@
 //! result carries the same three facts: whether the read succeeded
 //! (`is_ok()`), the value (present only on success, never a partly read
 //! `FodId`), and the status, which is the [`Error`] variant on failure and
-//! "parsed" on success. The status vocabulary is the OWID one plus two
+//! "parsed" on success. The status vocabulary is the OWID one plus four
 //! 51Did statuses, checked in this order:
 //!
 //! | Status | Meaning |
 //! |---|---|
 //! | [`Error::Parse`] | The bytes are not an OWID envelope. The OWID reason is kept unchanged inside, read with [`ParseError::status`], for example [`ParseStatus::MissingInput`], [`ParseStatus::InvalidBase64`], [`ParseStatus::UnexpectedEnd`] or [`ParseStatus::ByteCountMismatch`]. |
 //! | [`Error::PayloadTooShort`] | The envelope is fine, but the payload cannot hold the 5 byte 51Did header, so the identifier type cannot be read. |
+//! | [`Error::UnsupportedPayloadVersion`] | The flags byte names a payload version other than 0, and the variant names the version found. |
+//! | [`Error::NoUsage`] | The flags byte sets none of usage bits 0 to 2. |
 //! | [`Error::InvalidTypePayloadLength`] | The header was read, and the payload is shorter than the value the identifier type requires (21 bytes in all for random, 37 for probabilistic and hashed email). |
 //!
-//! All three are data results, meaning the input was not a 51Did and the
+//! All five are data results, meaning the input was not a 51Did and the
 //! caller decides what to do with that. [`Error::Owid`] is the one
 //! exceptional variant. No read produces it. It appears only when a caller
 //! uses `?` on an OWID operation of a parsed value, such as serialising it
@@ -177,7 +186,7 @@
 //! let fod_id = FodId::from_base64(base64_from_cloud)?;
 //!
 //! let usage = fod_id.usage(); // the highest usage granted, never a raw bit
-//! let from_consent = fod_id.usage_from_consent();
+//! let indirect = fod_id.usage_is_indirect();
 //! let id_type = fod_id.id_type();
 //! let license_id: u32 = fod_id.license_id();
 //! let match_key: &[u8] = fod_id.match_key(); // the match key to compare (32 or 16 bytes)
@@ -193,7 +202,7 @@
 //! // Verifying is the second question, asked of the parsed value.
 //! let status = fod_id.verify_status_with_public_key(public_pem, &[]);
 //! let genuine = status == SignatureStatus::Valid;
-//! # let _ = (usage, from_consent, id_type, license_id, match_key);
+//! # let _ = (usage, indirect, id_type, license_id, match_key);
 //! # let _ = (domain, round_trip, genuine);
 //! # let _ = terms;
 //! # Ok(())

@@ -90,6 +90,18 @@ The version is not exposed. Either this crate read the layout, in which case
 the accessors are the answer, or it did not, in which case there is no
 identifier to read fields from.
 
+## A payload with no usage
+
+`Usage` has exactly three values, being `NonMarketing`, `Standard` and
+`Personalized`. A payload whose usage bits 0 to 2 are all clear is refused
+with `Error::NoUsage`. Every usage the cloud accepts sets bit 0, so such a
+payload is damaged or forged, and the only safe answer to it is not to pass
+the identifier on, which the refusal already gives.
+
+`usage_is_indirect()` answers whether the usage was stated by the caller
+(`false`) or worked out by the issuer from another signal the caller sent
+(`true`). Today a consent string is the only such signal.
+
 ## Payload layout
 
 The payload is a five byte header, being a flags byte and a four byte little
@@ -138,7 +150,7 @@ fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::
     let fod_id = FodId::from_base64(base64_from_cloud_service)?;
 
     let usage = fod_id.usage();          // the highest usage granted
-    let from_consent = fod_id.usage_from_consent();
+    let indirect = fod_id.usage_is_indirect(); // stated or worked out
     let id_type = fod_id.id_type();      // IdType
     let license_id = fod_id.license_id(); // u32
     let match_key = fod_id.match_key();  // the match key bytes (SHA-256 or GUID)
@@ -155,7 +167,7 @@ fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::
     let genuine = fod_id.verify_status_with_public_key(public_pem, &[])
         == SignatureStatus::Valid;
 
-    let _ = (usage, from_consent, id_type, license_id, match_key);
+    let _ = (usage, indirect, id_type, license_id, match_key);
     let _ = (domain, round_trip, genuine);
     let _ = terms;
     Ok(())
@@ -169,16 +181,18 @@ have written, so malformed input is expected and a failed read is an ordinary
 `Err` naming the reason, never a panic. Every result carries three facts:
 whether the read succeeded, the value (present only on success, never a
 partly read `FodId`), and the status, which is the `Error` variant on failure.
-The status vocabulary is the OWID one plus two 51Did statuses, checked in this
-order.
+The status vocabulary is the OWID one plus four 51Did statuses, checked in
+this order.
 
 | Status | Meaning |
 |---|---|
 | `Error::Parse` | The bytes are not an OWID envelope. The OWID reason is kept unchanged inside and read with `.status()`, for example `ParseStatus::MissingInput`, `InvalidBase64`, `UnexpectedEnd` or `ByteCountMismatch`. |
 | `Error::PayloadTooShort` | The envelope is fine, but the payload cannot hold the 5 byte 51Did header, so the identifier type cannot be read. |
+| `Error::UnsupportedPayloadVersion` | The flags byte names a payload version other than 0, and the variant names the version found. |
+| `Error::NoUsage` | The flags byte sets none of usage bits 0 to 2. |
 | `Error::InvalidTypePayloadLength` | The header was read, and the payload is shorter than the value the identifier type requires (21 bytes in all for random, 37 for probabilistic and hashed email). |
 
-All three are data results. `Error::Owid` is the one exceptional variant, and
+All five are data results. `Error::Owid` is the one exceptional variant, and
 no read produces it. It appears only when a caller uses `?` on an OWID
 operation of a parsed value, such as serialising it again.
 

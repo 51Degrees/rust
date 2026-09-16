@@ -42,11 +42,16 @@ const CANONICAL_LICENSE_ID: u32 = 0x1234_5678;
 
 /// Flags bytes whose bits 6-7 select each identifier type. The lower usage
 /// bits are set differently in each so the type decode is shown to ignore
-/// them.
+/// them, and every one sets a usage bit, because a payload with none is
+/// refused.
 const PROBABILISTIC_FLAGS: u8 = 0b0000_0101;
-const RANDOM_FLAGS: u8 = 0b0100_0000;
+const RANDOM_FLAGS: u8 = 0b0100_0001;
 const HASHED_EMAIL_FLAGS: u8 = 0b1000_0011;
-const RESERVED_FLAGS: u8 = 0b1100_0000;
+const RESERVED_FLAGS: u8 = 0b1100_0111;
+
+/// The random type bits alone, for the tests that set the usage bits
+/// themselves.
+const RANDOM_TYPE: u8 = 0b0100_0000;
 
 /// The stable 32-byte hash used across the field-level assertions: 0x20..0x3F.
 fn canonical_hash() -> [u8; layout::MATCH_KEY_LENGTH] {
@@ -87,13 +92,14 @@ fn typed_payload(flags: u8, value_len: usize) -> Vec<u8> {
 /// Asserts the canonical flags byte both as the byte the envelope carries
 /// and as the values the typed accessors read out of it. Bits 6-7 are 10, so
 /// the type is hashed email, and the usage bits are 101, so the highest usage
-/// granted is personalized, set directly rather than from a consent string.
+/// granted is personalized, stated directly rather than worked out from
+/// another signal.
 #[track_caller]
 fn assert_canonical_flags(fod_id: &FodId) {
     assert_eq!(CANONICAL_FLAGS, fod_id.payload()[layout::FLAGS_OFFSET]);
     assert_eq!(IdType::HashedEmail, fod_id.id_type());
     assert_eq!(Usage::Personalized, fod_id.usage());
-    assert!(!fod_id.usage_from_consent());
+    assert!(!fod_id.usage_is_indirect());
 }
 
 /// Generates a key pair and exposes the PEM forms, used to set up each test.
@@ -140,6 +146,7 @@ enum Status {
     Owid(ParseStatus),
     PayloadTooShort,
     InvalidTypePayloadLength,
+    NoUsage,
 }
 
 fn status_of(result: &fodid::Result<FodId>) -> Status {
@@ -148,6 +155,7 @@ fn status_of(result: &fodid::Result<FodId>) -> Status {
         Err(Error::Parse(e)) => Status::Owid(e.status()),
         Err(Error::PayloadTooShort { .. }) => Status::PayloadTooShort,
         Err(Error::InvalidTypePayloadLength { .. }) => Status::InvalidTypePayloadLength,
+        Err(Error::NoUsage) => Status::NoUsage,
         Err(other) => panic!("a read never produces {other:?}"),
     }
 }
@@ -273,17 +281,53 @@ fn license_id_high_bit_set_stays_unsigned() {
     assert_eq!(0x8000_0000u32, fod_id.license_id());
 }
 
+/// Usage bits 000 are not a usage. The cloud sets bit 0 on every usage it
+/// accepts, so such a payload is damaged or forged and is refused the way a
+/// payload that cannot be read is, whatever the other bits say, with a
+/// refusal that names what it found.
 #[test]
-fn a_flags_byte_of_zero_reads_as_no_usage_and_the_default_type() {
+fn a_payload_with_usage_bits_000_is_refused_and_the_refusal_names_it() {
     let fixture = Fixture::new();
-    let mut payload = canonical_payload();
-    payload[layout::FLAGS_OFFSET] = 0x00;
+    // Every combination of the type bits and the indirect bit, with the
+    // usage bits clear and the payload version 0.
+    for flags in [0x00u8, 0x08, 0x40, 0x48, 0x80, 0x88, 0xC0, 0xC8] {
+        let mut payload = canonical_payload();
+        payload[layout::FLAGS_OFFSET] = flags;
+        let base64 = fixture.signed_owid_base64(payload.clone());
 
-    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
+        let result = FodId::from_base64(&base64);
+        assert_failed(&result, Status::NoUsage);
+        let message = result.unwrap_err().to_string();
+        assert!(
+            message.starts_with("NoUsage") && message.contains("usage bits are 000"),
+            "flags {flags:#010b}: the refusal did not name what it found: {message}"
+        );
 
-    assert_eq!(Usage::None, fod_id.usage());
-    assert!(!fod_id.usage_from_consent());
-    assert_eq!(IdType::Probabilistic, fod_id.id_type());
+        // Every reading route refuses it the same way.
+        let owid = fixture.signed_owid(payload);
+        let bytes = owid.as_byte_array().unwrap();
+        assert_failed(&FodId::from_byte_array(&bytes), Status::NoUsage);
+        assert_failed(&FodId::from_owid(owid), Status::NoUsage);
+    }
+}
+
+/// Only 000 is refused. The patterns 010, 100, 101 and 110 are not ones the
+/// cloud writes, and they keep the highest-bit reading they always had.
+#[test]
+fn usage_patterns_other_than_000_keep_their_reading() {
+    let fixture = Fixture::new();
+    let cases = [
+        (0b010, Usage::Standard),
+        (0b100, Usage::Personalized),
+        (0b101, Usage::Personalized),
+        (0b110, Usage::Personalized),
+    ];
+    for (bits, expected) in cases {
+        let payload = typed_payload(RANDOM_TYPE | bits, layout::GUID_LENGTH);
+        let result = FodId::from_base64(&fixture.signed_owid_base64(payload));
+        let fod_id = assert_parsed(&result);
+        assert_eq!(fod_id.usage(), expected, "usage bits {bits:#05b}");
+    }
 }
 
 #[test]
@@ -298,7 +342,7 @@ fn a_flags_byte_with_every_other_bit_set_reads_as_the_highest_usage_and_reserved
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
 
     assert_eq!(Usage::Personalized, fod_id.usage());
-    assert!(fod_id.usage_from_consent());
+    assert!(fod_id.usage_is_indirect());
     assert_eq!(IdType::Reserved, fod_id.id_type());
     // The byte itself is still reachable through the envelope payload.
     assert_eq!(0xCF, fod_id.payload()[layout::FLAGS_OFFSET]);
@@ -522,7 +566,10 @@ fn constructor_from_owid_short_payload_errors() {
     let result = FodId::from_owid(fixture.signed_owid(vec![0u8; layout::HEADER_LENGTH - 1]));
     assert_failed(&result, Status::PayloadTooShort);
 
-    let result = FodId::from_owid(fixture.signed_owid(vec![0u8; layout::PAYLOAD_LENGTH - 1]));
+    let result = FodId::from_owid(fixture.signed_owid(typed_payload(
+        PROBABILISTIC_FLAGS,
+        layout::MATCH_KEY_LENGTH - 1,
+    )));
     assert_failed(&result, Status::InvalidTypePayloadLength);
 }
 
@@ -537,7 +584,10 @@ fn constructor_from_bytes_short_payload_errors() {
     assert_failed(&FodId::from_byte_array(&bytes), Status::PayloadTooShort);
 
     let bytes = fixture
-        .signed_owid(vec![0u8; layout::PAYLOAD_LENGTH - 1])
+        .signed_owid(typed_payload(
+            PROBABILISTIC_FLAGS,
+            layout::MATCH_KEY_LENGTH - 1,
+        ))
         .as_byte_array()
         .unwrap();
     assert_failed(
@@ -779,7 +829,7 @@ fn base64_roundtrip_preserves_all_fields() {
     let fod_id2 = FodId::from_base64(&fod_id1.as_base64().unwrap()).unwrap();
 
     assert_eq!(fod_id1.usage(), fod_id2.usage());
-    assert_eq!(fod_id1.usage_from_consent(), fod_id2.usage_from_consent());
+    assert_eq!(fod_id1.usage_is_indirect(), fod_id2.usage_is_indirect());
     assert_eq!(fod_id1.id_type(), fod_id2.id_type());
     assert_eq!(fod_id1.license_id(), fod_id2.license_id());
     assert_eq!(fod_id1.match_key(), fod_id2.match_key());
@@ -820,13 +870,12 @@ fn id_type_decodes_from_flag_bits_6_and_7() {
 fn usage_is_the_highest_granted() {
     let fixture = Fixture::new();
     let cases = [
-        (0b000, Usage::None, None),
-        (0b001, Usage::NonMarketing, Some("non-marketing")),
-        (0b011, Usage::Standard, Some("standard")),
-        (0b111, Usage::Personalized, Some("personalized")),
+        (0b001, Usage::NonMarketing, "non-marketing"),
+        (0b011, Usage::Standard, "standard"),
+        (0b111, Usage::Personalized, "personalized"),
     ];
     for (bits, expected, id_usage) in cases {
-        let payload = typed_payload(RANDOM_FLAGS | bits, layout::GUID_LENGTH);
+        let payload = typed_payload(RANDOM_TYPE | bits, layout::GUID_LENGTH);
         let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
         assert_eq!(fod_id.usage(), expected, "usage bits {bits:#05b}");
         assert_eq!(fod_id.usage().id_usage(), id_usage);
@@ -835,19 +884,31 @@ fn usage_is_the_highest_granted() {
             IdType::Random,
             "the type bits are untouched"
         );
-        assert!(!fod_id.usage_from_consent());
+        assert!(!fod_id.usage_is_indirect());
     }
 }
 
-/// Bit 3 records that the usage came from a consent string rather than
-/// being stated, and reads independently of which usage it is.
+/// Bit 3 records whether the usage is indirect, being worked out by the
+/// issuer from another signal rather than stated by the caller. It reads
+/// independently of which usage it is, true when set and false when clear.
 #[test]
-fn usage_from_consent_is_bit_three() {
+fn usage_is_indirect_is_bit_three() {
     let fixture = Fixture::new();
-    let payload = typed_payload(RANDOM_FLAGS | 0b1011, layout::GUID_LENGTH);
-    let fod_id = FodId::from_base64(&fixture.signed_owid_base64(payload)).unwrap();
-    assert!(fod_id.usage_from_consent());
-    assert_eq!(fod_id.usage(), Usage::Standard);
+    for (bits, usage) in [
+        (0b001, Usage::NonMarketing),
+        (0b011, Usage::Standard),
+        (0b111, Usage::Personalized),
+    ] {
+        let set = typed_payload(RANDOM_TYPE | 0b1000 | bits, layout::GUID_LENGTH);
+        let fod_id = FodId::from_base64(&fixture.signed_owid_base64(set)).unwrap();
+        assert!(fod_id.usage_is_indirect(), "bit 3 set, usage {usage:?}");
+        assert_eq!(fod_id.usage(), usage);
+
+        let clear = typed_payload(RANDOM_TYPE | bits, layout::GUID_LENGTH);
+        let fod_id = FodId::from_base64(&fixture.signed_owid_base64(clear)).unwrap();
+        assert!(!fod_id.usage_is_indirect(), "bit 3 clear, usage {usage:?}");
+        assert_eq!(fod_id.usage(), usage);
+    }
 }
 
 #[test]
@@ -1164,10 +1225,15 @@ fn the_payload_version_is_read_apart_from_the_usage_and_type_bits() {
             let mut payload = payload_ending_at_match_key();
             payload[layout::FLAGS_OFFSET] = flags;
 
-            assert!(
-                FodId::from_base64(&fixture.signed_owid_base64(payload.clone())).is_ok(),
-                "flags {flags}"
-            );
+            // Usage bits 000 are refused at version 0, and every other
+            // usage reads. The version is checked first, so a later version
+            // is refused as a version whatever the usage bits say.
+            let read = FodId::from_base64(&fixture.signed_owid_base64(payload.clone()));
+            if usage == 0 {
+                assert!(matches!(read, Err(Error::NoUsage)), "flags {flags}");
+            } else {
+                assert!(read.is_ok(), "flags {flags}");
+            }
 
             for version in [1u8, 2, 3] {
                 let refused = FodId::from_base64(

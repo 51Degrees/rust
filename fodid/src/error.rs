@@ -32,13 +32,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///
 /// A 51Did arrives from outside, from a cookie, a query string or a cloud
 /// response, so bytes that are not a 51Did are an ordinary outcome rather
-/// than a fault in the program. The first three variants are that ordinary
+/// than a fault in the program. The first five variants are that ordinary
 /// outcome. Each one is a named status a caller can branch on directly,
 /// without matching on message text, and together they are the 51Did status
 /// vocabulary, being the OWID one (carried unchanged inside
-/// [`Error::Parse`]) plus the three 51Did statuses
-/// [`Error::PayloadTooShort`], [`Error::InvalidTypePayloadLength`] and
-/// [`Error::UnsupportedPayloadVersion`].
+/// [`Error::Parse`]) plus the four 51Did statuses
+/// [`Error::PayloadTooShort`], [`Error::InvalidTypePayloadLength`],
+/// [`Error::UnsupportedPayloadVersion`] and [`Error::NoUsage`].
 ///
 /// A successful read says nothing about the signature. Whether the bytes
 /// are a 51Did and whether the signature is genuine are two questions with
@@ -94,6 +94,15 @@ pub enum Error {
         /// layout this crate reads.
         version: u8,
     },
+    /// Bits 0 to 2 of the flags byte are all clear, so the payload states
+    /// no usage and no field is read.
+    ///
+    /// Every usage the cloud accepts sets bit 0, so such a payload did not
+    /// come from it and is damaged or forged. It is refused rather than
+    /// offered as a fourth [`Usage`](crate::Usage), because the only safe
+    /// answer to it is not to pass the identifier on, which a refusal
+    /// already gives.
+    NoUsage,
     /// An OWID operation other than a read failed, for example serialising
     /// the envelope again or verifying its signature. Wraps the error type of
     /// the OWID library compiled into this crate, re-exported as
@@ -126,6 +135,11 @@ impl fmt::Display for Error {
                 "UnsupportedPayloadVersion: 51Did payload version {version} \
                  is not one this crate can read"
             ),
+            Error::NoUsage => write!(
+                f,
+                "NoUsage: 51Did usage bits are 000, so the payload states no \
+                 usage"
+            ),
             Error::Owid(e) => write!(f, "OWID operation failed because {e}"),
         }
     }
@@ -138,7 +152,8 @@ impl std::error::Error for Error {
             Error::Owid(e) => Some(e),
             Error::PayloadTooShort { .. }
             | Error::InvalidTypePayloadLength { .. }
-            | Error::UnsupportedPayloadVersion { .. } => None,
+            | Error::UnsupportedPayloadVersion { .. }
+            | Error::NoUsage => None,
         }
     }
 }
