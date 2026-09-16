@@ -62,6 +62,89 @@ function Hide-Keys([string]$Text) {
     $Text -replace 'AQ[A-Za-z0-9_-]{12,}', '<redacted>'
 }
 
+# When the contract fails, shows what the example serves to the three kinds of
+# browser the suite drives, so a failure can be traced without a browser. For
+# each one it prints the include's size, whether node can parse it, and the
+# JavaScript properties and errors in the data the include carries. The
+# example has to still be running.
+function Show-Includes([string]$Url, [string]$Directory) {
+    $browsers = [ordered]@{
+        "headless-chrome" = @{
+            "User-Agent" = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36"
+            "sec-ch-ua" = '"Not=A?Brand";v="99", "Google Chrome";v="151", ' +
+                '"Chromium";v="151"'
+            "sec-ch-ua-mobile" = "?0"
+            "sec-ch-ua-platform" = '"Linux"'
+        }
+        "firefox" = @{
+            "User-Agent" = "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:140.0) " +
+                "Gecko/20100101 Firefox/140.0"
+        }
+        "iphone" = @{
+            "User-Agent" = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) " +
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 " +
+                "Mobile/15E148 Safari/604.1"
+        }
+    }
+    foreach ($name in $browsers.Keys) {
+        Write-Host "::group::Include served to $name"
+        try {
+            $path = Join-Path $Directory "include-$name.js"
+            $response = Invoke-WebRequest -Uri "$Url/51Degrees.core.js" `
+                -Headers $browsers[$name] -TimeoutSec 30
+            $text = [string]$response.Content
+            Set-Content -Path $path -Value $text -NoNewline
+            Write-Host "status $($response.StatusCode), $($text.Length) characters"
+            $PSNativeCommandUseErrorActionPreference = $false
+            $check = node --check $path 2>&1
+            Write-Host "node --check exit $LASTEXITCODE"
+            if ($LASTEXITCODE -ne 0) {
+                Hide-Keys ($check | Out-String) | Out-Host
+            }
+            $PSNativeCommandUseErrorActionPreference = $true
+            # The template starts with 'var json = {...};' on one line.
+            $match = [regex]::Match($text, 'var json\s*=\s*(\{.*?\});\s*var parameters')
+            if (-not $match.Success) {
+                Write-Host "no 'var json' object found, first 600 characters:"
+                Hide-Keys $text.Substring(0, [Math]::Min(600, $text.Length)) |
+                    Out-Host
+                $at = $text.IndexOf("javascriptProperties")
+                if ($at -ge 0) {
+                    Write-Host "around javascriptProperties:"
+                    Hide-Keys $text.Substring($at, [Math]::Min(800, $text.Length - $at)) |
+                        Out-Host
+                }
+                continue
+            }
+            $json = $match.Groups[1].Value | ConvertFrom-Json -AsHashtable
+            Write-Host "javascriptProperties: $($json.javascriptProperties -join ', ')"
+            foreach ($property in @($json.javascriptProperties)) {
+                $parts = $property -split '\.', 2
+                $value = $json[$parts[0]][$parts[1]]
+                $size = if ($null -eq $value) { "null" } else {
+                    "$(([string]$value).Length) characters"
+                }
+                Write-Host "  $property = $size"
+            }
+            if ($json.errors) {
+                Write-Host "errors: $(Hide-Keys ($json.errors | ConvertTo-Json -Compress))"
+            }
+            if ($json.device) {
+                foreach ($key in "devicetype", "hardwarename", "browsername",
+                    "deviceid", "screenpixelswidth") {
+                    Write-Host "  device.$key = $($json.device[$key])"
+                }
+            }
+        } catch {
+            Write-Host "could not read the include: $(Hide-Keys $_.ToString())"
+        } finally {
+            $PSNativeCommandUseErrorActionPreference = $true
+            Write-Host "::endgroup::"
+        }
+    }
+}
+
 # Build first, so the wait below only covers the example starting. The release
 # profile compiles the native Hash code with optimisation, which keeps the
 # TAC file load and each detection fast enough for the suite's timeouts.
@@ -192,6 +275,9 @@ try {
     if ($example -and -not $example.HasExited) {
         Stop-Process -Id $example.Id -Force
         $example.WaitForExit()
+    }
+    if (-not $passed -and $example -and $url) {
+        Show-Includes -Url $url -Directory $Logs
     }
     if (-not $passed) {
         foreach ($name in "stdout.txt", "stderr.txt") {
