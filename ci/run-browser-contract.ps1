@@ -64,9 +64,58 @@ function Hide-Keys([string]$Text) {
 
 # When the contract fails, shows what the example serves to the three kinds of
 # browser the suite drives, so a failure can be traced without a browser. For
-# each one it prints the include's size, whether node can parse it, and the
-# JavaScript properties and errors in the data the include carries. The
-# example has to still be running.
+# each one it runs the include in node with a stand-in for the browser, and
+# prints whether it ran, whether it asked to post evidence back, and each
+# JavaScript property with the length of its script. The example has to still
+# be running.
+$IncludeProbe = @'
+const fs = require('fs'), vm = require('vm');
+let src = fs.readFileSync(process.argv[2], 'utf8');
+// Keep a reference to the data object the include is built around, whether
+// or not the include was minified.
+src = src.replace(
+  /^(fiftyoneDegreesManager\s*=\s*function\s*\(\)\s*\{\s*["']use strict["'];?\s*var\s+\w+\s*=)/,
+  '$1globalThis.__json=');
+const log = [];
+class Xhr { constructor() { this.withCredentials = false; } open(m, u) { log.push('request ' + m + ' ' + u); }
+  setRequestHeader() {} send() {} }
+const store = {};
+const ctx = {
+  console: { log() {} },
+  sessionStorage: { get length() { return Object.keys(store).length; },
+    key: i => Object.keys(store)[i], getItem: k => k in store ? store[k] : null,
+    setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } },
+  navigator: { userAgent: '', webdriver: true, cookieEnabled: true },
+  screen: { width: 375, height: 667 }, devicePixelRatio: 2,
+  document: { cookie: '', visibilityState: 'visible', addEventListener() {},
+    createElement: () => ({ style: {}, appendChild() {}, setAttribute() {} }),
+    body: { appendChild() {}, removeChild() {} }, getElementsByTagName: () => [] },
+  XMLHttpRequest: Xhr,
+  fetch: u => { log.push('request fetch ' + u);
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}),
+      text: () => Promise.resolve('{}') }); },
+  Promise, setTimeout, clearTimeout,
+  location: { protocol: 'http:', hostname: 'localhost' } };
+ctx.window = ctx; ctx.self = ctx; ctx.globalThis = ctx;
+vm.createContext(ctx);
+try { vm.runInContext(src, ctx); console.log('include ran, fod is ' +
+  vm.runInContext('typeof fod', ctx)); }
+catch (e) { console.log('include threw: ' + e.message); }
+try { vm.runInContext('fod.complete(function () {})', ctx); } catch (e) {}
+setTimeout(() => {
+  const d = ctx.__json || {};
+  for (const n of d.javascriptProperties || []) {
+    const [e, p] = n.split('.');
+    const v = (d[e] || {})[p];
+    console.log('  ' + n + ' = ' + (v == null ? 'null' : String(v).length + ' characters'));
+  }
+  const device = d.device || {};
+  console.log('  device: ' + ['browsername', 'devicetype', 'deviceid']
+    .map(k => k + '=' + device[k]).join(' '));
+  console.log(log.length ? log.join('\n') : 'no request to post evidence back');
+}, 2000);
+'@
+
 function Show-Includes([string]$Url, [string]$Directory) {
     $browsers = [ordered]@{
         "headless-chrome" = @{
@@ -87,6 +136,8 @@ function Show-Includes([string]$Url, [string]$Directory) {
                 "Mobile/15E148 Safari/604.1"
         }
     }
+    $probe = Join-Path $Directory "include-probe.js"
+    Set-Content -Path $probe -Value $IncludeProbe
     foreach ($name in $browsers.Keys) {
         Write-Host "::group::Include served to $name"
         try {
@@ -97,45 +148,7 @@ function Show-Includes([string]$Url, [string]$Directory) {
             Set-Content -Path $path -Value $text -NoNewline
             Write-Host "status $($response.StatusCode), $($text.Length) characters"
             $PSNativeCommandUseErrorActionPreference = $false
-            $check = node --check $path 2>&1
-            Write-Host "node --check exit $LASTEXITCODE"
-            if ($LASTEXITCODE -ne 0) {
-                Hide-Keys ($check | Out-String) | Out-Host
-            }
-            $PSNativeCommandUseErrorActionPreference = $true
-            # The template starts with 'var json = {...};' on one line.
-            $match = [regex]::Match($text, 'var json\s*=\s*(\{.*?\});\s*var parameters')
-            if (-not $match.Success) {
-                Write-Host "no 'var json' object found, first 600 characters:"
-                Hide-Keys $text.Substring(0, [Math]::Min(600, $text.Length)) |
-                    Out-Host
-                $at = $text.IndexOf("javascriptProperties")
-                if ($at -ge 0) {
-                    Write-Host "around javascriptProperties:"
-                    Hide-Keys $text.Substring($at, [Math]::Min(800, $text.Length - $at)) |
-                        Out-Host
-                }
-                continue
-            }
-            $json = $match.Groups[1].Value | ConvertFrom-Json -AsHashtable
-            Write-Host "javascriptProperties: $($json.javascriptProperties -join ', ')"
-            foreach ($property in @($json.javascriptProperties)) {
-                $parts = $property -split '\.', 2
-                $value = $json[$parts[0]][$parts[1]]
-                $size = if ($null -eq $value) { "null" } else {
-                    "$(([string]$value).Length) characters"
-                }
-                Write-Host "  $property = $size"
-            }
-            if ($json.errors) {
-                Write-Host "errors: $(Hide-Keys ($json.errors | ConvertTo-Json -Compress))"
-            }
-            if ($json.device) {
-                foreach ($key in "devicetype", "hardwarename", "browsername",
-                    "deviceid", "screenpixelswidth") {
-                    Write-Host "  device.$key = $($json.device[$key])"
-                }
-            }
+            Hide-Keys (node $probe $path 2>&1 | Out-String) | Out-Host
         } catch {
             Write-Host "could not read the include: $(Hide-Keys $_.ToString())"
         } finally {
