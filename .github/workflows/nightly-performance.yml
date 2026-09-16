@@ -201,12 +201,17 @@ jobs:
             -DryRun $DryRun `
             -Publish
 
+      # Runs even when the compare step failed. That upload is the only source
+      # of future baselines, so skipping it on a failing compare would drop the
+      # run's own figure out of history and wedge the trend (see below).
       - name: Escape Branch Name
         id: escape_branch
+        if: always()
         shell: pwsh
         run: '"name=" + ($env:GITHUB_REF_NAME -replace ''[":<>|*?/\\\r\n]'', ''-'') | Out-File $env:GITHUB_OUTPUT -Append'
 
       - name: Upload Graphed Performance Results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: publish_performance_results@${{ steps.escape_branch.outputs.name }}
