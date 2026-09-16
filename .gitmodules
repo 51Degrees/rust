@@ -1,3 +1,0 @@
-[submodule "owid-rust"]
-	path = owid-rust
-	url = https://github.com/51Degrees/owid-rust.git
