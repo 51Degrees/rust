@@ -49,6 +49,9 @@ serde_json.workspace = true
 # already used elsewhere in the workspace so it is reused here for a single
 # resolved version.
 percent-encoding = "2.3.2"
+# Logs a warning when a requested object name is ignored. The log facade does
+# nothing until the application installs a logger.
+log = "0.4"
 
 # oxc is a large, native-oriented toolchain. Restrict it to non-wasm targets so
 # this crate, and the web crates that build on it, compile for wasm32-wasip1. The
