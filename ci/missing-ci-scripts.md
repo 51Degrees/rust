@@ -64,12 +64,18 @@ Rust consumer, so there is nothing to share. Every other language keeps its
   `steps/compare-performance.ps1` is genuinely shared and still comes from
   common-ci.
 
-The behaviour of the nightly run is unchanged; only the adapter's home moves.
+Moving the adapter's home is the structural part of the change. Alongside it,
+this repo's copy has since diverged from the common-ci original with
+repository-specific fixes (the ASN data fetch, the `dryrun` input, the
+`common-ci-ref`/`dd-cxx-ref`/`ipi-cxx-ref` inputs, and letting the compare step
+fail the job), so the behaviour of the nightly run is not identical to the old
+`common-ci/rust` path.
 
 The copy in `common-ci/rust/run-performance-tests.ps1` is intentionally **left
 in place** for now and will be removed in a separate, manually raised common-ci
-PR. Until then the two copies are identical; this repo's copy is the one CI
-uses.
+PR. This repo's copy is the one CI uses, and it is now the source of truth: the
+two copies are no longer identical, so the common-ci copy should not be edited
+in place — it is only awaiting deletion.
 
 ## The remaining gap (Phase 2, deferred)
 
