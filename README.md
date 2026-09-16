@@ -290,7 +290,7 @@ CI runs it here in the `contract` job of the Examples workflow
 (`.github/workflows/examples.yml`), through `ci/run-browser-contract.ps1`,
 against both device detection web examples built from this checkout. The
 cloud example (`dd-web-getting-started-cloud`) talks to the public cloud with
-the paid resource key. The on-premise example
+the bespoke resource key. The on-premise example
 (`dd-web-getting-started-onprem`) loads the TAC data file, because the Lite
 file has neither `DeviceType` nor the screen size JavaScript properties the
 contract checks. A test that fails, or that the suite skips as inconclusive,

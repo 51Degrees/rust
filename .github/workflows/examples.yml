@@ -39,7 +39,8 @@ jobs:
   # The Contract category of the shared selenium-api-tests suite
   # (https://github.com/51Degrees/selenium-api-tests), run against both device
   # detection web examples, as every other SDK's device detection CI does.
-  # The cloud example talks to the public cloud with the paid resource key.
+  # The cloud example talks to the public cloud with the bespoke resource key,
+  # the one the Node and Python SDKs run this suite with.
   # The on-premise example loads the TAC data file, because the Lite file has
   # neither DeviceType nor the screen size JavaScript properties the contract
   # checks. Any failed or skipped test fails the job (see
@@ -73,7 +74,7 @@ jobs:
         id: secrets
         shell: pwsh
         env:
-          RESOURCE_KEY: ${{ secrets._51DEGREES_RESOURCE_KEY_PAID }}
+          RESOURCE_KEY: ${{ secrets._51DEGREES_RESOURCE_KEY_BESPOKE }}
           DEVICE_DETECTION_KEY: ${{ secrets.DEVICE_DETECTION_KEY }}
           DEVICE_DETECTION_URL: ${{ secrets.DEVICE_DETECTION_URL }}
           FROM_FORK: ${{ github.event.pull_request.head.repo.fork == true }}
@@ -81,7 +82,7 @@ jobs:
         run: |
           $missing = @()
           if (-not $env:RESOURCE_KEY) {
-            $missing += '_51DEGREES_RESOURCE_KEY_PAID'
+            $missing += '_51DEGREES_RESOURCE_KEY_BESPOKE'
           }
           if ($env:MODE -eq 'onpremise' -and
               -not $env:DEVICE_DETECTION_KEY -and -not $env:DEVICE_DETECTION_URL) {
@@ -113,7 +114,7 @@ jobs:
         if: steps.secrets.outputs.run == 'true'
         shell: pwsh
         env:
-          RESOURCE_KEY: ${{ secrets._51DEGREES_RESOURCE_KEY_PAID }}
+          RESOURCE_KEY: ${{ secrets._51DEGREES_RESOURCE_KEY_BESPOKE }}
         run: >-
           ./ci/run-browser-contract.ps1
           -Mode ${{ matrix.mode }}
