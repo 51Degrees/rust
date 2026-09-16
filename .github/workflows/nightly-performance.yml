@@ -209,8 +209,11 @@ jobs:
         shell: pwsh
         run: '"name=" + ($env:GITHUB_REF_NAME -replace ''[":<>|*?/\\\r\n]'', ''-'') | Out-File $env:GITHUB_OUTPUT -Append'
 
+      # Runs even when the compare step failed (see above), but not on a dry
+      # run: this artifact is the performance history, and a dry run must leave
+      # nothing outside its own CI job, so it must not inject a figure here.
       - name: Upload Graphed Performance Results
-        if: always()
+        if: always() && github.event.inputs.dryrun != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: publish_performance_results@${{ steps.escape_branch.outputs.name }}
