@@ -14,7 +14,7 @@ name: Mustache Drift Check
 # silently going stale.
 #
 # Why the upstream reference is pinned. The canonical template is being changed
-# by the create last programme, 51Degrees/cloud#373, so comparing every push and
+# by the create last programme in the cloud service, so comparing every push and
 # pull request against the moving branch would fail work in this repository that
 # has nothing to do with that programme. Push and pull request builds therefore
 # compare against the commit the bundled asset was taken from, whilst the weekly
