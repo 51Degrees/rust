@@ -34,6 +34,7 @@ use fiftyone_pipeline_core::{
     PropertyValue, PropertyValueType, Result,
 };
 use fiftyone_pipeline_engines_fiftyone::constants::{EVIDENCE_SEQUENCE, EVIDENCE_SESSIONID};
+use fiftyone_pipeline_engines_fiftyone::SequenceElement;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 
 use crate::constants::{
@@ -67,7 +68,8 @@ const URL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 /// Generates a JavaScript include to be run on the client device.
 ///
 /// The element renders the bundled Mustache template with the JSON payload
-/// produced by the JSON builder, the request's session and sequence evidence,
+/// produced by the JSON builder, the session id and sequence number (from the
+/// sequence element's data, or from evidence when no sequence element ran),
 /// a callback URL and the request parameters, then optionally minifies the
 /// result. The generated JavaScript is stored on the flow data under the
 /// [`crate::JAVASCRIPT_BUILDER_ELEMENT_DATA_KEY`] element data key. It implements
@@ -263,17 +265,42 @@ impl JavaScriptBuilderElement {
         Some(format!("{protocol}://{host}{normalised_endpoint}"))
     }
 
-    /// Read the session id evidence, or an empty string if absent.
+    /// The session id for the template.
+    ///
+    /// The specification takes it from the sequence element's data, because
+    /// on a first request there is no `query.session-id` evidence and the
+    /// sequence element is what creates the id. Evidence is immutable here, so
+    /// the id the sequence element creates is only in its element data.
+    /// Reading evidence alone left `fod.sessionId` empty on every first page.
+    /// Evidence is still read when no sequence element ran, and an empty
+    /// string is used when neither has a value.
     fn session_id(data: &FlowData) -> String {
+        if let Some(id) = data
+            .get(SequenceElement::KEY)
+            .and_then(|sequence| sequence.session_id())
+        {
+            return id.to_owned();
+        }
         data.evidence()
             .get(EVIDENCE_SESSIONID)
             .unwrap_or("")
             .to_owned()
     }
 
-    /// Read the sequence evidence as an integer, defaulting to `1` when absent
-    /// or unparseable.
+    /// The sequence number for the template.
+    ///
+    /// Taken from the sequence element's data, which has already added one to
+    /// any `query.sequence` evidence, as the specification says. Without a
+    /// sequence element the evidence is read instead, and `1` is used when
+    /// that is absent or does not parse.
     fn sequence(data: &FlowData) -> i32 {
+        if let Some(sequence) = data
+            .get(SequenceElement::KEY)
+            .and_then(|sequence| sequence.sequence())
+            .and_then(|sequence| i32::try_from(sequence).ok())
+        {
+            return sequence;
+        }
         data.evidence()
             .get(EVIDENCE_SEQUENCE)
             .and_then(|s| s.trim().parse::<i32>().ok())
