@@ -389,11 +389,19 @@ mod tests {
 
     /// A failing call, behind a function so the panic below is reached the way
     /// a caller reaches it rather than from a literal the compiler can see
-    /// through.
+    /// through. Only compiled where a panic unwinds, because the test below
+    /// catches one.
+    #[cfg(panic = "unwind")]
     fn a_failing_call() -> Result<()> {
         Err(cloud_error_carrying_a_key())
     }
 
+    // wasm32-wasip1 compiles with panic = "abort", where a panic ends the whole
+    // test process rather than being caught, so this test is compiled only for
+    // the unwinding targets. The other tests in this module cover the same
+    // redaction through Display and Debug, which is what the panic message is
+    // built from, and they do run on wasm.
+    #[cfg(panic = "unwind")]
     #[test]
     fn unwrapping_a_cloud_error_removes_the_key() {
         let panic = std::panic::catch_unwind(|| a_failing_call().unwrap()).unwrap_err();
