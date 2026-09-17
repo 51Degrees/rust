@@ -578,6 +578,7 @@ name = "fiftyone-fodid-cloud"
 version = "4.6.0"
 dependencies = [
  "fiftyone-cloud-request-engine",
+ "fiftyone-fodid-cloud",
  "fiftyone-pipeline-core",
  "fiftyone-pipeline-engines",
  "fodid",
