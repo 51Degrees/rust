@@ -364,6 +364,12 @@ fn valid_name_from_builder_is_used() {
 
 #[test]
 fn valid_name_from_evidence_is_used() {
+    // The capture keys warnings by thread id, and a target without threads
+    // (wasm32-wasip1) runs every test in this binary on the one thread, so
+    // the warnings other tests logged are still visible here. Count what is
+    // already there and assert this test adds nothing, as the checks for an
+    // invalid name do.
+    let before = warnings_for_this_thread().len();
     let script = render(
         |b| b.set_minify(false).build(),
         &[(EVIDENCE_OBJECT_NAME, "myFod")],
@@ -371,7 +377,7 @@ fn valid_name_from_evidence_is_used() {
     assert_uses_name(&script, "myFod");
     assert_parses(&script);
     assert_runs_as(&script, "myFod");
-    assert!(warnings_for_this_thread().is_empty());
+    assert_eq!(warnings_for_this_thread().len(), before);
 }
 
 #[test]
