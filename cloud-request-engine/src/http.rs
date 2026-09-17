@@ -156,11 +156,18 @@ impl CloudHttpClient for ReqwestClient {
             builder = builder.header(super::constants::ORIGIN_HEADER_NAME, origin);
         }
 
-        // The address carries the resource key on the discovery request, and
-        // reqwest puts the address into its own message too, so the whole line
-        // is cleaned rather than only the part this code wrote.
+        // The discovery requests carry the keys in the query string, so the
+        // messages name the endpoint without it, and the reqwest error has its
+        // own copy of the URL removed. The whole line is then cleaned as
+        // well, so a credential reaching the message by any other route is
+        // still taken out.
+        let endpoint = crate::engine::url_without_query(&request.url);
         let response = builder.send().map_err(|e| {
-            redact(&format!("failed to send request to '{}': {e}", request.url)).into_owned()
+            redact(&format!(
+                "failed to send request to '{endpoint}': {}",
+                e.without_url()
+            ))
+            .into_owned()
         })?;
 
         let status = response.status().as_u16();
@@ -173,8 +180,8 @@ impl CloudHttpClient for ReqwestClient {
         // a transport failure rather than an empty response.
         let body = response.text().map_err(|e| {
             redact(&format!(
-                "failed to read response body from '{}': {e}",
-                request.url
+                "failed to read response body from '{endpoint}': {}",
+                e.without_url()
             ))
             .into_owned()
         })?;

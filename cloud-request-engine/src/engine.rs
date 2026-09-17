@@ -66,8 +66,11 @@ struct Endpoints {
 /// # Discovery at build time
 ///
 /// The accepted evidence keys (`evidencekeys`) and accessible properties
-/// (`accessibleproperties`) depend on the resource key, so they are fetched from
-/// the cloud. The builder fetches both when it builds the engine, so a built
+/// (`accessibleproperties`) depend on the keys, so they are fetched from the
+/// cloud. The accessible properties are asked for with the resource key and,
+/// when one is set, the license key, because a license key can add products
+/// to those the resource key carries and the data request sends both. The
+/// builder fetches both when it builds the engine, so a built
 /// engine is fully resolved and immutable: there is no lazy first-use discovery.
 /// If either fetch fails (for example the cloud is unavailable),
 /// [`CloudRequestEngineBuilder::build`] returns an error rather than producing a
@@ -75,7 +78,7 @@ struct Endpoints {
 ///
 /// # Persisting discovered state
 ///
-/// Both discovery results depend only on the resource key, so they can be lifted
+/// Both discovery results depend only on the keys, so they can be lifted
 /// out of one engine and injected into another to skip the build-time fetch
 /// entirely. This matters on a short-lived host such as a `wasm32-wasip1` edge
 /// instance, which would otherwise repeat the two round-trips on every cold
@@ -713,6 +716,7 @@ impl CloudRequestEngineBuilder {
                 &recovery,
                 &endpoints,
                 &resource_key,
+                self.license_key.as_deref(),
                 origin,
                 &secrets,
             )?;
@@ -901,7 +905,10 @@ fn send_and_validate_inner(
         }
     };
 
-    match validate_response(&response, &request.url, check_for_error_messages) {
+    // The query string of a discovery request carries the keys, so messages
+    // name the endpoint without it.
+    let endpoint = url_without_query(&request.url);
+    match validate_response(&response, endpoint, check_for_error_messages) {
         Ok(parsed) => {
             recovery.record_success();
             Ok(parsed)
@@ -948,39 +955,77 @@ fn fetch_evidence_keys(
 
 /// Fetch the accessible properties from the cloud, mapping any failure to an
 /// [`Error::CloudRequest`].
+///
+/// The license key is sent with the resource key when one is set and not
+/// blank, as the data request does, because the cloud adds the products the
+/// license key grants to those of the resource key. Asking with the resource
+/// key alone left those products out of the engine's metadata.
 fn fetch_public_properties(
     http: &dyn CloudHttpClient,
     recovery: &RecoveryGate,
     endpoints: &Endpoints,
     resource_key: &str,
+    license_key: Option<&str>,
     origin: Option<&str>,
     secrets: &[String],
 ) -> Result<LicensedProducts> {
-    let url = format!(
+    let mut url = format!(
         "{}?{}={}",
         endpoints.properties,
         constants::RESOURCE_PARAMETER,
-        resource_key
+        encode_query_value(resource_key)
     );
+    if let Some(license) = license_key.filter(|l| !l.trim().is_empty()) {
+        url.push_str(&format!(
+            "&{}={}",
+            constants::LICENSE_PARAMETER,
+            encode_query_value(license)
+        ));
+    }
     let request = CloudHttpRequest {
         method: HttpMethod::Get,
-        url: url.clone(),
+        url,
         form: Vec::new(),
         origin: origin.map(str::to_owned),
     };
     let parsed = send_and_validate(http, recovery, &request, true, secrets)?;
     LicensedProducts::parse(&parsed.json).map_err(|e| {
-        // The address of this one request carries the resource key, so the
-        // message is cleaned before it becomes an error.
+        // The address of this one request carries both keys, so the message
+        // names the endpoint without its query string and is then cleaned
+        // before it becomes an error.
         redact_secrets(
             cloud_error(
                 0,
                 None,
-                format!("failed to parse accessible properties from '{url}': {e}"),
+                format!(
+                    "failed to parse accessible properties from '{}': {e}",
+                    endpoints.properties
+                ),
             ),
             secrets,
         )
     })
+}
+
+/// Percent-encode a query string value, leaving only the characters that
+/// never need it (letters, digits, `-`, `.`, `_` and `~`).
+fn encode_query_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+/// The URL without its query string, for messages. The discovery requests
+/// carry the resource and license keys in the query string, and neither
+/// belongs in an error message or a log.
+pub(crate) fn url_without_query(url: &str) -> &str {
+    url.split_once('?').map_or(url, |(endpoint, _)| endpoint)
 }
 
 /// Build the static property metadata the engine always exposes: the raw JSON
