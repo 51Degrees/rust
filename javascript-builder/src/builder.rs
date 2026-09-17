@@ -137,8 +137,11 @@ impl JavaScriptBuilderElementBuilder {
     /// JavaScript.
     ///
     /// The name must be a valid JavaScript identifier (it must match
-    /// `[a-zA-Z_$][0-9a-zA-Z_$]*` in full). An invalid name is a configuration
-    /// error.
+    /// `[a-zA-Z_$][0-9a-zA-Z_$]*` in full) and must not be a reserved word,
+    /// `Infinity`, `NaN`, `undefined` or `fiftyoneDegreesManager`. An invalid
+    /// name is a configuration error. The same rule applies to a name
+    /// requested through the `query.fod-js-object-name` evidence, where an
+    /// invalid name is ignored with a warning logged.
     pub fn set_object_name(mut self, object_name: impl Into<String>) -> Result<Self> {
         let object_name = object_name.into();
         if is_valid_object_name(&object_name) {
@@ -147,7 +150,7 @@ impl JavaScriptBuilderElementBuilder {
         } else {
             Err(Error::configuration(format!(
                 "The JavaScript object name '{object_name}' is not valid. It must \
-                 be a valid JavaScript identifier."
+                 be a valid JavaScript identifier that is not a reserved word."
             )))
         }
     }
@@ -191,18 +194,37 @@ impl Default for JavaScriptBuilderElementBuilder {
     }
 }
 
+/// Names the object cannot have. These are the reserved words of the language,
+/// including those reserved only in strict mode and the literals `null`,
+/// `true` and `false`, plus the three global values a top level `var` cannot
+/// replace, so the object would silently never be created, and the name of
+/// the constructor the script itself defines.
+#[rustfmt::skip]
+const RESERVED_WORDS: &[&str] = &[
+    "await", "break", "case", "catch", "class", "const", "continue", "debugger",
+    "default", "delete", "do", "else", "enum", "export", "extends", "false",
+    "finally", "for", "function", "if", "implements", "import", "in",
+    "instanceof", "interface", "let", "new", "null", "package", "private",
+    "protected", "public", "return", "static", "super", "switch", "this",
+    "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield",
+    "Infinity", "NaN", "undefined", "fiftyoneDegreesManager",
+];
+
 /// True if the string is a valid JavaScript identifier per the
-/// `[a-zA-Z_$][0-9a-zA-Z_$]*` rule.
+/// `[a-zA-Z_$][0-9a-zA-Z_$]*` rule and is not one of [`RESERVED_WORDS`].
 ///
-/// The first character must be a letter, underscore or dollar sign; the rest may
-/// also be digits. An empty string is invalid.
-fn is_valid_object_name(name: &str) -> bool {
+/// The first character must be a letter, underscore or dollar sign, and the
+/// rest may also be digits. An empty string is invalid. The name is written
+/// into the script as a variable name, a session storage key and a property
+/// name without any escaping, so a name outside this rule would break the
+/// script or change what it does.
+pub(crate) fn is_valid_object_name(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
         Some(first) if is_identifier_start(first) => {}
         _ => return false,
     }
-    chars.all(is_identifier_part)
+    chars.all(is_identifier_part) && !RESERVED_WORDS.contains(&name)
 }
 
 /// True if the character may start a JavaScript identifier (letter, `_` or `$`).

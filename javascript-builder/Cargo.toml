@@ -53,6 +53,9 @@ percent-encoding = "2.3.2"
 # user prompt section. default-features = false keeps reqwest out, so this crate
 # still compiles for wasm32-wasip1.
 fiftyone-cloud-request-engine = { version = "4.5.2", path = "../cloud-request-engine", default-features = false }
+# Logs a warning when a requested object name is ignored. The log facade does
+# nothing until the application installs a logger.
+log = "0.4"
 
 # oxc is a large, native-oriented toolchain. Restrict it to non-wasm targets so
 # this crate, and the web crates that build on it, compile for wasm32-wasip1. The
