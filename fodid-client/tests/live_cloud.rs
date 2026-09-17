@@ -172,7 +172,11 @@ fn get(url: &str, what: &str) -> String {
             let body = response.into_string().unwrap_or_default();
             panic!("{what} answered {status}: {body}");
         }
-        Err(e) => panic!("the {what} request failed: {e}"),
+        // A transport failure is reported by its kind alone. The error's own
+        // Display writes the URL it was given, and that URL carries the
+        // resource key, so formatting the error whole would put the key in
+        // the panic message and so into the job log.
+        Err(e) => panic!("the {what} request failed: {}", e.kind()),
     }
 }
 
