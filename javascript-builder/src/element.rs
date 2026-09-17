@@ -65,6 +65,45 @@ const URL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'.')
     .remove(b'*');
 
+/// The longest session id the script is given, in bytes.
+const MAX_SESSION_ID_LENGTH: usize = 64;
+
+/// The session id to render, which is the one given when it is safe and an
+/// empty string when it is not.
+///
+/// The template writes the session id inside quotes without any escaping, so
+/// a value holding a quote, a backslash or a line break would end the string
+/// early and break the script or change what it does. The
+/// [javascript-builder specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/pipeline-elements/javascript-builder.md)
+/// says a session id that is not 1 to 64 ASCII letters, digits and hyphens is
+/// rendered as an empty string.
+fn safe_session_id(session_id: String) -> String {
+    let safe = !session_id.is_empty()
+        && session_id.len() <= MAX_SESSION_ID_LENGTH
+        && session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+    if safe {
+        session_id
+    } else {
+        String::new()
+    }
+}
+
+/// The sequence to render, which is the one given when it is positive and `1`
+/// when it is not.
+///
+/// The template writes the sequence as bare code, and the script counts its
+/// own requests up from it, so a value of zero or less is not a sequence the
+/// script can use. The specification says such a value is rendered as `1`.
+fn safe_sequence(sequence: i32) -> i32 {
+    if sequence > 0 {
+        sequence
+    } else {
+        1
+    }
+}
+
 /// Generates a JavaScript include to be run on the client device.
 ///
 /// The element renders the bundled Mustache template with the JSON payload
@@ -91,6 +130,11 @@ const URL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 /// - **parameters**: every `query.*` evidence entry except the session id and
 ///   sequence, with the prefix stripped and the key and value URL-encoded,
 ///   serialized as a JSON object.
+/// - **session id**: the session id from the flow data when it is 1 to 64
+///   ASCII letters, digits and hyphens, else an empty string, because the
+///   template writes it inside quotes without any escaping.
+/// - **sequence**: the sequence from the flow data when it is a positive 32
+///   bit integer, else `1`, because the template writes it as bare code.
 /// - **has delayed properties**: true when the JSON payload contains the
 ///   `delayexecution` marker.
 /// - **supports promises**: true when the device-detection `Promise` property is
@@ -265,6 +309,20 @@ impl JavaScriptBuilderElement {
         Some(format!("{protocol}://{host}{normalised_endpoint}"))
     }
 
+    /// The session id the script is given, which is the value read from the
+    /// flow data when it is safe to render and an empty string otherwise.
+    ///
+    /// See [`safe_session_id`] for what safe means here.
+    fn rendered_session_id(data: &FlowData) -> String {
+        safe_session_id(Self::session_id(data))
+    }
+
+    /// The sequence the script is given, which is the value read from the flow
+    /// data when it is a positive number and `1` otherwise.
+    fn rendered_sequence(data: &FlowData) -> i32 {
+        safe_sequence(Self::sequence(data))
+    }
+
     /// The session id for the template.
     ///
     /// The specification takes it from the sequence element's data, because
@@ -414,8 +472,8 @@ impl JavaScriptBuilderElement {
 
         let json_object = Self::json_object(data);
         let parameters = Self::build_parameters(data);
-        let session_id = Self::session_id(data);
-        let sequence = Self::sequence(data);
+        let session_id = Self::rendered_session_id(data);
+        let sequence = Self::rendered_sequence(data);
 
         let url = Self::build_url(&protocol, &host, &self.endpoint);
         let update_enabled = url.as_ref().is_some_and(|u| !u.is_empty());
@@ -509,6 +567,60 @@ mod tests {
             .build()
             .expect("pipeline builds");
         pipeline.create_flow_data_with(builder.build())
+    }
+
+    #[test]
+    fn safe_session_id_keeps_a_safe_id() {
+        for id in ["abc-123", "a", &"a".repeat(64), "0", "A-0-z"] {
+            assert_eq!(safe_session_id(id.to_owned()), id, "{id:?} was emptied");
+        }
+    }
+
+    #[test]
+    fn safe_session_id_empties_anything_else() {
+        for id in [
+            "",
+            "a\"b",
+            "a\\b",
+            "</script>",
+            "a b",
+            "ab\n",
+            "caf\u{e9}",
+            &"a".repeat(65),
+        ] {
+            assert_eq!(safe_session_id(id.to_owned()), "", "{id:?} was kept");
+        }
+    }
+
+    #[test]
+    fn safe_sequence_keeps_a_positive_number() {
+        for sequence in [1, 2, i32::MAX] {
+            assert_eq!(safe_sequence(sequence), sequence);
+        }
+    }
+
+    #[test]
+    fn safe_sequence_replaces_anything_else_with_one() {
+        for sequence in [0, -1, i32::MIN] {
+            assert_eq!(safe_sequence(sequence), 1);
+        }
+    }
+
+    #[test]
+    fn rendered_session_id_and_sequence_come_from_evidence() {
+        let data = flow_data_with(&[("query.session-id", "abc-123"), ("query.sequence", "7")]);
+        assert_eq!(
+            JavaScriptBuilderElement::rendered_session_id(&data),
+            "abc-123"
+        );
+        assert_eq!(JavaScriptBuilderElement::rendered_sequence(&data), 7);
+    }
+
+    #[test]
+    fn rendered_session_id_and_sequence_are_safe() {
+        let data = flow_data_with(&[("query.session-id", "a\"b"), ("query.sequence", "-1")]);
+        assert_eq!(JavaScriptBuilderElement::rendered_session_id(&data), "");
+        assert_eq!(JavaScriptBuilderElement::rendered_sequence(&data), 1);
     }
 
     #[test]
