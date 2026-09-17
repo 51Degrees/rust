@@ -30,6 +30,12 @@ reqwest-client = ["fiftyone-cloud-request-engine/reqwest-client"]
 # which needs the OWID creator types fodid exposes under its creator
 # feature.
 fodid = { version = "4.5.3", path = "../fodid", features = ["creator"] }
+# Depend on this crate itself with reqwest-client enabled, so its own tests
+# get the built-in cloud HTTP transport. The library keeps reqwest-client off
+# by default, which is what lets a wasm32-wasip1 consumer supply its own
+# client, and the live test needs a transport to reach the cloud. This is the
+# same arrangement the device-detection and ip-intelligence crates use.
+fiftyone-fodid-cloud = { path = ".", features = ["reqwest-client"] }
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the
