@@ -46,14 +46,20 @@ const KEY_OF_NO_PARTICULAR_SHAPE: &str = "totally-ordinary-looking-value-1234";
 const HEADER_LENGTH: usize = 5;
 const MATCH_KEY_LENGTH: usize = 32;
 
+/// The flags byte of the payload below. Payload version 0, identifier type
+/// probabilistic and usage bit 0 set, which is the smallest flags byte the
+/// specification calls a 51Did. A byte of all zeros states no usage at all
+/// and is not one.
+const FLAGS: u8 = 0b0000_0001;
+
 /// A 51Did that parses, so a verify or redeem call reaches the transport
 /// rather than being refused before the call is made. Nothing here depends on
 /// the signature, only on the value being a 51Did at all.
 fn a_51did() -> String {
     let creator = Creator::new("51degrees.com", Crypto::new()).expect("create a creator");
-    let owid = creator
-        .create(vec![0u8; HEADER_LENGTH + MATCH_KEY_LENGTH])
-        .expect("sign the envelope");
+    let mut payload = vec![0u8; HEADER_LENGTH + MATCH_KEY_LENGTH];
+    payload[0] = FLAGS;
+    let owid = creator.create(payload).expect("sign the envelope");
     FodId::from_owid(owid)
         .expect("a 51Did")
         .as_base64()
