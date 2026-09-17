@@ -871,7 +871,10 @@ mod tests {
             let crypto = Crypto::new();
             let public_pem = crypto.public_key_pem().expect("export public key");
             let creator = Creator::new("51degrees.com", crypto).expect("create creator");
-            let payload = vec![0u8; HEADER_LENGTH + MATCH_KEY_LENGTH];
+            // A non-marketing probabilistic identifier. The flags byte sets
+            // usage bit 0, because a payload with no usage bit is refused.
+            let mut payload = vec![0u8; HEADER_LENGTH + MATCH_KEY_LENGTH];
+            payload[0] = 0b0000_0001;
             let owid = creator.create(payload).expect("sign the envelope");
             let fod_id = FodId::from_owid(owid).expect("a 51Did");
             Self { public_pem, fod_id }

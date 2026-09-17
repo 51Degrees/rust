@@ -185,7 +185,7 @@ fn unpacks_global_identifier_raw_and_parsed() {
     // FLAGS is 0b0000_0001, so the usage bits grant non-marketing only,
     // bit 3 is clear, and bits 6-7 leave the type probabilistic.
     assert_eq!(fod_id.usage(), Usage::NonMarketing);
-    assert!(!fod_id.usage_from_consent());
+    assert!(!fod_id.usage_is_indirect());
     assert_eq!(fod_id.id_type(), IdType::Probabilistic);
     assert_eq!(fod_id.license_id(), LICENSE_ID);
     assert_eq!(fod_id.domain(), TEST_DOMAIN);

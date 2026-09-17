@@ -71,7 +71,7 @@ runtime, so a program that uses it awaits the client from inside one.
 ```rust,no_run
 use std::sync::Arc;
 use fodid::FodId;
-use fodid_client::{ContextOutcome, DidClient, DidHttpClient, FactorOutcome};
+use fodid_client::{ContextOutcome, DidClient, DidHttpClient, Factor, FactorOutcome};
 
 async fn redeem(
     transport: Arc<dyn DidHttpClient>,
@@ -110,6 +110,15 @@ async fn redeem(
                         FactorOutcome::Misconfigured => {}
                     }
                 }
+            }
+            // The operating system and the browser each come as a name and
+            // a version. A version mismatch beside a verified name is an
+            // upgrade, whilst a mismatched name is a different browser.
+            if outcome.factor(Factor::BrowserName) == Some(FactorOutcome::Verified)
+                && outcome.factor(Factor::BrowserVersion)
+                    == Some(FactorOutcome::Mismatch)
+            {
+                println!("the same browser, upgraded since creation");
             }
         }
         ContextOutcome::Misconfigured => {

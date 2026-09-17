@@ -116,11 +116,82 @@ impl ContextOutcome {
     }
 }
 
+/// One creator context factor, named as the cloud names it in the
+/// `factors` object of a redeem answer.
+///
+/// The operating system and the browser are each reported as a name and a
+/// version. A version mismatch beside a verified name means an upgrade,
+/// whilst a mismatched name means a different operating system or browser.
+/// Cloud releases before 4.4.38 reported a single `browser` factor instead
+/// of those four, and that name is not one of these values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Factor {
+    /// The TLS handshake and HTTP/2 settings fingerprints of the
+    /// connection, `transport`.
+    Transport,
+    /// The device hardware profile, `device`.
+    Device,
+    /// The network prefix of the public address the browser claims
+    /// through forwarding headers, `browserip`.
+    BrowserIp,
+    /// The network prefix of the address the connection arrived from,
+    /// `connectionip`.
+    ConnectionIp,
+    /// The autonomous system number, being the number of the network
+    /// operator, of the connection address, `asn`.
+    Asn,
+    /// The operating system name, `platformname`.
+    PlatformName,
+    /// The operating system version, `platformversion`.
+    PlatformVersion,
+    /// The browser name, `browsername`.
+    BrowserName,
+    /// The browser version, `browserversion`.
+    BrowserVersion,
+}
+
+impl Factor {
+    /// Every factor, in the order the cloud documents them.
+    pub const ALL: [Factor; 9] = [
+        Factor::Transport,
+        Factor::Device,
+        Factor::BrowserIp,
+        Factor::ConnectionIp,
+        Factor::Asn,
+        Factor::PlatformName,
+        Factor::PlatformVersion,
+        Factor::BrowserName,
+        Factor::BrowserVersion,
+    ];
+
+    /// The key the cloud uses for this factor in the `factors` object.
+    pub fn as_cloud(self) -> &'static str {
+        match self {
+            Self::Transport => "transport",
+            Self::Device => "device",
+            Self::BrowserIp => "browserip",
+            Self::ConnectionIp => "connectionip",
+            Self::Asn => "asn",
+            Self::PlatformName => "platformname",
+            Self::PlatformVersion => "platformversion",
+            Self::BrowserName => "browsername",
+            Self::BrowserVersion => "browserversion",
+        }
+    }
+
+    /// The factor the cloud key names, or `None` for a key this client
+    /// does not know, including the `browser` key earlier releases sent.
+    pub fn from_cloud(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.as_cloud() == value)
+    }
+}
+
 /// The outcome of one creator context factor, reported when the context is
 /// [`ContextOutcome::Mismatch`] or [`ContextOutcome::Misconfigured`].
 ///
-/// The factor names are `transport`, `device`, `browserip`, `connectionip`,
-/// `asn` and `browser`.
+/// The factors are named by [`Factor`], being `transport`, `device`,
+/// `browserip`, `connectionip`, `asn`, `platformname`, `platformversion`,
+/// `browsername` and `browserversion`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FactorOutcome {
     /// The factor matched the verifying connection.

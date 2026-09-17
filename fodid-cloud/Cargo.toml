@@ -1,6 +1,6 @@
 [package]
 name = "fiftyone-fodid-cloud"
-version = "4.5.3"
+version = "4.6.0"
 description = "Cloud engine that unpacks the 51Degrees identifier (51Did / FODid) block from the cloud JSON response into typed data."
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,7 @@ fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
 # the cloud path never uses, so this crate builds for wasm32-wasip1.
 fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines", default-features = false }
 fiftyone-cloud-request-engine = { version = "4.5.2", path = "../cloud-request-engine", default-features = false }
-fodid = { version = "4.5.3", path = "../fodid" }
+fodid = { version = "4.6.0", path = "../fodid" }
 serde_json.workspace = true
 once_cell.workspace = true
 
@@ -29,7 +29,19 @@ reqwest-client = ["fiftyone-cloud-request-engine/reqwest-client"]
 # The tests create a real signed 51Did envelope to stand in for the cloud,
 # which needs the OWID creator types fodid exposes under its creator
 # feature.
-fodid = { version = "4.5.3", path = "../fodid", features = ["creator"] }
+fodid = { version = "4.6.0", path = "../fodid", features = ["creator"] }
+
+# Depend on this crate itself with reqwest-client enabled, so its own tests get
+# the built-in cloud HTTP transport. The library keeps reqwest-client off by
+# default, which is what lets a wasm32-wasip1 consumer supply its own client,
+# and the live test needs a transport to reach the cloud. This is the same
+# arrangement the device-detection and ip-intelligence crates use, narrowed to
+# targets that are not wasm. A dev-dependency's features are chosen whatever
+# --no-default-features says, and reqwest brings a tokio that refuses to
+# compile for wasm32-wasip1. The live test is #[ignore]d and the wasm job does
+# not pass --include-ignored, so nothing is lost on wasm.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+fiftyone-fodid-cloud = { path = ".", features = ["reqwest-client"] }
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the
