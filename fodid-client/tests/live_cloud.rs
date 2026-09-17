@@ -140,6 +140,14 @@ fn non_blank_variable(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// What a redacted secret is replaced with, so a failure message says
+/// plainly that something was taken out rather than looking truncated.
+const REDACTED: &str = "[redacted]";
+
+/// The shortest run after the `AQ` that marks a resource key, chosen so
+/// ordinary words starting `AQ` are left alone.
+const LEAST_KEY_TAIL: usize = 12;
+
 /// The endpoint the test and the client both use.
 fn endpoint() -> String {
     non_blank_variable("FOD_CLOUD_API_URL").unwrap_or_else(|| DEFAULT_ENDPOINT.to_owned())
@@ -160,17 +168,83 @@ fn encode(value: &str) -> String {
     encoded
 }
 
+/// A client error as text, redacted.
+///
+/// The client builds the verify and key URLs with the resource key as a
+/// path segment, and its transport errors carry the URL they were given,
+/// whilst an unexpected status carries the service's body, which names the
+/// key. So none of these errors can be reported as they stand.
+fn redacted(error: &fodid_client::Error) -> String {
+    redact(&format!("{error:?}"))
+}
+
+/// Replace every secret in the text with [`REDACTED`].
+///
+/// The cloud writes the resource key into its own error text, so a failure
+/// body carries the key even though the URL is never printed. Anything
+/// this test takes from the service goes through here first.
+///
+/// Two passes run. The first replaces the values this process actually
+/// holds, both as they are and percent-encoded as the URL carries them,
+/// which cannot miss whatever shape the key has. The second replaces
+/// anything else shaped like a resource key, so a key this process never
+/// held, for example one named in a message about another key, does not
+/// reach the log either.
+fn redact(text: &str) -> String {
+    redact_secrets(text, [resource_key(), licence_key()].into_iter().flatten())
+}
+
+/// The two passes, with the held secrets given rather than read, so the
+/// first pass can be tested without touching the process environment.
+fn redact_secrets(text: &str, secrets: impl IntoIterator<Item = String>) -> String {
+    let mut out = text.to_owned();
+    for secret in secrets {
+        out = out.replace(&secret, REDACTED);
+        let encoded = encode(&secret);
+        if encoded != secret {
+            out = out.replace(&encoded, REDACTED);
+        }
+    }
+    redact_key_shaped(&out)
+}
+
+/// Replace every run that starts `AQ` and carries at least
+/// [`LEAST_KEY_TAIL`] more characters of the base64 url alphabet, which is
+/// the shape every 51Degrees resource key has.
+fn redact_key_shaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("AQ") {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + "AQ".len()..];
+        let length = tail
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .unwrap_or(tail.len());
+        if length >= LEAST_KEY_TAIL {
+            out.push_str(REDACTED);
+            rest = &tail[length..];
+        } else {
+            out.push_str("AQ");
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// GET a URL and return the body, failing with the status and the body when
 /// the service answers anything other than 200. The URL is never printed,
-/// because it carries the resource key.
+/// because it carries the resource key, and the body is put through
+/// [`redact`] first, because the service writes the key into its own error
+/// text and so the body carries it too.
 fn get(url: &str, what: &str) -> String {
     match ureq::get(url).call() {
         Ok(response) => response
             .into_string()
-            .unwrap_or_else(|e| panic!("reading the {what} response: {e}")),
+            .unwrap_or_else(|e| panic!("reading the {what} response: {}", redact(&e.to_string()))),
         Err(ureq::Error::Status(status, response)) => {
             let body = response.into_string().unwrap_or_default();
-            panic!("{what} answered {status}: {body}");
+            panic!("{what} answered {status}: {}", redact(&body));
         }
         // A transport failure is reported by its kind alone. The error's own
         // Display writes the URL it was given, and that URL carries the
@@ -213,8 +287,9 @@ fn first_identifier(fodid: &serde_json::Value) -> Option<(String, String)> {
 }
 
 /// Every null reason the `fodid` member carries, joined, so a skip says why.
+/// The text is the service's own, so it is redacted like any other.
 fn null_reasons(fodid: &serde_json::Value) -> String {
-    fodid
+    let joined = fodid
         .as_object()
         .map(|members| {
             members
@@ -224,7 +299,8 @@ fn null_reasons(fodid: &serde_json::Value) -> String {
                 .collect::<Vec<_>>()
                 .join(" ")
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    redact(&joined)
 }
 
 /// Seal a creator context result for the identifier, standing in for the
@@ -244,6 +320,139 @@ fn verify_context(resource_key: &str, encoded_51did: &str) -> Option<String> {
         .get("result")
         .and_then(|result| result.as_str())
         .map(str::to_owned)
+}
+
+/// A resource key that is not a real one, used wherever a test needs a
+/// key-shaped value. It is deliberately not a key any service accepts.
+const FAKE_RESOURCE_KEY: &str = "AQ-NOT-A-REAL-KEY-000000";
+
+/// The cloud writes the key it was given into its own error text, so a
+/// failure body carries it. This is the shape of that text, with the
+/// fake key in place of a real one.
+fn error_body_naming(key: &str) -> String {
+    format!("{{ \"errors\":[\"\\u0027{key}\\u0027 could not be read as a valid resource key.\"]}}")
+}
+
+/// Answer one request on loopback with 400 and the given body, so a
+/// test can make [`get`] fail without a network or a real key.
+fn serve_once(body: String) -> (String, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let url = format!(
+        "http://{}/answer",
+        listener.local_addr().expect("the bound address")
+    );
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("one connection");
+        let mut buffer = [0u8; 1024];
+        let _ = stream.read(&mut buffer);
+        let response = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
+    });
+    (url, handle)
+}
+
+/// The fix, proved where it matters. The call really fails, on the status
+/// path that used to print the body as it stands, and the panic message
+/// carries no key. The server is on loopback and the key is a fake one, so
+/// this needs no network and no secret and runs in an ordinary test pass.
+#[test]
+fn a_failing_call_panics_without_naming_the_key() {
+    let body = error_body_naming(FAKE_RESOURCE_KEY);
+    assert!(
+        body.contains(FAKE_RESOURCE_KEY),
+        "the service body names the key, which is the leak being closed"
+    );
+
+    let (url, handle) = serve_once(body);
+    let failure = std::panic::catch_unwind(|| get(&url, "test endpoint"))
+        .expect_err("a 400 makes the call fail");
+    let _ = handle.join();
+
+    let message = failure
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| failure.downcast_ref::<&str>().copied())
+        .expect("the panic carries a message");
+    assert!(
+        !message.contains(FAKE_RESOURCE_KEY),
+        "the panic message names no key, and said: {message}"
+    );
+    assert!(
+        message.contains("400") && message.contains("test endpoint"),
+        "the panic still says what failed and how, and said: {message}"
+    );
+    assert!(
+        message.contains("could not be read as a valid resource key"),
+        "the reason the service gave survives, and said: {message}"
+    );
+}
+
+/// The first pass, on the values this process holds. The secrets are given
+/// rather than read, so nothing touches the process environment.
+#[test]
+fn a_held_secret_is_replaced_whatever_shape_it_has() {
+    let secret = "not-key-shaped-at-all";
+    let text = format!(
+        "the service said '{secret}' and the url carried {}",
+        encode(secret)
+    );
+
+    let redacted = redact_secrets(&text, [secret.to_owned()]);
+
+    assert!(
+        !redacted.contains(secret),
+        "the held value is gone, and said: {redacted}"
+    );
+    assert!(
+        !redacted.contains(&encode(secret)),
+        "the percent-encoded form is gone too, and said: {redacted}"
+    );
+    assert!(
+        redacted.contains("the service said"),
+        "the rest of the message survives, and said: {redacted}"
+    );
+}
+
+/// A client error carries the URL it was given, and the verify and key
+/// URLs put the resource key in the path, so the error has to be
+/// redacted before it is reported.
+#[test]
+fn a_client_error_is_reported_without_its_url() {
+    let error = fodid_client::Error::Transport(format!(
+        "failed to send request to 'https://cloud.51degrees.com/api/v4/id/key/{FAKE_RESOURCE_KEY}': timed out"
+    ));
+
+    let reported = redacted(&error);
+
+    assert!(
+        !reported.contains(FAKE_RESOURCE_KEY),
+        "the reported error names no key, and said: {reported}"
+    );
+    assert!(
+        reported.contains("timed out"),
+        "what went wrong still survives, and said: {reported}"
+    );
+}
+
+/// The second pass, on a key this process never held, and the words
+/// around it that must be left alone.
+#[test]
+fn a_key_shaped_run_is_replaced_and_ordinary_words_are_not() {
+    let redacted = redact_secrets(
+        &format!("AQ and AQUA and {FAKE_RESOURCE_KEY} and AQ12345678901."),
+        [],
+    );
+
+    assert_eq!(
+        "AQ and AQUA and [redacted] and AQ12345678901.", redacted,
+        "only the run long enough to be a key is replaced"
+    );
 }
 
 #[tokio::test]
@@ -308,7 +517,7 @@ async fn creates_verifies_and_redeems_a_51did_against_the_live_cloud() {
         client
             .verify(&fod_id)
             .await
-            .expect("the verify call succeeds"),
+            .unwrap_or_else(|e| panic!("the verify call succeeds: {}", redacted(&e))),
         "the cloud verifies the identifier it just created"
     );
 
@@ -317,7 +526,9 @@ async fn creates_verifies_and_redeems_a_51did_against_the_live_cloud() {
         client
             .verify_signature_detailed(&fod_id)
             .await
-            .expect("the offline signature check succeeds"),
+            .unwrap_or_else(|e| {
+                panic!("the offline signature check succeeds: {}", redacted(&e))
+            }),
         SignatureCheck::Verified,
         "the signature checks against the published key for its date"
     );
@@ -336,14 +547,14 @@ async fn creates_verifies_and_redeems_a_51did_against_the_live_cloud() {
     let outcome = client
         .redeem_encoded(&encoded, &sealed, Some(CHALLENGE))
         .await
-        .expect("the redeem call succeeds");
+        .unwrap_or_else(|e| panic!("the redeem call succeeds: {}", redacted(&e)));
 
     if licence.is_none() {
         assert_eq!(
             outcome.context(),
             ContextOutcome::Unreadable,
             "without a licence key the sealed result cannot be read: {}",
-            outcome.body()
+            redact(outcome.body())
         );
         eprintln!("no licence key, so the redemption correctly answered unreadable.");
         return;
@@ -365,27 +576,30 @@ async fn creates_verifies_and_redeems_a_51did_against_the_live_cloud() {
         outcome.signature(),
         SignatureOutcome::Verified,
         "the redemption reports the signature as verified: {}",
-        outcome.body()
+        redact(outcome.body())
     );
 
     // The identifier was created with a User-Agent and a client IP that are
     // not this machine's, so several factors are expected to differ. What
     // matters here is that every factor is named and reported.
-    let factors = outcome
-        .factors()
-        .unwrap_or_else(|| panic!("the redemption names the factors: {}", outcome.body()));
+    let factors = outcome.factors().unwrap_or_else(|| {
+        panic!(
+            "the redemption names the factors: {}",
+            redact(outcome.body())
+        )
+    });
     for factor in FACTORS {
         assert!(
             factors.contains_key(factor),
             "the '{factor}' factor is reported: {}",
-            outcome.body()
+            redact(outcome.body())
         );
     }
     assert_eq!(
         factors.len(),
         FACTORS.len(),
         "exactly the nine known factors are reported: {}",
-        outcome.body()
+        redact(outcome.body())
     );
     eprintln!(
         "redeemed: signature {:?}, context {:?}, {} factors.",
