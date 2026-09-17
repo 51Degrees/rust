@@ -13,9 +13,11 @@ name: Nightly Pipeline
 # somebody with write access or was raised by somebody with write access.
 #
 # pull-request.yml still runs on every push and pull request and remains the
-# primary gate, carrying the wasm target, the examples check and the template
-# drift check as well. This runs the core gate again, being format, build,
-# test, lint and documentation on all four platforms, against what main will
+# primary gate, carrying the native build on all four platforms and the wasm
+# target. The examples check is examples.yml and the template drift check is
+# mustache-drift.yml, each its own workflow and each running on every pull
+# request as well. This runs the core gate again, being format, build, test,
+# lint and documentation on all four platforms, against what main will
 # actually contain once the pull request is merged.
 
 on:
