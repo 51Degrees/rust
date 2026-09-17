@@ -354,10 +354,12 @@ impl FodId {
     ///
     /// Returns [`Error::Parse`] carrying the OWID status if the string is not
     /// a valid OWID envelope (for example
-    /// [`ParseStatus::InvalidBase64`](crate::ParseStatus::InvalidBase64)), [`Error::PayloadTooShort`] if
-    /// the payload cannot hold the 51Did header, or
-    /// [`Error::InvalidTypePayloadLength`] if the payload is shorter than
-    /// the minimum for its identifier type.
+    /// [`ParseStatus::InvalidBase64`](crate::ParseStatus::InvalidBase64)),
+    /// [`Error::PayloadTooShort`] if the payload cannot hold the 51Did
+    /// header, [`Error::UnsupportedPayloadVersion`] if the flags byte names a
+    /// payload version other than 0, [`Error::NoUsage`] if the flags byte sets
+    /// no usage bit, or [`Error::InvalidTypePayloadLength`] if the payload is
+    /// shorter than the minimum for its identifier type.
     /// Either base64 alphabet is accepted, standard or URL-safe, with or
     /// without padding, because a 51Did travels in URLs and comes back in
     /// the alphabet whoever sent it chose. Leading and trailing whitespace
@@ -376,8 +378,11 @@ impl FodId {
     ///
     /// Returns [`Error::Parse`] carrying the OWID status if the bytes are not
     /// a valid OWID envelope, [`Error::PayloadTooShort`] if the payload cannot
-    /// hold the 51Did header, or [`Error::InvalidTypePayloadLength`] if the
-    /// payload is shorter than the minimum for its identifier type.
+    /// hold the 51Did header, [`Error::UnsupportedPayloadVersion`] if the
+    /// flags byte names a payload version other than 0, [`Error::NoUsage`] if
+    /// the flags byte sets no usage bit, or
+    /// [`Error::InvalidTypePayloadLength`] if the payload is shorter than the
+    /// minimum for its identifier type.
     pub fn from_byte_array(buffer: &[u8]) -> Result<Self> {
         Self::from_owid(Owid::from_byte_array(buffer)?)
     }
@@ -485,6 +490,9 @@ impl FodId {
     /// The usage carried in bits 0-2 of the flags byte, as the highest usage
     /// granted. See [`Usage`] for why it is read that way.
     pub fn usage(&self) -> Usage {
+        // from_owid is the only place a FodId is built, every reading route
+        // goes through it, and it refuses a payload with no usage bit set, so
+        // the flags held here always name a usage.
         Usage::from_flags(self.flags).expect("from_owid refuses a payload with no usage bit set")
     }
 
