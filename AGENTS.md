@@ -111,6 +111,20 @@ manifest's `include`, so `cargo publish` packages it.
   builds and tests `examples/` against the just-released crates.io packages.
 - `utm-link-lint.yml` — see UTM conventions below. Runs on every PR.
 - `mustache-drift.yml` — guards the generated JavaScript resource template.
+  Push and pull request builds compare against a pinned upstream commit
+  rather than the branch, because the canonical template is being changed by
+  the create last programme in the cloud service, so comparing against the
+  branch would fail work here that has nothing to do with that programme.
+  The weekly schedule and a manual run still compare against the branch, so
+  a real drift is still reported. 51Degrees/rust#52 lifts the pin, by moving
+  the bundled asset and `UPSTREAM_PINNED_REF` to the same commit in one pull
+  request.
+- `nightly-performance.yml` — nightly (and on-demand) on-premise throughput
+  run that feeds the documentation performance graphs. Its Rust adapter lives
+  in this repo at `ci/run-performance-tests.ps1`; only the shared comparison
+  step (`compare-performance.ps1`) comes from common-ci. See
+  [ci/missing-ci-scripts.md](ci/missing-ci-scripts.md) for how this relates to
+  the org-standard reusable-workflow contract and the planned direction.
 
 ## Conventions and gotchas
 
