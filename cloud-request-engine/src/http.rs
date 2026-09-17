@@ -40,6 +40,9 @@
 #[cfg(feature = "reqwest-client")]
 use std::time::Duration;
 
+#[cfg(feature = "reqwest-client")]
+use fiftyone_pipeline_core::redact::redact;
+
 /// The outcome of a completed HTTP request to the cloud service.
 ///
 /// "Completed" means a response was received, regardless of its status code.
@@ -83,10 +86,13 @@ pub enum HttpMethod {
 pub struct CloudHttpRequest {
     /// The HTTP method.
     pub method: HttpMethod,
-    /// The absolute URL to request.
+    /// The absolute URL to request. On a discovery request this carries the
+    /// resource key as a query parameter, so it must not be copied into an
+    /// error message as it stands.
     pub url: String,
     /// The url-encoded form fields to send as the POST body. Empty for GET
-    /// requests. The transport is responsible for url-encoding these.
+    /// requests. The transport is responsible for url-encoding these. The
+    /// `resource` and `license` fields are credentials.
     pub form: Vec<(String, String)>,
     /// The value to set the `Origin` header to, if a cloud-request origin is
     /// configured. `None` leaves the header unset.
@@ -102,6 +108,13 @@ pub trait CloudHttpClient: Send + Sync {
     /// Send `request` and return the [`CloudHttpResponse`] for any response that
     /// was received. Return `Err` with a human-readable message only when the
     /// request did not complete (for example a connection failure or timeout).
+    ///
+    /// The message travels into an error that anything may print, and
+    /// [`CloudHttpRequest::url`] carries the resource key on a discovery
+    /// request, so an implementation that quotes the address should pass the
+    /// message through [`fiftyone_pipeline_core::redact::redact`] first. The
+    /// engine cleans the message again on the way out, with the credentials it
+    /// holds, so an implementation that forgets is still covered.
     fn send(&self, request: &CloudHttpRequest) -> Result<CloudHttpResponse, String>;
 }
 
@@ -143,9 +156,12 @@ impl CloudHttpClient for ReqwestClient {
             builder = builder.header(super::constants::ORIGIN_HEADER_NAME, origin);
         }
 
-        let response = builder
-            .send()
-            .map_err(|e| format!("failed to send request to '{}': {e}", request.url))?;
+        // The address carries the resource key on the discovery request, and
+        // reqwest puts the address into its own message too, so the whole line
+        // is cleaned rather than only the part this code wrote.
+        let response = builder.send().map_err(|e| {
+            redact(&format!("failed to send request to '{}': {e}", request.url)).into_owned()
+        })?;
 
         let status = response.status().as_u16();
         let retry_after = response
@@ -155,9 +171,13 @@ impl CloudHttpClient for ReqwestClient {
             .map(|s| s.to_owned());
         // Read the whole body. A body that cannot be read as text is treated as
         // a transport failure rather than an empty response.
-        let body = response
-            .text()
-            .map_err(|e| format!("failed to read response body from '{}': {e}", request.url))?;
+        let body = response.text().map_err(|e| {
+            redact(&format!(
+                "failed to read response body from '{}': {e}",
+                request.url
+            ))
+            .into_owned()
+        })?;
 
         Ok(CloudHttpResponse {
             status,

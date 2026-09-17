@@ -111,8 +111,8 @@ impl fmt::Display for MissingPropertyReason {
 /// It is deliberately a separate type from [`enum@Error`] so the dynamic property
 /// bag ([`crate::ElementData::get`]) can return the narrowest possible error
 /// without forcing callers to match on unrelated variants.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("{message}")]
+#[derive(Clone, PartialEq, Eq, Error)]
+#[error("{}", crate::redact::redact(.message))]
 pub struct NoValueError {
     /// The explanation of why no value is available.
     pub message: String,
@@ -179,7 +179,7 @@ impl FlowError {
 /// The enum is `#[non_exhaustive]` so engine crates and future revisions can
 /// add variants (for example a cloud-request error) without it being a breaking
 /// change for downstream `match` expressions.
-#[derive(Debug, Error)]
+#[derive(Error)]
 #[non_exhaustive]
 pub enum Error {
     /// A property that an element declares it can populate was requested but is
@@ -213,7 +213,7 @@ pub enum Error {
     /// execution of the pipeline.
     ///
     /// Thrown by pipelines, elements or their builders.
-    #[error("pipeline configuration error: {message}")]
+    #[error("pipeline configuration error: {}", crate::redact::redact(.message))]
     PipelineConfiguration {
         /// A description of what is wrong with the configuration.
         message: String,
@@ -233,7 +233,7 @@ pub enum Error {
     ///
     /// This is the "user has done something wrong" case from the
     /// [exception-handling specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/features/exception-handling.md#flow-data-and-derived-accessors).
-    #[error("flow data has not been processed yet: {message}")]
+    #[error("flow data has not been processed yet: {}", crate::redact::redact(.message))]
     NotProcessed {
         /// Detail of which operation required processing to have completed.
         message: String,
@@ -244,7 +244,7 @@ pub enum Error {
     /// Carries the HTTP status code, an optional retry-after hint in seconds
     /// parsed from the response, and the service or transport message. Raised
     /// by the cloud request engine.
-    #[error("cloud request failed with status {status_code}: {message}")]
+    #[error("cloud request failed with status {status_code}: {}", crate::redact::redact(.message))]
     CloudRequest {
         /// The HTTP status code returned by the cloud service. Zero when the
         /// request did not complete, for example a connection failure.
@@ -262,7 +262,7 @@ pub enum Error {
     /// Raised across the FFI boundary by the on-premise device detection and IP
     /// intelligence engines when a native call returns a non-success status
     /// code or sets a native exception.
-    #[error("native engine error ({status}): {message}")]
+    #[error("native engine error ({status}): {}", crate::redact::redact(.message))]
     Native {
         /// The native status code, as its name or numeric value.
         status: String,
@@ -271,11 +271,177 @@ pub enum Error {
     },
 }
 
+/// Debug is written by hand rather than derived so that the free-text fields
+/// go through [`crate::redact`] as well.
+///
+/// Display alone is not enough. `Result::unwrap` and `Result::expect` print the
+/// `Debug` of the error, and that is how a resource key reached a test log, so
+/// both of the ways an error can be turned into text have to be covered.
+impl fmt::Debug for NoValueError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NoValueError")
+            .field("message", &crate::redact::redact(&self.message))
+            .finish()
+    }
+}
+
+/// Debug is written by hand for the same reason as [`NoValueError`], being that
+/// `unwrap` and `expect` print `Debug` and a message can carry a credential.
+/// The shape matches what the derive would print, so nothing a reader relies on
+/// changes apart from the removed values.
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::PropertyMissing {
+                property,
+                element_data_key,
+                reason,
+            } => f
+                .debug_struct("PropertyMissing")
+                .field("property", property)
+                .field("element_data_key", element_data_key)
+                .field("reason", reason)
+                .finish(),
+            Error::NoValue(inner) => f.debug_tuple("NoValue").field(inner).finish(),
+            Error::PipelineConfiguration { message } => f
+                .debug_struct("PipelineConfiguration")
+                .field("message", &crate::redact::redact(message))
+                .finish(),
+            Error::Aggregate(errors) => f.debug_tuple("Aggregate").field(errors).finish(),
+            Error::NotProcessed { message } => f
+                .debug_struct("NotProcessed")
+                .field("message", &crate::redact::redact(message))
+                .finish(),
+            Error::CloudRequest {
+                status_code,
+                retry_after_seconds,
+                message,
+            } => f
+                .debug_struct("CloudRequest")
+                .field("status_code", status_code)
+                .field("retry_after_seconds", retry_after_seconds)
+                .field("message", &crate::redact::redact(message))
+                .finish(),
+            Error::Native { status, message } => f
+                .debug_struct("Native")
+                .field("status", status)
+                .field("message", &crate::redact::redact(message))
+                .finish(),
+        }
+    }
+}
+
 impl Error {
     /// Convenience constructor for a [`Error::PipelineConfiguration`] error.
     pub fn configuration(message: impl Into<String>) -> Self {
         Error::PipelineConfiguration {
             message: message.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The only key-shaped value written anywhere in this repository. It is not
+    /// a real resource key and the service refuses it.
+    const NOT_A_KEY: &str = "AQ-NOT-A-REAL-KEY-000000";
+
+    fn cloud_error_carrying_a_key() -> Error {
+        Error::CloudRequest {
+            status_code: 400,
+            retry_after_seconds: None,
+            message: format!(
+                "Cloud service at 'https://cloud.51degrees.com/api/v4/accessibleproperties\
+                 ?resource={NOT_A_KEY}' returned status code '400' with content \
+                 {{\"errors\":[\"'{NOT_A_KEY}' could not be read as a valid resource key.\"]}}"
+            ),
+        }
+    }
+
+    #[test]
+    fn displaying_a_cloud_error_removes_the_key_and_keeps_the_reason() {
+        let shown = cloud_error_carrying_a_key().to_string();
+        assert!(!shown.contains(NOT_A_KEY), "the key survived: {shown}");
+        assert!(shown.contains("status 400"), "the status was lost: {shown}");
+        assert!(
+            shown.contains("could not be read as a valid resource key"),
+            "the reason was lost: {shown}"
+        );
+        assert!(
+            shown.contains("accessibleproperties"),
+            "the failing operation was lost: {shown}"
+        );
+    }
+
+    #[test]
+    fn debugging_a_cloud_error_removes_the_key() {
+        // This is the path `unwrap` and `expect` take, which is how the key
+        // reached a test log.
+        let shown = format!("{:?}", cloud_error_carrying_a_key());
+        assert!(!shown.contains(NOT_A_KEY), "the key survived: {shown}");
+        assert!(
+            shown.contains("status_code: 400"),
+            "the status was lost: {shown}"
+        );
+    }
+
+    /// A failing call, behind a function so the panic below is reached the way
+    /// a caller reaches it rather than from a literal the compiler can see
+    /// through.
+    fn a_failing_call() -> Result<()> {
+        Err(cloud_error_carrying_a_key())
+    }
+
+    #[test]
+    fn unwrapping_a_cloud_error_removes_the_key() {
+        let panic = std::panic::catch_unwind(|| a_failing_call().unwrap()).unwrap_err();
+        let shown = panic
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_else(|| "the panic payload was not a string".to_owned());
+        assert!(!shown.contains(NOT_A_KEY), "the key survived: {shown}");
+    }
+
+    #[test]
+    fn a_configuration_error_is_redacted() {
+        let error =
+            Error::configuration(format!("the endpoint '?resource={NOT_A_KEY}' is invalid"));
+        assert!(!error.to_string().contains(NOT_A_KEY));
+        assert!(!format!("{error:?}").contains(NOT_A_KEY));
+        assert!(error.to_string().contains("is invalid"));
+    }
+
+    #[test]
+    fn an_aggregate_redacts_the_errors_it_carries() {
+        let aggregate =
+            Error::Aggregate(vec![FlowError::new("cloud", cloud_error_carrying_a_key())]);
+        assert!(!format!("{aggregate:?}").contains(NOT_A_KEY));
+        let flow = FlowError::new("cloud", cloud_error_carrying_a_key());
+        assert!(!flow.to_string().contains(NOT_A_KEY));
+        assert!(!format!("{flow:?}").contains(NOT_A_KEY));
+    }
+
+    #[test]
+    fn a_no_value_error_is_redacted() {
+        let error = NoValueError::new(format!("no value because '{NOT_A_KEY}' is refused"));
+        assert!(!error.to_string().contains(NOT_A_KEY));
+        assert!(!format!("{error:?}").contains(NOT_A_KEY));
+        assert!(error.to_string().contains("is refused"));
+    }
+
+    #[test]
+    fn an_error_with_nothing_secret_reads_exactly_as_before() {
+        let error = Error::PropertyMissing {
+            property: "ismobile".to_owned(),
+            element_data_key: "device".to_owned(),
+            reason: MissingPropertyReason::PropertyNotAccessibleWithResourceKey,
+        };
+        assert_eq!(
+            error.to_string(),
+            "property 'ismobile' not found in data for element 'device'. This is because \
+             your resource key does not include access to this property."
+        );
     }
 }
