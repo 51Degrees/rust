@@ -1,20 +1,26 @@
 name: Cloud 51Did Tests
 
-# Runs the live cloud 51Did integration test (fodid/tests/cloud_51did.rs) once
-# for every resource key the central common-ci script exports from the
-# _51DEGREES_RESOURCE_KEY* secrets (free, paid and any added later). Each run
-# sets the single _51DEGREES_RESOURCE_KEY the test reads. New resource keys
-# are added once at the organisation level; this workflow needs no change.
+# Runs the two live cloud 51Did integration tests once for every resource key
+# the central common-ci script exports from the _51DEGREES_RESOURCE_KEY*
+# secrets (free, paid and any added later). Each run sets the single
+# 51DEGREES_RESOURCE_KEY both tests read. New resource keys are added once at
+# the organisation level, and this workflow needs no change for one.
 #
-# The test carries #[ignore] so a plain `cargo test` leaves it alone, which is
-# why the run below passes --include-ignored. It skips itself when no key is
-# set, so a run with no secrets is green and proves nothing. That is
+# The two tests cover different halves. fodid/tests/cloud_51did.rs creates an
+# identifier at each usage the key grants and checks it parses.
+# fodid-client/tests/live_cloud.rs takes the server side further, verifying
+# through the cloud and offline, sealing a creator context result and
+# redeeming it with the license key to read the nine factors.
+#
+# Both tests carry #[ignore] so a plain `cargo test` leaves them alone, which
+# is why the runs below pass --include-ignored. Each skips itself when no key
+# is set, so a run with no secrets is green and proves nothing. That is
 # deliberate, because a pull request from a fork has no secrets, and it is the
 # reason the loop below reports which key each run used.
 #
-# The fodid crate is pure Rust, taking the OWID library as copied source
-# rather than through the -sys crates, so this needs none of the C/C++
-# checkouts the main build workflow sets up.
+# The fodid and fodid-client crates are pure Rust, taking the OWID library as
+# copied source rather than through the -sys crates, so this needs none of the
+# C/C++ checkouts the main build workflow sets up.
 
 on:
   workflow_dispatch:
@@ -22,6 +28,7 @@ on:
     branches: [main]
     paths:
       - 'fodid/**'
+      - 'fodid-client/**'
       - 'owid-rust/**'
       - 'ci/copy-owid-source.ps1'
       - '.github/workflows/cloud-51did.yml'
@@ -55,7 +62,13 @@ jobs:
         env:
           SECRETS: ${{ toJSON(secrets) }}
         run: |
-          ./common-ci/steps/set-resource-keys.ps1 -Keys (ConvertFrom-Json -AsHashtable $env:SECRETS)
+          $secrets = ConvertFrom-Json -AsHashtable $env:SECRETS
+          ./common-ci/steps/set-resource-keys.ps1 -Keys $secrets
+          # The redemption half of the client test needs a license key, which
+          # the same script exports under its own naming convention. A run
+          # with no license secret still passes, asserting the refusal the
+          # cloud gives a caller who has none.
+          ./common-ci/steps/set-resource-keys.ps1 -Keys $secrets -Prefix '_51DEGREES_LICENSE_KEY'
           $keys = Get-ChildItem env: |
             Where-Object { $_.Name -like '_51DEGREES_RESOURCE_KEY*' -and $_.Value }
           if (-not $keys) {
@@ -64,9 +77,16 @@ jobs:
           }
           $failed = $false
           foreach ($k in $keys) {
-            Write-Host "::group::cloud_51did with $($k.Name)"
-            $env:_51DEGREES_RESOURCE_KEY = $k.Value
+            Write-Host "::group::51Did cloud tests with $($k.Name)"
+            # Both tests read 51DEGREES_RESOURCE_KEY first and fall back to
+            # the tiered names, so the loop sets that one. Setting
+            # _51DEGREES_RESOURCE_KEY instead, as this did, left every
+            # iteration reading whichever tiered name the test listed first,
+            # so one key was tested three times under three headings.
+            Set-Item -Path 'Env:51DEGREES_RESOURCE_KEY' -Value $k.Value
             cargo test -p fodid --test cloud_51did -- --include-ignored
+            if ($LASTEXITCODE -ne 0) { $failed = $true }
+            cargo test -p fodid-client --test live_cloud -- --include-ignored --nocapture
             if ($LASTEXITCODE -ne 0) { $failed = $true }
             Write-Host '::endgroup::'
           }
