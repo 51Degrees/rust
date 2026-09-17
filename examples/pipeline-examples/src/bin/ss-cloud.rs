@@ -289,9 +289,16 @@ fn main() -> Result<()> {
     if let Some(date) = std::env::args().nth(1) {
         options.date_of_birth = date;
     }
-    // A real cloud example would read the resource key from the environment.
+    // A real cloud example would read the resource key and the endpoint from the
+    // environment, so this one does the same. A host other than
+    // cloud.51degrees.com is an on premise web server or a privately hosted
+    // 51Degrees cloud (see examples_shared::CLOUD_ENDPOINT_ENV_VAR), normalised
+    // to end in one slash as the cloud request engine does.
     if let Some(key) = examples_shared::resource_key_from_env() {
         options.resource_key = key;
+    }
+    if let Some(endpoint) = examples_shared::cloud_endpoint_from_env() {
+        options.endpoint = format!("{}/", endpoint.trim_end_matches('/'));
     }
     run(&options)
 }

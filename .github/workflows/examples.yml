@@ -24,8 +24,20 @@ jobs:
       run:
         working-directory: examples
     steps:
+      # The owid-rust submodule holds the OWID source that the fodid crate
+      # compiles in, so it is needed whenever an example reaches fodid
+      # through the local source patch.
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: dtolnay/rust-toolchain@stable
+      # ci/copy-owid-source.ps1 copies that source into fodid/src/owid, which
+      # git ignores, so fodid cannot compile from the local tree without it.
+      # The step runs at the repository root rather than in examples.
+      - name: Copy the OWID source into fodid
+        shell: pwsh
+        working-directory: .
+        run: ./ci/copy-owid-source.ps1
       # Build and test the examples against the local crates via the patch file.
       # Data-file and resource-key gated tests skip cleanly when those are
       # absent, so this validates the build and the offline tests.

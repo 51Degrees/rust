@@ -19,6 +19,7 @@ members = [
     "ip-intelligence-examples",
     "device-detection-examples",
     "pipeline-examples",
+    "fodid-examples",
     "benches",
 ]
 
