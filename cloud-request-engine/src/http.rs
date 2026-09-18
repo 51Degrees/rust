@@ -143,9 +143,16 @@ impl CloudHttpClient for ReqwestClient {
             builder = builder.header(super::constants::ORIGIN_HEADER_NAME, origin);
         }
 
-        let response = builder
-            .send()
-            .map_err(|e| format!("failed to send request to '{}': {e}", request.url))?;
+        // The discovery requests carry the keys in the query string, so the
+        // messages name the endpoint without it, and the reqwest error has its
+        // own copy of the URL removed.
+        let endpoint = crate::engine::url_without_query(&request.url);
+        let response = builder.send().map_err(|e| {
+            format!(
+                "failed to send request to '{endpoint}': {}",
+                e.without_url()
+            )
+        })?;
 
         let status = response.status().as_u16();
         let retry_after = response
@@ -155,9 +162,12 @@ impl CloudHttpClient for ReqwestClient {
             .map(|s| s.to_owned());
         // Read the whole body. A body that cannot be read as text is treated as
         // a transport failure rather than an empty response.
-        let body = response
-            .text()
-            .map_err(|e| format!("failed to read response body from '{}': {e}", request.url))?;
+        let body = response.text().map_err(|e| {
+            format!(
+                "failed to read response body from '{endpoint}': {}",
+                e.without_url()
+            )
+        })?;
 
         Ok(CloudHttpResponse {
             status,
