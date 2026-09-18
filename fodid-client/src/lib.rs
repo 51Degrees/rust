@@ -156,7 +156,7 @@ pub use http::{DidHttpClient, DidHttpRequest, DidHttpResponse, HttpMethod, Local
 pub use key::{
     candidates_for_date, in_force_at, parse_keys, DidPublicKey, BOUNDARY_TOLERANCE_MINUTES,
 };
-pub use outcome::{ContextOutcome, FactorOutcome, SignatureCheck, SignatureOutcome};
+pub use outcome::{ContextOutcome, Factor, FactorOutcome, SignatureCheck, SignatureOutcome};
 pub use redeem::RedeemResult;
 
 #[cfg(feature = "reqwest-client")]

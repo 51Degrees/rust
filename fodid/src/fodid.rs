@@ -118,14 +118,14 @@ pub enum IdType {
 /// wrong way round for a data protection decision. This type answers
 /// with the highest usage granted, so that mistake cannot be made.
 ///
-/// The names match the cloud's `id.usage` values: `non-marketing`,
+/// The names match the cloud's `id.usage` values, being `non-marketing`,
 /// `standard` and `personalized`.
+///
+/// There are exactly three values. A payload with no usage bit set is not
+/// a fourth usage, because the cloud never issues one, so such a payload
+/// is refused with [`Error::NoUsage`] rather than read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Usage {
-    /// No usage bit is set. The cloud never issues such an identifier,
-    /// so this is an identifier from somewhere else or a damaged one,
-    /// and it should be treated as though it may not be passed on.
-    None,
     /// Created for use that is not marketing. Must not be passed to a
     /// demand source.
     NonMarketing,
@@ -139,27 +139,26 @@ pub enum Usage {
 
 impl Usage {
     /// Decode the usage from a flags byte (bits 0-2), answering the
-    /// highest usage granted.
-    fn from_flags(flags: u8) -> Usage {
+    /// highest usage granted, or `None` where no usage bit is set, which
+    /// the reader refuses.
+    fn from_flags(flags: u8) -> Option<Usage> {
         if flags & 0b100 != 0 {
-            Usage::Personalized
+            Some(Usage::Personalized)
         } else if flags & 0b010 != 0 {
-            Usage::Standard
+            Some(Usage::Standard)
         } else if flags & 0b001 != 0 {
-            Usage::NonMarketing
+            Some(Usage::NonMarketing)
         } else {
-            Usage::None
+            None
         }
     }
 
-    /// The cloud's `id.usage` value for this usage, or `None` where
-    /// there is none.
-    pub fn id_usage(self) -> Option<&'static str> {
+    /// The cloud's `id.usage` value for this usage.
+    pub fn id_usage(self) -> &'static str {
         match self {
-            Usage::None => None,
-            Usage::NonMarketing => Some("non-marketing"),
-            Usage::Standard => Some("standard"),
-            Usage::Personalized => Some("personalized"),
+            Usage::NonMarketing => "non-marketing",
+            Usage::Standard => "standard",
+            Usage::Personalized => "personalized",
         }
     }
 }
@@ -293,7 +292,7 @@ impl Terms {
 /// four byte little endian [`license_id`](FodId::license_id), and the match
 /// key follows it. The flags byte is not handed out whole, because every bit
 /// in it has a name, so the usage is read through [`usage`](FodId::usage) and
-/// [`usage_from_consent`](FodId::usage_from_consent) and the identifier type
+/// [`usage_is_indirect`](FodId::usage_is_indirect) and the identifier type
 /// through [`id_type`](FodId::id_type). The type decides the length and
 /// meaning of the match key, being 16 GUID bytes for [`IdType::Random`] and a
 /// 32 byte SHA-256 for the other types, and the match key is read through
@@ -355,10 +354,12 @@ impl FodId {
     ///
     /// Returns [`Error::Parse`] carrying the OWID status if the string is not
     /// a valid OWID envelope (for example
-    /// [`ParseStatus::InvalidBase64`](crate::ParseStatus::InvalidBase64)), [`Error::PayloadTooShort`] if
-    /// the payload cannot hold the 51Did header, or
-    /// [`Error::InvalidTypePayloadLength`] if the payload is shorter than
-    /// the minimum for its identifier type.
+    /// [`ParseStatus::InvalidBase64`](crate::ParseStatus::InvalidBase64)),
+    /// [`Error::PayloadTooShort`] if the payload cannot hold the 51Did
+    /// header, [`Error::UnsupportedPayloadVersion`] if the flags byte names a
+    /// payload version other than 0, [`Error::NoUsage`] if the flags byte sets
+    /// no usage bit, or [`Error::InvalidTypePayloadLength`] if the payload is
+    /// shorter than the minimum for its identifier type.
     /// Either base64 alphabet is accepted, standard or URL-safe, with or
     /// without padding, because a 51Did travels in URLs and comes back in
     /// the alphabet whoever sent it chose. Leading and trailing whitespace
@@ -377,8 +378,11 @@ impl FodId {
     ///
     /// Returns [`Error::Parse`] carrying the OWID status if the bytes are not
     /// a valid OWID envelope, [`Error::PayloadTooShort`] if the payload cannot
-    /// hold the 51Did header, or [`Error::InvalidTypePayloadLength`] if the
-    /// payload is shorter than the minimum for its identifier type.
+    /// hold the 51Did header, [`Error::UnsupportedPayloadVersion`] if the
+    /// flags byte names a payload version other than 0, [`Error::NoUsage`] if
+    /// the flags byte sets no usage bit, or
+    /// [`Error::InvalidTypePayloadLength`] if the payload is shorter than the
+    /// minimum for its identifier type.
     pub fn from_byte_array(buffer: &[u8]) -> Result<Self> {
         Self::from_owid(Owid::from_byte_array(buffer)?)
     }
@@ -401,8 +405,11 @@ impl FodId {
     /// # Errors
     ///
     /// Returns [`Error::PayloadTooShort`] if the payload is shorter than the
-    /// header, or [`Error::InvalidTypePayloadLength`] if the payload is
-    /// shorter than the header plus the value length the type requires.
+    /// header, [`Error::UnsupportedPayloadVersion`] if the flags byte names
+    /// a payload version other than 0, [`Error::NoUsage`] if the flags byte
+    /// sets no usage bit, or [`Error::InvalidTypePayloadLength`] if the
+    /// payload is shorter than the header plus the value length the type
+    /// requires.
     pub fn from_owid(owid: Owid) -> Result<Self> {
         let payload = owid.payload();
         if payload.len() < HEADER_LENGTH {
@@ -423,6 +430,13 @@ impl FodId {
             return Err(Error::UnsupportedPayloadVersion {
                 version: payload_version,
             });
+        }
+        // Every usage the cloud accepts sets bit 0, so a payload with no
+        // usage bit set did not come from it and is damaged or forged. It
+        // is refused rather than offered as a fourth usage, because the
+        // only safe answer to it is not to pass the identifier on.
+        if Usage::from_flags(flags).is_none() {
+            return Err(Error::NoUsage);
         }
         let license_id = u32::from_le_bytes(
             payload[LICENSE_ID_OFFSET..LICENSE_ID_OFFSET + LICENSE_ID_LENGTH]
@@ -476,14 +490,22 @@ impl FodId {
     /// The usage carried in bits 0-2 of the flags byte, as the highest usage
     /// granted. See [`Usage`] for why it is read that way.
     pub fn usage(&self) -> Usage {
-        Usage::from_flags(self.flags)
+        // from_owid is the only place a FodId is built, every reading route
+        // goes through it, and it refuses a payload with no usage bit set, so
+        // the flags held here always name a usage.
+        Usage::from_flags(self.flags).expect("from_owid refuses a payload with no usage bit set")
     }
 
-    /// Whether the usage was derived from an IAB consent string the
-    /// caller sent, rather than stated by the caller directly. Bit 3 of
-    /// the flags byte. Both are legitimate ways to arrive at a usage, and
-    /// this says nothing about which usage it is.
-    pub fn usage_from_consent(&self) -> bool {
+    /// Whether the usage is indirect, being bit 3 of the flags byte.
+    ///
+    /// `false` means the caller stated the usage directly. `true` means the
+    /// issuer worked the usage out from some other signal the caller sent.
+    /// Today the only such signal is a consent string, so today this is
+    /// `true` only when the usage was derived from one, but the bit records
+    /// direct against indirect rather than consent strings as such, and a
+    /// later signal of another kind sets it too. Both are legitimate ways to
+    /// arrive at a usage, and this says nothing about which usage it is.
+    pub fn usage_is_indirect(&self) -> bool {
         self.flags & 0b1000 != 0
     }
 
@@ -702,10 +724,16 @@ mod layout_tests {
     /// marketing identifier, which is the wrong way round.
     #[test]
     fn usage_decodes_as_the_highest_bit_set() {
-        assert_eq!(Usage::from_flags(0b000), Usage::None);
-        assert_eq!(Usage::from_flags(0b001), Usage::NonMarketing);
-        assert_eq!(Usage::from_flags(0b011), Usage::Standard);
-        assert_eq!(Usage::from_flags(0b111), Usage::Personalized);
+        assert_eq!(Usage::from_flags(0b000), None);
+        assert_eq!(Usage::from_flags(0b001), Some(Usage::NonMarketing));
+        assert_eq!(Usage::from_flags(0b011), Some(Usage::Standard));
+        assert_eq!(Usage::from_flags(0b111), Some(Usage::Personalized));
+        // Only 000 is refused. The patterns that are not one of the three
+        // the cloud writes keep the highest-bit reading.
+        assert_eq!(Usage::from_flags(0b010), Some(Usage::Standard));
+        assert_eq!(Usage::from_flags(0b100), Some(Usage::Personalized));
+        assert_eq!(Usage::from_flags(0b101), Some(Usage::Personalized));
+        assert_eq!(Usage::from_flags(0b110), Some(Usage::Personalized));
     }
 
     #[test]

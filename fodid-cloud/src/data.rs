@@ -303,7 +303,7 @@ impl FodIdDataBase {
     /// An absent property is a no-value with the standard absent message. A
     /// present value that does not read as a 51Did is a no-value whose
     /// message carries the reason the `fodid` reader gave (the OWID status,
-    /// or one of the two 51Did payload statuses), so a malformed identifier
+    /// or one of the 51Did payload statuses), so a malformed identifier
     /// never panics or fails the whole result. Reading does not verify the
     /// signature, so a parsed value is not necessarily cryptographically
     /// valid.
