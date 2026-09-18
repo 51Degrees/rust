@@ -31,6 +31,18 @@ reqwest-client = ["fiftyone-cloud-request-engine/reqwest-client"]
 # feature.
 fodid = { version = "4.5.3", path = "../fodid", features = ["creator"] }
 
+# Depend on this crate itself with reqwest-client enabled, so its own tests get
+# the built-in cloud HTTP transport. The library keeps reqwest-client off by
+# default, which is what lets a wasm32-wasip1 consumer supply its own client,
+# and the live test needs a transport to reach the cloud. This is the same
+# arrangement the device-detection and ip-intelligence crates use, narrowed to
+# targets that are not wasm. A dev-dependency's features are chosen whatever
+# --no-default-features says, and reqwest brings a tokio that refuses to
+# compile for wasm32-wasip1. The live test is #[ignore]d and the wasm job does
+# not pass --include-ignored, so nothing is lost on wasm.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+fiftyone-fodid-cloud = { path = ".", features = ["reqwest-client"] }
+
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the
 # cloud, on-premise and optional paths are all documented.
