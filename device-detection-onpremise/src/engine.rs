@@ -149,7 +149,7 @@ pub struct DeviceDetectionOnPremiseEngine {
     aspect_properties: Vec<AspectPropertyMetaData>,
 
     /// The evidence keys this engine reads.
-    evidence_key_filter: EvidenceKeyFilterWhitelist,
+    evidence_key_filter: HashEvidenceKeyFilter,
 
     /// The data-source tier, for example `Lite`.
     data_source_tier: String,
@@ -248,6 +248,11 @@ impl DeviceDetectionOnPremiseEngine {
             let name = meta.name();
             match results.value_as_string(name, VALUE_SEPARATOR)? {
                 Some(raw) => {
+                    let raw = if name.eq_ignore_ascii_case(JAVASCRIPT_HARDWARE_PROFILE) {
+                        wrap_hardware_profile(raw)
+                    } else {
+                        raw
+                    };
                     // A typed property whose value does not parse (the `Unknown` /
                     // `N/A` no-value sentinels, say) yields `None` and is left
                     // unwritten, so its accessor reports a clean no-value.
@@ -550,15 +555,82 @@ fn native_value(raw: &str, value_type: PropertyValueType) -> Option<PropertyValu
     }
 }
 
-/// The evidence key filter for the engine.
+/// The property whose data file value is the body of a script that finds the
+/// Apple device model on the client.
+const JAVASCRIPT_HARDWARE_PROFILE: &str = "JavascriptHardwareProfile";
+
+/// Turn the stored `JavascriptHardwareProfile` body into the script the client
+/// runs, as the device-detection-cxx C++ results wrapper does.
+///
+/// The stored body pushes the profile ids it finds onto a `profileIds` array
+/// that it does not declare, and does not send them anywhere. The wrapper
+/// declares the array first and afterwards writes the ids to the
+/// `51D_ProfileIds` cookie, which the engine reads back as evidence. Without
+/// the wrapper the script fails on the undeclared array, and the include that
+/// carries it stops running. An empty body, which a profile that needs no
+/// script has, is left empty.
+fn wrap_hardware_profile(body: String) -> String {
+    if body.is_empty() {
+        return body;
+    }
+    format!(
+        "var profileIds = []\n{body}\n\
+         document.cookie = \"51D_ProfileIds=\" + profileIds.join(\"|\")"
+    )
+}
+
+/// The evidence key filter for the Hash engine.
+///
+/// It accepts the fixed device-detection set from
+/// [`build_evidence_key_filter`], and also any query or cookie value whose
+/// name starts with `51d_`. Those are the values the client-side JavaScript
+/// sends back, being a property override such as
+/// `query.51d_screenpixelswidth` or the `query.51d_profileids` profile ids.
+/// The native engine applies them itself, and ignores a `51d_` name it does not
+/// know, so they are passed through by prefix rather than listed one by one.
+/// Without them the screen size and other values the browser reports never
+/// reach the engine.
+#[derive(Debug, Clone)]
+struct HashEvidenceKeyFilter {
+    fixed: EvidenceKeyFilterWhitelist,
+}
+
+impl HashEvidenceKeyFilter {
+    /// True when the key is `query.51d_*` or `cookie.51d_*`, ignoring case.
+    fn is_client_side_value(key: &str) -> bool {
+        let Some((prefix, field)) = key.split_once(constants::EVIDENCE_SEPARATOR) else {
+            return false;
+        };
+        let known_prefix = prefix.eq_ignore_ascii_case(constants::EVIDENCE_QUERY_PREFIX)
+            || prefix.eq_ignore_ascii_case(constants::EVIDENCE_COOKIE_PREFIX);
+        known_prefix
+            && field
+                .get(..constants::FIFTYONE_COOKIE_PREFIX.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(constants::FIFTYONE_COOKIE_PREFIX))
+    }
+}
+
+impl EvidenceKeyFilter for HashEvidenceKeyFilter {
+    fn include(&self, key: &str) -> bool {
+        self.fixed.include(key) || Self::is_client_side_value(key)
+    }
+
+    fn order(&self, key: &str) -> Option<i32> {
+        self.fixed
+            .order(key)
+            .or_else(|| Self::is_client_side_value(key).then_some(0))
+    }
+}
+
+/// The fixed part of the evidence key filter for the engine.
 ///
 /// The native data set's own evidence keys are not surfaced through the safe
-/// wrapper, so the filter is the standard device-detection set: the User-Agent
+/// wrapper, so this is the standard device-detection set: the User-Agent
 /// (as a header or a query value for off-line processing), the User-Agent Client
 /// Hint `sec-ch-ua*` headers, and the high-entropy blob keys the
-/// [`UachJsConversionElement`] consumes. This is the evidence the Hash engine
-/// reads in practice.
-fn build_evidence_key_filter() -> EvidenceKeyFilterWhitelist {
+/// [`UachJsConversionElement`] consumes. [`HashEvidenceKeyFilter`] adds the
+/// client-side `51d_` values to it.
+fn build_evidence_key_filter() -> HashEvidenceKeyFilter {
     let mut keys: Vec<String> = Vec::new();
 
     // User-Agent, as a request header and as an off-line query value.
@@ -588,7 +660,9 @@ fn build_evidence_key_filter() -> EvidenceKeyFilterWhitelist {
     keys.push(UACH_EVIDENCE_QUERY_KEY.to_owned());
     keys.push(UACH_EVIDENCE_COOKIE_KEY.to_owned());
 
-    EvidenceKeyFilterWhitelist::new(keys)
+    HashEvidenceKeyFilter {
+        fixed: EvidenceKeyFilterWhitelist::new(keys),
+    }
 }
 
 /// Read the publish time of the data file from its filesystem modified time.
@@ -693,5 +767,33 @@ mod tests {
         assert!(filter.include(UACH_EVIDENCE_COOKIE_KEY));
         // An unrelated header is not part of the device-detection evidence.
         assert!(!filter.include("header.referer"));
+    }
+
+    #[test]
+    fn hardware_profile_is_wrapped_as_the_cpp_wrapper_does() {
+        assert_eq!(
+            wrap_hardware_profile("profileIds.push(1)".to_owned()),
+            "var profileIds = []\nprofileIds.push(1)\n\
+             document.cookie = \"51D_ProfileIds=\" + profileIds.join(\"|\")"
+        );
+        // A profile that needs no script keeps an empty body.
+        assert_eq!(wrap_hardware_profile(String::new()), "");
+    }
+
+    #[test]
+    fn evidence_filter_passes_client_side_values() {
+        // The values the client-side JavaScript sends back reach the engine,
+        // whether posted as query values or kept in cookies.
+        let filter = build_evidence_key_filter();
+        assert!(filter.include("query.51d_screenpixelswidth"));
+        assert!(filter.include("query.51D_ProfileIds"));
+        assert!(filter.include("cookie.51d_screenpixelsheight"));
+        assert_eq!(filter.order("query.51d_screenpixelswidth"), Some(0));
+        // Only query and cookie values, and only with the 51d_ prefix.
+        assert!(!filter.include("header.51d_screenpixelswidth"));
+        assert!(!filter.include("query.screenpixelswidth"));
+        assert!(!filter.include("cookie.session"));
+        assert!(!filter.include("query.51d"));
+        assert_eq!(filter.order("cookie.session"), None);
     }
 }

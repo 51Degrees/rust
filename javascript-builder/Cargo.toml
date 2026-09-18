@@ -29,8 +29,9 @@ fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
 # `data-update` feature to re-export it.
 fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines", default-features = false }
 # The session id and sequence evidence keys excluded from the request parameters
-# live in the 51Degrees-specific engines crate. Depending on it keeps those keys
-# in one place rather than re-spelling them here.
+# live in the 51Degrees-specific engines crate, and so does the sequence element
+# whose data supplies the session id and sequence number to the template.
+# Depending on it keeps those in one place rather than re-spelling them here.
 fiftyone-pipeline-engines-fiftyone = { version = "4.5.2", path = "../pipeline-engines-fiftyone" }
 fiftyone-json-builder = { version = "4.5.2", path = "../json-builder" }
 # The bundled JavaScriptResource.mustache template is rendered by this crate's
@@ -49,6 +50,9 @@ serde_json.workspace = true
 # already used elsewhere in the workspace so it is reused here for a single
 # resolved version.
 percent-encoding = "2.3.2"
+# Logs a warning when a requested object name is ignored. The log facade does
+# nothing until the application installs a logger.
+log = "0.4"
 
 # oxc is a large, native-oriented toolchain. Restrict it to non-wasm targets so
 # this crate, and the web crates that build on it, compile for wasm32-wasip1. The

@@ -127,6 +127,7 @@ mod flow_data;
 mod flow_element;
 mod pipeline;
 mod property;
+pub mod redact;
 mod typed_key;
 mod value;
 

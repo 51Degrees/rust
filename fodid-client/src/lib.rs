@@ -144,6 +144,7 @@ mod error;
 mod http;
 mod key;
 mod outcome;
+pub mod redact;
 mod redeem;
 
 pub use client::{

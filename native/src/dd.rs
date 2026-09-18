@@ -382,13 +382,26 @@ impl Manager {
 
     /// Create a per-thread results structure for running detections.
     pub fn create_results(self: &Arc<Self>) -> Result<Results> {
-        // Safety: the manager is initialized. The first capacity argument
-        // (user-agent capacity) is ignored by the C library - results are sized
-        // by the data set - and the overrides capacity of zero is the standard
-        // default. Both must be passed explicitly: the C signature takes two
-        // uint32_t parameters, so dropping one leaves the overrides capacity
-        // reading an uninitialised register and crashes under detection.
-        let results = unsafe { sys::fiftyoneDegreesResultsHashCreate(self.as_ptr(), 0, 0) };
+        // Overrides are on, so the values the client-side JavaScript sends back
+        // (for example the real screen size) replace the values matched from
+        // the headers, as they do in the other 51Degrees SDKs. With a
+        // capacity of zero the engine ignores every override. The capacity is
+        // the number of available properties, which is at least the number
+        // evidence can override.
+        //
+        // The same value is passed in both capacity positions on purpose. The
+        // device-detection-cxx sources on main take a User-Agent capacity,
+        // which they ignore, followed by the overrides capacity. The copy
+        // vendored in fiftyone-device-detection-sys takes the overrides
+        // capacity alone as its second parameter, and ignores the third
+        // argument. Passing the value twice gives both builds the same
+        // overrides capacity. Both arguments must be passed, because leaving
+        // one out on the three parameter build reads the overrides capacity
+        // from an uninitialised register and crashes under detection.
+        let overrides = self.property_count().max(1);
+        // Safety: the manager is initialized.
+        let results =
+            unsafe { sys::fiftyoneDegreesResultsHashCreate(self.as_ptr(), overrides, overrides) };
         let results = NonNull::new(results).ok_or_else(|| Error::Native {
             status: String::from("InsufficientMemory"),
             message: String::from("failed to allocate Hash results"),
