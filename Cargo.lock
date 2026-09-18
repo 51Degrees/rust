@@ -648,6 +648,7 @@ dependencies = [
  "fiftyone-pipeline-core",
  "fiftyone-pipeline-engines",
  "fiftyone-pipeline-engines-fiftyone",
+ "log",
  "oxc",
  "percent-encoding",
  "serde_json",

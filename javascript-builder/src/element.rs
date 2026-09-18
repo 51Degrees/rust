@@ -36,6 +36,7 @@ use fiftyone_pipeline_core::{
 use fiftyone_pipeline_engines_fiftyone::constants::{EVIDENCE_SEQUENCE, EVIDENCE_SESSIONID};
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 
+use crate::builder::is_valid_object_name;
 use crate::constants::{
     DELAY_EXECUTION_MARKER, EVIDENCE_ENABLE_COOKIES, EVIDENCE_HOST_KEY, EVIDENCE_OBJECT_NAME,
     FALLBACK_PROTOCOL, FETCH_PROPERTY, JAVASCRIPT_BUILDER_ELEMENT_DATA_KEY,
@@ -118,8 +119,11 @@ fn safe_sequence(sequence: i32) -> i32 {
 /// - **protocol**: the configured protocol if set, else the `header.protocol`
 ///   evidence, else `https`.
 /// - **host**: the configured host if set, else the `header.host` evidence.
-/// - **object name**: the `query.fod-js-object-name` evidence if present, else
-///   the configured object name (default `fod`).
+/// - **object name**: the `query.fod-js-object-name` evidence if present and a
+///   valid JavaScript identifier that is not a reserved word, `Infinity`,
+///   `NaN`, `undefined` or `fiftyoneDegreesManager`, else the configured
+///   object name (default `fod`). An invalid requested name, the empty string
+///   included, is ignored with a warning logged through the `log` crate.
 /// - **enable cookies**: the `query.fod-js-enable-cookies` evidence parsed as a
 ///   boolean if present, else the configured default (true).
 /// - **callback URL**: built only when protocol, host and endpoint are all
@@ -261,11 +265,24 @@ impl JavaScriptBuilderElement {
             .to_owned()
     }
 
-    /// Resolve the object name: `query.fod-js-object-name` evidence if present,
-    /// else the configured object name.
+    /// Resolve the object name: `query.fod-js-object-name` evidence if present
+    /// and a valid JavaScript identifier, else the configured object name.
+    ///
+    /// A requested name that is not valid is ignored with a warning logged,
+    /// because it would be written into the script as given. The requested
+    /// text is left out of the warning so that it cannot reach the log either.
     fn resolve_object_name(&self, data: &FlowData) -> String {
         match data.evidence().get(EVIDENCE_OBJECT_NAME) {
-            Some(name) => name.to_owned(),
+            Some(name) if is_valid_object_name(name) => name.to_owned(),
+            Some(_) => {
+                log::warn!(
+                    "The requested JavaScript object name ({}) is not a valid JavaScript \
+                     identifier, so the configured name '{}' is used.",
+                    EVIDENCE_OBJECT_NAME,
+                    self.object_name
+                );
+                self.object_name.clone()
+            }
             None => self.object_name.clone(),
         }
     }
@@ -685,6 +702,28 @@ mod tests {
         assert_eq!(element.resolve_object_name(&data), "custom");
         let data = flow_data_with(&[]);
         assert_eq!(element.resolve_object_name(&data), "fod");
+    }
+
+    #[test]
+    fn invalid_object_name_from_evidence_is_ignored() {
+        let element = JavaScriptBuilderElement::builder()
+            .set_object_name("configured")
+            .unwrap()
+            .build();
+        for name in [
+            "a;b",
+            "9bad",
+            "x\"y",
+            "",
+            "class",
+            "Infinity",
+            "NaN",
+            "undefined",
+            "fiftyoneDegreesManager",
+        ] {
+            let data = flow_data_with(&[("query.fod-js-object-name", name)]);
+            assert_eq!(element.resolve_object_name(&data), "configured");
+        }
     }
 
     #[test]
