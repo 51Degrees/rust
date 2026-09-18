@@ -118,6 +118,11 @@ pub struct DidClient {
     http: Arc<dyn DidHttpClient>,
     resource_key: String,
     licence_key: Option<String>,
+    /// The resource key, and the licence key where one was given, kept so an
+    /// error on the way out can have them taken out of it by value. Matching
+    /// the value itself catches a credential the shape rules in
+    /// [`crate::redact`] would not recognise.
+    secrets: Vec<String>,
     endpoint: String,
     clock: Clock,
     cache: Mutex<KeyCache>,
@@ -199,10 +204,15 @@ impl DidClientBuilder {
         };
         let clock: Clock = self.clock.unwrap_or_else(|| Arc::new(Utc::now));
         let fetched_at = clock();
+        let mut secrets = vec![self.resource_key.clone()];
+        if let Some(licence_key) = &self.licence_key {
+            secrets.push(licence_key.clone());
+        }
         Ok(DidClient {
             http,
             resource_key: self.resource_key,
             licence_key: self.licence_key,
+            secrets,
             endpoint,
             clock,
             cache: Mutex::new(KeyCache {
@@ -421,11 +431,13 @@ impl DidClient {
             }
             if response.status == 400 {
                 if let Some(errors) = read_errors(&response.body) {
-                    return Err(Error::InvalidArgument(errors));
+                    // The service quotes the key back inside this text when it
+                    // is the key it could not read.
+                    return Err(Error::InvalidArgument(self.redacted(&errors)));
                 }
             }
         }
-        Err(unexpected("verify", &response))
+        Err(self.unexpected("verify", &response))
     }
 
     /// Redeems a sealed creator context result against the identifier it
@@ -501,11 +513,11 @@ impl DidClient {
         let response = self.send(HttpMethod::Post, url, form).await?;
         match response.status {
             200 | 503 => Ok(RedeemResult::from_response(response.status, &response.body)),
-            400 => Err(Error::InvalidArgument(
-                read_errors(&response.body).unwrap_or_else(|| response.body.clone()),
-            )),
+            400 => Err(Error::InvalidArgument(self.redacted(
+                &read_errors(&response.body).unwrap_or_else(|| response.body.clone()),
+            ))),
             404 => Err(Error::NotSupported(self.endpoint.clone())),
-            _ => Err(unexpected("redeem", &response)),
+            _ => Err(self.unexpected("redeem", &response)),
         }
     }
 
@@ -585,7 +597,7 @@ impl DidClient {
         );
         let response = self.send(HttpMethod::Get, url, Vec::new()).await?;
         if response.status != 200 {
-            return Err(unexpected("key", &response));
+            return Err(self.unexpected("key", &response));
         }
         let keys = parse_keys(&response.body)?;
         {
@@ -618,7 +630,32 @@ impl DidClient {
             form,
             user_agent: USER_AGENT.to_string(),
         };
-        self.http.send(&request).await.map_err(Error::Transport)
+        // Every request in this crate goes through here, so a transport that
+        // quotes the address it was given is cleaned in one place rather than
+        // each caller having to remember.
+        self.http
+            .send(&request)
+            .await
+            .map_err(|message| Error::Transport(self.redacted(&message)))
+    }
+
+    /// Takes this client's own credentials out of text on its way into an
+    /// error, on top of the shape-based cleaning [`Error`] does whenever it is
+    /// printed. A resource key that does not start `AQ`, or a licence key of
+    /// any shape, is invisible to the shape rules, so the exact values are
+    /// removed here where they are known.
+    fn redacted(&self, text: &str) -> String {
+        crate::redact::redact_with(text, &self.secrets).into_owned()
+    }
+
+    /// The error for a status this client did not expect from `endpoint`,
+    /// carrying the start of the body with the credentials taken out.
+    fn unexpected(&self, endpoint: &'static str, response: &DidHttpResponse) -> Error {
+        Error::UnexpectedStatus {
+            endpoint,
+            status: response.status,
+            body: Error::truncate(&self.redacted(&response.body)),
+        }
     }
 }
 
@@ -657,14 +694,6 @@ impl Drop for FetchFinishes<'_> {
         for waker in cache.waiters.drain(..) {
             waker.wake();
         }
-    }
-}
-
-fn unexpected(endpoint: &'static str, response: &DidHttpResponse) -> Error {
-    Error::UnexpectedStatus {
-        endpoint,
-        status: response.status,
-        body: Error::truncate(&response.body),
     }
 }
 
