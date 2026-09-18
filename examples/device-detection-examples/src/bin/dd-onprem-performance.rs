@@ -58,6 +58,10 @@ pub struct ExampleOptions {
     /// The maximum number of User-Agents to load from the file. The bundled file
     /// holds 20,000; the test caps this so it stays fast.
     pub max_user_agents: usize,
+    /// Where to write the results JSON the nightly performance graphs read, if
+    /// anywhere. CI passes `--json-output <path>`; an interactive run leaves it
+    /// unset and only reads the printed figures.
+    pub json_output: Option<PathBuf>,
 }
 
 /// The outcome of one benchmark run.
@@ -68,6 +72,27 @@ struct BenchmarkResult {
     mobile: u64,
     /// The wall-clock time the timed phase took.
     elapsed: Duration,
+}
+
+impl BenchmarkResult {
+    /// Detections per second across the timed phase, the headline throughput.
+    fn detections_per_second(&self) -> f64 {
+        let seconds = self.elapsed.as_secs_f64();
+        if seconds > 0.0 {
+            self.detections as f64 / seconds
+        } else {
+            0.0
+        }
+    }
+
+    /// Mean real time per detection, in milliseconds.
+    fn millisecs_per_detection(&self) -> f64 {
+        if self.detections > 0 {
+            self.elapsed.as_secs_f64() * 1000.0 / self.detections as f64
+        } else {
+            0.0
+        }
+    }
 }
 
 // [example]
@@ -122,6 +147,22 @@ pub fn run(options: ExampleOptions) -> Result<()> {
     )?;
 
     report(&result, options.thread_count);
+
+    // The nightly performance graphs read this file. The example writes it
+    // itself so the figure does not depend on the wording or number formatting
+    // of the printed report above, which is free to change.
+    if let Some(json_output) = &options.json_output {
+        let results = examples_shared::PerformanceResults::new()
+            .higher_is_better("DetectionsPerSecond", result.detections_per_second())
+            .lower_is_better("AvgMillisecsPerDetection", result.millisecs_per_detection());
+        results.write_to(json_output).with_context(|| {
+            format!(
+                "failed to write the performance results to '{}'",
+                json_output.display()
+            )
+        })?;
+        println!("Wrote performance results to '{}'.", json_output.display());
+    }
 
     // This benchmark uses PerformanceProfile::InMemory. The other profiles
     // (HighPerformance, Balanced, Default, LowMemory) trade memory, load time and
@@ -215,16 +256,8 @@ fn benchmark(
 /// second and the average time per detection.
 fn report(result: &BenchmarkResult, thread_count: usize) {
     let seconds = result.elapsed.as_secs_f64();
-    let per_second = if seconds > 0.0 {
-        result.detections as f64 / seconds
-    } else {
-        0.0
-    };
-    let ms_per_detection = if result.detections > 0 {
-        result.elapsed.as_secs_f64() * 1000.0 / result.detections as f64
-    } else {
-        0.0
-    };
+    let per_second = result.detections_per_second();
+    let ms_per_detection = result.millisecs_per_detection();
 
     println!("--- Benchmark results ---");
     println!("\tThreads               : {}", thread_count.max(1));
@@ -263,12 +296,14 @@ fn default_user_agents_file() -> Option<PathBuf> {
 /// User-Agent files use the usual fallbacks. With either missing the example
 /// prints a clear message and exits successfully.
 fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1);
-    let data_file = args
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let json_output = examples_shared::json_output_path(&arguments);
+    let mut positional = positional_arguments(&arguments).into_iter();
+    let data_file = positional
         .next()
         .map(PathBuf::from)
         .or_else(examples_shared::dd_data_path);
-    let user_agents_file = args
+    let user_agents_file = positional
         .next()
         .map(PathBuf::from)
         .or_else(default_user_agents_file);
@@ -293,7 +328,25 @@ fn main() -> Result<()> {
         // Two passes over 20,000 User-Agents is a steady, quick benchmark.
         passes: 2,
         max_user_agents: 20_000,
+        json_output,
     })
+}
+
+/// The arguments that are not the `--json-output` flag or its value, so the
+/// data-file and User-Agent-file positions keep working whether or not CI asks
+/// for a results file.
+fn positional_arguments(arguments: &[String]) -> Vec<String> {
+    let mut positional = Vec::new();
+    let mut remaining = arguments.iter();
+    while let Some(argument) = remaining.next() {
+        if argument == examples_shared::JSON_OUTPUT_FLAG {
+            // Consume the path that follows the flag.
+            let _ = remaining.next();
+        } else if !argument.starts_with("--") {
+            positional.push(argument.clone());
+        }
+    }
+    positional
 }
 
 #[cfg(test)]
@@ -321,8 +374,62 @@ mod tests {
             thread_count: 2,
             passes: 1,
             max_user_agents: 200,
+            json_output: None,
         })
         .expect("the on-premise performance example should complete");
+    }
+
+    /// The results file CI publishes must be written in the shared schema, with
+    /// the throughput metric the performance graph is keyed on.
+    #[test]
+    fn writes_the_results_json_when_asked() {
+        let Some(data_file) = examples_shared::dd_data_path() else {
+            eprintln!("skipping: no on-premise data file found (set 51DEGREES_DD_PATH)");
+            return;
+        };
+        let Some(user_agents_file) = default_user_agents_file() else {
+            eprintln!("skipping: bundled User-Agent file not found");
+            return;
+        };
+        let json_output = std::env::temp_dir()
+            .join("dd-onprem-performance-results")
+            .join("results.json");
+        let _ = std::fs::remove_file(&json_output);
+
+        run(ExampleOptions {
+            data_file,
+            user_agents_file,
+            thread_count: 2,
+            passes: 1,
+            max_user_agents: 200,
+            json_output: Some(json_output.clone()),
+        })
+        .expect("the on-premise performance example should complete");
+
+        let written =
+            std::fs::read_to_string(&json_output).expect("the results file should be written");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&written).expect("the results file should be valid JSON");
+        assert!(
+            parsed["HigherIsBetter"]["DetectionsPerSecond"].is_number(),
+            "the results file should carry the graph metric, got: {written}"
+        );
+    }
+
+    /// The flag and its value must not be mistaken for the data-file and
+    /// User-Agent-file positions.
+    #[test]
+    fn the_results_flag_is_not_treated_as_a_positional() {
+        let arguments = vec![
+            "data.hash".to_owned(),
+            "--json-output".to_owned(),
+            "results.json".to_owned(),
+            "agents.csv".to_owned(),
+        ];
+        assert_eq!(
+            positional_arguments(&arguments),
+            vec!["data.hash", "agents.csv"]
+        );
     }
 }
 
