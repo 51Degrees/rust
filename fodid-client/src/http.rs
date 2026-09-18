@@ -52,7 +52,9 @@ pub enum HttpMethod {
 pub struct DidHttpRequest {
     /// The HTTP method.
     pub method: HttpMethod,
-    /// The absolute URL to request.
+    /// The absolute URL to request. The 51Did routes carry the resource key
+    /// as part of the route, so this must not be copied into an error message
+    /// as it stands.
     pub url: String,
     /// The url-encoded form fields to send as the POST body, empty for a
     /// GET. The transport is responsible for url-encoding these.
@@ -119,6 +121,13 @@ pub trait DidHttpClient: Send + Sync {
     /// that could not be read. A status the caller did not want is still a
     /// completed request and comes back as `Ok`, because the client decides
     /// what each status means and says so in its own words.
+    ///
+    /// The message travels into an error that anything may print, and the
+    /// address carries the resource key in its route, so an implementation
+    /// that quotes the address should pass the message through
+    /// [`crate::redact::redact`] first. The client cleans the message again on
+    /// the way out, with the credentials it holds, so an implementation that
+    /// forgets is still covered.
     fn send<'a>(
         &'a self,
         request: &'a DidHttpRequest,
@@ -173,16 +182,28 @@ impl DidHttpClient for ReqwestClient {
                 HttpMethod::Get => self.client.get(&request.url),
                 HttpMethod::Post => self.client.post(&request.url).form(&request.form),
             };
+            // The address carries the resource key in its route, and reqwest
+            // puts the address into its own message too, so the whole line is
+            // cleaned rather than only the part this code wrote.
             let response = builder
                 .header("User-Agent", &request.user_agent)
                 .send()
                 .await
-                .map_err(|e| format!("failed to send request to '{}': {e}", request.url))?;
+                .map_err(|e| {
+                    crate::redact::redact(&format!(
+                        "failed to send request to '{}': {e}",
+                        request.url
+                    ))
+                    .into_owned()
+                })?;
             let status = response.status().as_u16();
-            let body = response
-                .text()
-                .await
-                .map_err(|e| format!("failed to read the answer from '{}': {e}", request.url))?;
+            let body = response.text().await.map_err(|e| {
+                crate::redact::redact(&format!(
+                    "failed to read the answer from '{}': {e}",
+                    request.url
+                ))
+                .into_owned()
+            })?;
             Ok(DidHttpResponse { status, body })
         })
     }

@@ -21,6 +21,10 @@ fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
 # which this crate never uses, so it compiles for wasm32-wasip1. Enable the
 # `data-update` feature to re-export it.
 fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines", default-features = false }
+# The sequence element, whose data holds the sequence number after it has added
+# one to the request's value. Its default features carry no reqwest, so the
+# crate still compiles for wasm32-wasip1.
+fiftyone-pipeline-engines-fiftyone = { version = "4.5.2", path = "../pipeline-engines-fiftyone" }
 # serde_json with preserve_order keeps the serialized key order deterministic so
 # the JSON (and any ETag computed from it downstream) is stable across runs. The
 # indexmap-backed Map this enables preserves insertion order rather than sorting.

@@ -267,6 +267,12 @@ fiftyoneDegreesIndicesPropertyProfileCreate(
 		return NULL;
 	}
 
+	// A profile with no value for a property leaves its entry unset, so every
+	// entry starts at the largest index, which is never below a profile's
+	// value count. A lookup for such an entry then finds no values, where an
+	// uninitialised entry would point at the values of other properties.
+	memset(index->valueIndexes, 0xFF, sizeof(uint32_t) * index->size);
+
 	// For each of the profiles in the collection call add the property value
 	// indexes to the index array.
 	iterateProfiles(

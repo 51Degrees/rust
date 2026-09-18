@@ -804,3 +804,87 @@ fn exported_state_returns_the_build_time_discovery_when_nothing_is_injected() {
         "export performs no further request"
     );
 }
+
+/// The URL the builder asked the `accessibleproperties` endpoint with.
+fn accessible_properties_url(client: &FakeClient) -> String {
+    client
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|r| r.url.contains("accessibleproperties"))
+        .expect("the build asked for the accessible properties")
+        .url
+        .clone()
+}
+
+#[test]
+fn accessible_properties_are_asked_for_with_the_license_key() {
+    // The cloud adds the products a license key grants to those of the
+    // resource key, and the data request sends both keys, so the metadata
+    // has to be asked for with both as well.
+    let client = Arc::new(FakeClient::default());
+    CloudRequestEngine::builder()
+        .resource_key("test-resource-key")
+        .license_key("LICENSE+KEY/1")
+        .endpoint("https://cloud.example.test/api/v4/")
+        .http_client(client.clone())
+        .build()
+        .unwrap();
+    assert_eq!(
+        accessible_properties_url(&client),
+        "https://cloud.example.test/api/v4/accessibleproperties\
+         ?resource=test-resource-key&license=LICENSE%2BKEY%2F1"
+    );
+}
+
+#[test]
+fn accessible_properties_are_asked_for_without_a_blank_license_key() {
+    for license in [None, Some(""), Some("  ")] {
+        let client = Arc::new(FakeClient::default());
+        let mut builder = CloudRequestEngine::builder()
+            .resource_key("test-resource-key")
+            .endpoint("https://cloud.example.test/api/v4/")
+            .http_client(client.clone());
+        if let Some(license) = license {
+            builder = builder.license_key(license);
+        }
+        builder.build().unwrap();
+        assert_eq!(
+            accessible_properties_url(&client),
+            "https://cloud.example.test/api/v4/accessibleproperties\
+             ?resource=test-resource-key",
+            "license key {license:?}"
+        );
+    }
+}
+
+#[test]
+fn accessible_properties_failure_names_neither_key() {
+    // The keys travel in the query string of this request, so a failure must
+    // name the endpoint without them.
+    let client = Arc::new(FakeClient::default());
+    client.set_properties(FakeClient::with_status(500, "{}"));
+    let result = CloudRequestEngine::builder()
+        .resource_key("test-resource-key")
+        .license_key("secret-license-key")
+        .endpoint("https://cloud.example.test/api/v4/")
+        .http_client(client)
+        .build();
+    let message = match result {
+        Err(error) => error.to_string(),
+        Ok(_) => panic!("expected the build to fail on a 500 from the cloud"),
+    };
+    assert!(
+        message.contains("https://cloud.example.test/api/v4/accessibleproperties"),
+        "the endpoint is named: {message}"
+    );
+    assert!(
+        !message.contains("secret-license-key"),
+        "the license key is not in the message: {message}"
+    );
+    assert!(
+        !message.contains("test-resource-key"),
+        "the resource key is not in the message: {message}"
+    );
+}

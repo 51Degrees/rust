@@ -29,8 +29,9 @@ fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
 # `data-update` feature to re-export it.
 fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines", default-features = false }
 # The session id and sequence evidence keys excluded from the request parameters
-# live in the 51Degrees-specific engines crate. Depending on it keeps those keys
-# in one place rather than re-spelling them here.
+# live in the 51Degrees-specific engines crate, and so does the sequence element
+# whose data supplies the session id and sequence number to the template.
+# Depending on it keeps those in one place rather than re-spelling them here.
 fiftyone-pipeline-engines-fiftyone = { version = "4.5.2", path = "../pipeline-engines-fiftyone" }
 fiftyone-json-builder = { version = "4.5.2", path = "../json-builder" }
 # The bundled JavaScriptResource.mustache template is rendered by this crate's
