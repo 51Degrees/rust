@@ -1,12 +1,25 @@
 fiftyoneDegreesManager = function() {
     'use strict';
     var json = {{&_jsonObject}};
-    var parameters = {{&_parameters}};
+    // The query evidence of the script request, rendered by the builder and
+    // already url encoded by it. A factory rather than an object, so that
+    // every request body is built from a fresh copy and the rendered values
+    // are never changed in place.
+    var renderedParameters = function() { return {{&_parameters}}; };
     var sessionId = "{{&_sessionId}}";
     // The session id is deliberately not part of the key: it changes on
     // every request, and session storage is already scoped to one tab.
     var sessionKey = "{{_objName}}";
+
+    // Where the record of the last request's inputs is kept. It starts with
+    // the storage key and an underscore, so clearCache takes it away with
+    // everything else.
+    var inputsKey = sessionKey + "_inputs";
     this.sessionId = sessionId;
+
+    // Held so that loadParsedJSON can update this instance whatever path it
+    // was reached by.
+    var instance = this;
     var sequence = {{&_sequence}};
 
     // Log any errors returned in the JSON object.
@@ -44,6 +57,64 @@ fiftyoneDegreesManager = function() {
     // it belongs to.
     var jsPropertiesPending = [];
 
+    // The record of the inputs of the last request this script dispatched,
+    // or of the request that produced the payload in session storage. A
+    // refresh whose inputs match it has nothing to ask for.
+    var lastSent = null;
+
+    // Set when an answer arrives while a round is in progress. That round's
+    // own next request is built from the answer as it stands, so it carries
+    // the answer already. Only an answer that arrives after the round's last
+    // request needs a request of its own, and this flag is what asks for one.
+    var refreshPending = false;
+
+    // The number of iterations of one page view. The server stops listing
+    // snippets at the same number, so nothing is sent after it. This matches
+    // MAX_JAVASCRIPT_ITERATIONS in pipeline-dotnet's JSON builder constants
+    // and a test there compares the two.
+    var maxIterations = 10;
+
+    // Replaced inside the update section below, where a request can actually
+    // be made. A script rendered with updates disabled never makes one, so
+    // there is nothing for a refresh to do and page code is told so.
+    var refresh = function() {
+        console.log("51Degrees: updates are disabled for this script, refresh() does nothing.");
+    };
+
+    // Run at the end of every round, whether it completed or failed. A round
+    // is the whole exchange, from process() through every snippet callback to
+    // the response that lists nothing more, which is what completed or failed
+    // already expresses. The callback counter is not built for two rounds at
+    // once and in flight is the wrong unit, because the snippets run
+    // asynchronously before the first request goes.
+    var roundEnded = function() {
+        if (refreshPending) {
+            refreshPending = false;
+            refresh();
+            return;
+        }
+{{#_updateEnabled}}
+{{#_userPrompt}}
+        // A round can end with no request having been made at all, which is
+        // what happens where the server asked for no snippet, or asked only
+        // for one that saved nothing and so had its count backed out again,
+        // because processJsProperties then completes from the payload
+        // rendered into the page. Where the visitor had already answered
+        // before this script ran and the request for the script did not carry
+        // that answer, the answer has reached nobody and no 51Did can have
+        // been created, so the round is asked for here. refresh() decides
+        // whether anything is really needed and does nothing where the inputs
+        // match what was last sent, so the ordinary page, whose own request
+        // already carried the answer, stays at one request and cannot loop.
+        // Only a round that completed counts, because a round that failed had
+        // dispatched a request and that request carried the answer.
+        if (completed && answerNotSent()) {
+            refresh();
+        }
+{{/_userPrompt}}
+{{/_updateEnabled}}
+    };
+
     // startsWith polyfill.
     var startsWith = function(source, searchValue) {
         return source.lastIndexOf(searchValue, 0) === 0;
@@ -55,18 +126,26 @@ fiftyoneDegreesManager = function() {
     }
 
     var clearCache = function() {
-        if (sessionStorage) {
+        // Guarded with typeof because the script is also evaluated where
+        // session storage is not declared at all, which is how the cloud's
+        // two builder unit tests run it.
+        if (typeof sessionStorage !== 'undefined' && sessionStorage) {
             // Iterate backwards: removeItem shifts every later key down one
             // index, so a forward loop skips whichever key moves into the slot
             // just vacated.
-            for (var i = sessionStorage.length - 1; i >= 0; i--) {
-                var key = sessionStorage.key(i);
-                // Match the exact key or the key plus a separator. Without the
-                // session id the prefix is short enough that a bare startsWith
-                // would also match an unrelated key on the same origin.
-                if (key === sessionKey || startsWith(key, sessionKey + "_")) {
-                    sessionStorage.removeItem(key);
+            try {
+                for (var i = sessionStorage.length - 1; i >= 0; i--) {
+                    var key = sessionStorage.key(i);
+                    // Match the exact key or the key plus a separator. Without
+                    // the session id the prefix is short enough that a bare
+                    // startsWith would also match an unrelated key on the same
+                    // origin.
+                    if (key === sessionKey || startsWith(key, sessionKey + "_")) {
+                        sessionStorage.removeItem(key);
+                    }
                 }
+            } catch (err) {
+                // Web storage is blocked, so there is nothing stored to clear.
             }
         }
     }
@@ -77,10 +156,17 @@ fiftyoneDegreesManager = function() {
     // makes this page view execute the snippets again instead of completing
     // with neither the cached values nor a request.
     var getCachedJson = function() {
-        if (!sessionStorage) {
+        if (typeof sessionStorage === 'undefined' || !sessionStorage) {
             return null;
         }
-        var cachedResponse = sessionStorage.getItem(sessionKey);
+        var cachedResponse = null;
+        try {
+            cachedResponse = sessionStorage.getItem(sessionKey);
+        } catch (err) {
+            // Reading web storage throws where the visitor has blocked it, and
+            // a page view with no storage still has to run.
+            return null;
+        }
         if (!cachedResponse) {
             return null;
         }
@@ -176,38 +262,474 @@ fiftyoneDegreesManager = function() {
             }
         };
         {{/_enableCookies}}
-        {{^_enableCookies}}
         {
-            // Collect values from session storage
-            let session51DataPrefix = sessionKey + "_data_";
-            for(let i = 0, n = window.sessionStorage.length; i < n; ++i) {
-                let nextKey = window.sessionStorage.key(i);
-                if(startsWith(nextKey, session51DataPrefix)){
-                    let value = window.sessionStorage[nextKey];
-                    fodValues[nextKey.substring(session51DataPrefix.length)] = value;
+            // Collect values from session storage, which holds the values the
+            // snippets produced where cookies are off, and in both modes the
+            // empty result of a snippet that stored nothing. A name the
+            // cookies already carry is left alone, so a value a snippet
+            // stored beats the empty result written before it ran. Guarded
+            // because the request body is now built in the constructor as
+            // well as at dispatch, so this runs where there is no window at
+            // all and where the visitor has blocked storage.
+            try {
+                if (typeof window !== 'undefined' && window.sessionStorage) {
+                    let session51DataPrefix = sessionKey + "_data_";
+                    for(let i = 0, n = window.sessionStorage.length; i < n; ++i) {
+                        let nextKey = window.sessionStorage.key(i);
+                        if(startsWith(nextKey, session51DataPrefix)){
+                            let name =
+                                nextKey.substring(session51DataPrefix.length);
+                            if(!Object.prototype.hasOwnProperty.call(
+                                fodValues, name)){
+                                fodValues[name] = window.sessionStorage[nextKey];
+                            }
+                        }
+                    }
                 }
+            } catch (err) {
+                // Storage is blocked, so there are no stored values.
             }
         };
-        {{/_enableCookies}}
         return fodValues;
     };
 
-    // Extract key value pairs from the '51D_' prefixed values and concatenates
-    // them to form a query string for the subsequent json refresh.
-    var getParametersFromStorage = function() {
-        var fodValues = getFodSavedValues();
-        var keyValuePairs = [];
-        for (var key in fodValues) {
-            if (fodValues.hasOwnProperty(key)) {
-                // Url encode the value.
-                // This is done to ensure that invalid characters (e.g. = chars at the end of
-                // base 64 encoded strings) reach the server intact.
-                // The server will automatically decode the value before passing it into the
-                // Pipeline API.
-                keyValuePairs.push(key + "=" + encodeURIComponent(fodValues[key]));
+    // Url encode one key or one value for the request body. This is done so
+    // that invalid characters, such as the = at the end of a base 64 encoded
+    // string, reach the server intact, and the server decodes the value
+    // before passing it into the Pipeline API. The rendered parameters arrive
+    // already encoded by the builder, so they go into the map as they stand
+    // and everything added below is encoded as it is added, which leaves
+    // every pair encoded exactly once.
+    var encodePart = function(value) {
+        return encodeURIComponent(value);
+    };
+
+    // Build the map of everything a request body carries, each key once,
+    // later sources replacing earlier ones. The order is the rendered
+    // parameters of this page view, then the stored '51D_' values the
+    // snippets produced, then the evidence object the page supplied, read at
+    // this moment. Building one map rather than pushing two lists is what
+    // stops a key given both in the script URL and in the evidence object
+    // being sent twice, which the server keeps as a repeated form key that
+    // every reader then sees as absent.
+    var buildBody = function() {
+        var body = renderedParameters();
+
+        // The values the snippets produced. They are the one thing that
+        // carries over from an earlier page view, and they come from their
+        // own storage rather than from a stored copy of the parameters.
+        var savedValues = getFodSavedValues();
+        for (var savedKey in savedValues) {
+            if (Object.prototype.hasOwnProperty.call(savedValues, savedKey)) {
+                body[encodePart(savedKey)] = encodePart(savedValues[savedKey]);
             }
         }
-        return keyValuePairs;
+
+        // Additional evidence provided by the page. Sent in the request body,
+        // never put in the URL or a cookie, and kept in session storage only
+        // inside the record of the request's inputs.
+        var pageEvidence = typeof window !== 'undefined' ?
+            window["{{_objName}}Evidence"] : undefined;
+        if (pageEvidence && typeof pageEvidence === "object") {
+            for (var evidenceKey in pageEvidence) {
+                if (Object.prototype.hasOwnProperty.call(pageEvidence, evidenceKey)) {
+                    body[encodePart(evidenceKey)] =
+                        encodePart(pageEvidence[evidenceKey]);
+                }
+            }
+        }
+
+{{#_updateEnabled}}
+{{#_userPrompt}}
+        // The block's answer goes into the body and never onto the evidence
+        // object. One value for one key, so the answer replaces whatever the
+        // script URL or the evidence object carried. The two Global Privacy
+        // Platform keys go with it, because the server no longer reads them
+        // and there is no point carrying them. A page with no platform at all
+        // sends whatever its URL and evidence object carried, as before.
+        if (answer) {
+            delete body["id.usage"];
+            delete body["tcstring"];
+            delete body["gpp"];
+            delete body["gppstring"];
+            var mark = answer.indexOf("=");
+            body[answer.substring(0, mark)] =
+                encodePart(answer.substring(mark + 1));
+        }
+
+{{/_userPrompt}}
+{{/_updateEnabled}}
+        return body;
+    };
+
+    // The map as the wire sees it, one 'key=value' string per entry.
+    var toPairs = function(body) {
+        var pairs = [];
+        for (var key in body) {
+            if (Object.prototype.hasOwnProperty.call(body, key)) {
+                pairs.push(key + "=" + body[key]);
+            }
+        }
+        return pairs;
+    };
+
+    // The keys the record never carries. Both change on every request, so a
+    // record holding either could never match the next page view's and the
+    // cached response could never be reused. Where updates are enabled the
+    // request appends them after the record is taken, which is enough where
+    // they reach the body from nowhere else, and they are taken out here as
+    // well because a builder is free to render whatever it likes into the
+    // script's parameters and one that renders these lands them in the body.
+    // This comment does not name the function that sends the request,
+    // because it sits outside the update section and a script rendered with
+    // updates off is checked for that name being absent. Taking
+    // them out in one place means the record says what its name says whatever
+    // the parameters carried.
+    var recordExcluded = { "session-id": 1, "sequence": 1 };
+
+    // The record of a request's inputs. The same pairs as the body, without
+    // the session id and the sequence, sorted so that the order the keys
+    // happened to be added in cannot make two identical requests look
+    // different, and joined the way the body joins them. It is kept as this
+    // plain string and is deliberately not hashed, because session storage on
+    // the publisher's origin is reachable only by the joint controllers,
+    // being the publisher and 51Degrees, and a hash would be read as a
+    // privacy measure when it is not one.
+    var toRecord = function(body) {
+        var pairs = [];
+        for (var key in body) {
+            if (Object.prototype.hasOwnProperty.call(body, key) &&
+                Object.prototype.hasOwnProperty.call(recordExcluded, key)
+                    === false) {
+                pairs.push(key + "=" + body[key]);
+            }
+        }
+        return pairs.sort().join('&').replace(/%20/g, '+');
+    };
+
+    // The record of what this page view would send if it dispatched now.
+    var inputs = function() {
+        return toRecord(buildBody());
+    };
+
+{{#_updateEnabled}}
+{{#_userPrompt}}
+    // The user prompt block. The script gathers the visitor's answer itself
+    // and the publisher writes no code. The 51Degrees Preference Management
+    // Platform is asked first and the Transparency and Consent Framework
+    // second, the first source with an answer wins and the rest are ignored,
+    // and the server applies the same order. A Global Privacy Platform string
+    // is never read, because the Model Terms for Marketing do not map it, so
+    // nothing here registers on the Global Privacy Platform's window object
+    // and neither gpp nor gppstring is ever sent.
+    //
+    // Every browser global below is reached through typeof and every call
+    // into a platform, every storage read and every JSON.parse sits in a try
+    // whose catch means no answer from that source. The script is evaluated
+    // with no window at all by two builder unit tests, a visitor can block
+    // web storage, a platform's stub can throw on any command, and nothing
+    // here may stop process().
+
+    // The answer as one body key and its value, such as "id.usage=standard",
+    // or undefined where no source has one.
+    var answer = undefined;
+
+    // The keys an answer can occupy in the body.
+    var answerKeys = ["id.usage", "tcstring"];
+
+    // The last value the platform's window event delivered.
+    var promptEventValue = undefined;
+
+    // The last framework string delivered with success true and a status the
+    // specification says carries a complete string.
+    var frameworkString = undefined;
+
+    // The three answers the Preference Management Platform can hold. The
+    // alternative button stores non-marketing, which is an answer under the
+    // Model Terms and not a refusal, so it is sent as a usage like the other
+    // two. There is no refusal in the platform.
+    var promptAnswers = ["non-marketing", "standard", "personalized"];
+
+    // True where a consent platform is on the page, whether or not it has
+    // answered yet. The page's own document is deliberately not searched for
+    // the platform's script tag, because a tag that follows this one has not
+    // been parsed when this runs, so the search would answer no in the one
+    // case it was meant to cover. Answering no where a platform is present
+    // costs one extra round, whilst answering yes where none is present would
+    // reuse a stored answer that no longer applies.
+    var platformPresent = function() {
+        if (typeof window === 'undefined') {
+            return false;
+        }
+        try {
+            if (typeof window.__tcfapi === 'function') {
+                return true;
+            }
+            if (typeof window.__51d_pmp !== 'undefined' &&
+                window.__51d_pmp !== null) {
+                return true;
+            }
+        } catch (err) {
+            // A stub that throws on a property read tells us nothing, so it
+            // counts as no platform.
+        }
+        return false;
+    };
+
+    // The Preference Management Platform's answer, or undefined.
+    var readPromptAnswer = function() {
+        if (typeof window === 'undefined') {
+            return undefined;
+        }
+        // Once the bundle has loaded it holds in memory whatever init() found,
+        // in local storage or in the shared store, which is how a returning
+        // visitor whose answer lives in the shared store has a synchronous
+        // answer on a page that loaded the platform first.
+        try {
+            if (typeof window.__51d_pmp !== 'undefined' &&
+                window.__51d_pmp !== null &&
+                typeof window.__51d_pmp.preference === 'function') {
+                var held = window.__51d_pmp.preference();
+                if (promptAnswers.indexOf(held) !== -1) {
+                    return held;
+                }
+            }
+        } catch (err) {
+            // No answer from that source.
+        }
+        if (promptAnswers.indexOf(promptEventValue) !== -1) {
+            return promptEventValue;
+        }
+        // Covers a script that constructs before the bundle has loaded on a
+        // site where the visitor has already answered. Nothing new is written
+        // to storage by either side.
+        try {
+            if (typeof localStorage !== 'undefined' && localStorage) {
+                var stored = localStorage.getItem("__51d_pmp_pref");
+                if (stored) {
+                    var parsed = JSON.parse(stored);
+                    if (parsed && promptAnswers.indexOf(parsed.p) !== -1) {
+                        return parsed.p;
+                    }
+                }
+            }
+        } catch (err) {
+            // Storage is blocked or the entry does not parse, so there is no
+            // answer from that source.
+        }
+        return undefined;
+    };
+
+    // One reader, run at construction and on every wake up. The priority
+    // chain runs every time, so there is no answered flag, a later value from
+    // the source that answered replaces the answer, and a delivery from a
+    // lower ranked source changes nothing. That is what makes a visitor
+    // who chooses standard and then the alternative in the same page view, or
+    // whose answer arrives from the shared store after this script
+    // constructed, produce the fresh request the rule about reuse requires.
+    var readAnswer = function() {
+        var preference = readPromptAnswer();
+        if (preference) {
+            return "id.usage=" + preference;
+        }
+        if (typeof frameworkString === 'string' && frameworkString.length > 0) {
+            // A string is never mapped to a usage here. IabTcfElement does
+            // that on the server and two copies would drift.
+            return "tcstring=" + frameworkString;
+        }
+        return undefined;
+    };
+
+    // True where the block holds an answer that no request has carried. The
+    // request for this script itself counts, because the payload rendered
+    // into the page was built from that request's own query evidence, so a
+    // page whose script URL already named the answer has the identifier in
+    // its rendered payload and nothing new to send. Where a request has since
+    // gone, refresh() is the one that notices, by comparing the inputs with
+    // the record of what was last sent.
+    var answerNotSent = function() {
+        if (!answer) {
+            return false;
+        }
+        var mark = answer.indexOf("=");
+        return renderedParameters()[answer.substring(0, mark)] !==
+            encodePart(answer.substring(mark + 1));
+    };
+
+    // The wake up.
+    var wake = function() {
+        var a = readAnswer();
+        if (a !== answer) {
+            answer = a;
+            refresh();
+        }
+    };
+
+    // Read a stored record back into its map, so that one key can be taken
+    // from it. The record is written in the same encoding the body uses, so
+    // the pairs come back exactly as they went in.
+    var recordToMap = function(record) {
+        var map = {};
+        if (!record) {
+            return map;
+        }
+        var pairs = record.split('&');
+        for (var i = 0; i < pairs.length; i++) {
+            var mark = pairs[i].indexOf('=');
+            if (mark > 0) {
+                map[pairs[i].substring(0, mark)] =
+                    pairs[i].substring(mark + 1);
+            }
+        }
+        return map;
+    };
+
+    // Registered once at construction and never removed.
+    var registerListeners = function() {
+        if (typeof window === 'undefined') {
+            return;
+        }
+        // The platform's bundle loads asynchronously and may arrive after
+        // this script in either tag order, so this is registered whether or
+        // not the platform has loaded. It is the only route by which an
+        // answer, the alternative answer and a correction from the shared
+        // store reach this script as a stated usage.
+        try {
+            if (typeof window.addEventListener === 'function') {
+                window.addEventListener('51d-pmp-preference', function(event) {
+                    try {
+                        var delivered = event && event.detail ?
+                            event.detail.preference : undefined;
+                        // Only the three answers are accepted. Anything else
+                        // is ignored rather than stored, so a delivery this
+                        // script does not recognise cannot throw away an
+                        // answer the visitor has already given.
+                        if (promptAnswers.indexOf(delivered) !== -1) {
+                            promptEventValue = delivered;
+                        }
+                    } catch (err) {
+                        // No answer from that source.
+                    }
+                    wake();
+                });
+            }
+        } catch (err) {
+            console.warn("51Degrees: registering the preference listener threw, so a preference announced by the page will not be seen.");
+        }
+        // The framework specification requires the callback to be invoked at
+        // once with the current data where the platform is loaded, and
+        // getTCData is deprecated in version 2.2 and not required, so neither
+        // ping nor getTCData is called. A page's stub queues the registration
+        // until the platform loads and calls back then, which is the normal
+        // route on a page with a third party platform.
+        try {
+            if (typeof window.__tcfapi === 'function') {
+                var calledBack = false;
+                window.__tcfapi('addEventListener', 2, function(data, success) {
+                    calledBack = true;
+                    try {
+                        if (success !== true || !data) {
+                            // A delivery of (null, false) clears it and is
+                            // never read as an answer. On the Preference
+                            // Management Platform it is only the framework's
+                            // view of the alternative answer, a usage granting
+                            // no purposes, which this block reads through the
+                            // platform source, and on any other platform it is
+                            // an error.
+                            frameworkString = undefined;
+                        } else if (data.eventStatus === 'tcloaded' ||
+                            data.eventStatus === 'useractioncomplete') {
+                            frameworkString =
+                                typeof data.tcString === 'string' &&
+                                data.tcString.length > 0 ?
+                                data.tcString : undefined;
+                        }
+                    } catch (err) {
+                        frameworkString = undefined;
+                    }
+                    wake();
+                });
+                // This only logs. It changes nothing about processing and it
+                // is not a wait.
+                if (typeof setTimeout === 'function') {
+                    setTimeout(function() {
+                        if (calledBack === false) {
+                            console.warn("51Degrees: the call to __tcfapi('addEventListener') has not called back within ten seconds, so it is treated as no answer.");
+                        }
+                    }, 10000);
+                }
+            }
+        } catch (err) {
+            console.warn("51Degrees: the call to __tcfapi('addEventListener') threw, so it is treated as no answer.");
+        }
+    };
+
+    // Where no platform was found at construction and no source had an
+    // answer there is no recovery on this page view, and this warning is the
+    // only signal. An answer already read from storage means a 51Did will be
+    // created, so saying otherwise would be wrong and the warning is not
+    // printed. No value is ever printed by this block.
+    var warnIfNoPlatform = function() {
+        if (!answer && platformPresent() === false) {
+            console.warn("51Degrees: no preference platform was found on this page. A platform's stub must precede this script. No 51Did will be created until a platform answers.");
+        }
+    };
+{{/_userPrompt}}
+{{/_updateEnabled}}
+
+    // Compare this page view's inputs with the record of the request that
+    // produced the entry in session storage. Runs once per script run, in the
+    // constructor, before the first round. Not inside process(), which is
+    // re-entered once per round and would clear the round's own values part
+    // way through an exchange.
+    var applyInputsRecord = function() {
+        if (typeof sessionStorage === 'undefined' || !sessionStorage) {
+            return;
+        }
+        var stored = null;
+        try {
+            stored = sessionStorage.getItem(inputsKey);
+        } catch (err) {
+            // Storage is blocked, so there is no record to compare with.
+            return;
+        }
+        if (!stored) {
+            return;
+        }
+        var current = buildBody();
+{{#_updateEnabled}}
+{{#_userPrompt}}
+        // No answer yet means unknown, not different. Where a platform is on
+        // the page but has not delivered, the answer key in the stored record
+        // stands in for the missing one in this comparison, so the entry is
+        // served until the platform answers and an answer that differs then
+        // refreshes. Without this a page whose platform loads after this
+        // script would pay two full rounds on every page view for the life of
+        // the tab. A page with no platform at all keeps the literal reading.
+        if (!answer && platformPresent()) {
+            var storedMap = recordToMap(stored);
+            for (var i = 0; i < answerKeys.length; i++) {
+                if (Object.prototype.hasOwnProperty.call(
+                    storedMap, answerKeys[i])) {
+                    current[answerKeys[i]] = storedMap[answerKeys[i]];
+                }
+            }
+        }
+{{/_userPrompt}}
+{{/_updateEnabled}}
+        if (toRecord(current) === stored) {
+            // The same inputs, so the stored answer may be reused and a later
+            // refresh that changes nothing has nothing to ask for.
+            lastSent = stored;
+        } else {
+            // Different inputs, so the payload, the flags and the values go
+            // and the snippets run again on this page view. A publisher who
+            // puts a cache buster in the script URL lands it in the rendered
+            // parameters and so invalidates on every page view, which is
+            // accepted because such a parameter already defeats the browser
+            // cache on the same response.
+            clearCache();
+        }
     };
 
     // Fetch a value safely from the json object. If a key somewhere down the
@@ -274,11 +796,43 @@ fiftyoneDegreesManager = function() {
         // then process them and perform any call-backs required.
         if (jsProperties !== undefined && jsProperties.length > 0) {
 
-            {{^_enableCookies}}
             let valueSetPrefix = new RegExp('document\\.cookie\\s*=\\s*(("([A-Za-z0-9_"\\s\\+]+)\\s*=\\s*"\\s*\\+\\s*([^\\s};]+))|(`([A-Za-z0-9_]+)\\s*=\\s*\\$\\{([^}]+)\\}`))', 'g');
             let session51DataPrefix = sessionKey + "_data_";
+            {{^_enableCookies}}
             let sessionSetPatch = 'window.sessionStorage["' + session51DataPrefix + '$3$6"]=$4$7';
             {{/_enableCookies}}
+
+            // Store an empty result for each value a snippet sets that has
+            // none yet. An empty value is how the server is told the snippet
+            // ran and stored nothing, which is the only report it gets from a
+            // snippet whose interface is missing at run time, and without one
+            // the page waits for a result that never comes. Groups 3 and 6 of
+            // the pattern the rewrite already uses hold the name. The empty
+            // result goes to session storage whatever the cookie setting, so
+            // the script gains no cookie write of its own, and
+            // getFodSavedValues falls back to that result for a name the
+            // cookies do not carry.
+            let storeEmptyValues = function(snippet) {
+                let found;
+                valueSetPrefix.lastIndex = 0;
+                while ((found = valueSetPrefix.exec(snippet)) !== null) {
+                    let valueName = found[3] || found[6];
+                    if (!valueName) {
+                        continue;
+                    }
+                    try {
+                        if (typeof window !== 'undefined' &&
+                            window.sessionStorage &&
+                            window.sessionStorage.getItem(
+                                session51DataPrefix + valueName) === null) {
+                            window.sessionStorage[
+                                session51DataPrefix + valueName] = "";
+                        }
+                    } catch (err) {
+                        // Storage is blocked, so nothing is stored for it.
+                    }
+                }
+            };
 
             // Execute each of the JavaScript property code snippets using the
             // index of the value to access the value to avoid problems with
@@ -320,6 +874,13 @@ fiftyoneDegreesManager = function() {
                     completed = false;
                     jsPropertiesStarted.push(name);
                     started++;
+
+                    // Before the snippet runs, so a value the snippet stores
+                    // replaces the empty one, and before the request is built,
+                    // so the empty one is in the record of that request's
+                    // inputs and the next page view computes the same record
+                    // and keeps its cache.
+                    storeEmptyValues(body);
 
                     {{^_enableCookies}}
                     body = body.replaceAll(valueSetPrefix, sessionSetPatch);
@@ -389,14 +950,19 @@ fiftyoneDegreesManager = function() {
 
             // A snippet that has run has evidence the cached payload cannot
             // account for, which is why completing from the cache is confined
-            // to this branch: doing it after a snippet started would suppress
+            // to this branch. Doing it after a snippet started would suppress
             // the request that carries that evidence.
             if (cachedJson) {
+                // loadParsedJSON sets the flags and ends the round itself on
+                // every path it takes, and it may start a refresh round, so
+                // the lines below must not run after it and claim that round
+                // is finished.
                 loadParsedJSON(resolve, reject, mergeCached(cachedJson));
+            } else {
+                failed = false;
+                completed = true;
+                roundEnded();
             }
-
-            failed = false;
-            completed = true;
         } else {
             // Release the hold. If every snippet that started has already called
             // back this dispatches now; otherwise the last callback to arrive does.
@@ -483,6 +1049,12 @@ fiftyoneDegreesManager = function() {
     var loadParsedJSON = function(resolve, reject, newJson) {
         json = newJson;
 
+        // Republish the payload on this instance, so that fod.fodid and every
+        // other section reflect the latest response on the promise path and
+        // on the path without promises alike. Done before the handlers run,
+        // so that a handler reading the instance sees the new values.
+        update.call(instance, json);
+
         if (hasJSFunctions()) {
             // json updated so fire 'on change' functions
             // before executing any new JS properties that
@@ -497,18 +1069,31 @@ fiftyoneDegreesManager = function() {
             // for 'complete' functions to fire.
             fireChangeFuncs(json);
             resolve(json);
+            roundEnded();
         }
     }
 
 {{#_updateEnabled}}
+    // One exit for every failed request. The cache goes, the failure is
+    // reported and the round ends, so that an answer which arrived while the
+    // request was in flight still gets a request of its own. The failed flag
+    // is set here rather than left to catchError, because on the promise path
+    // catchError runs a turn later and until then the round would look as
+    // though it were still running.
+    var failRequest = function(reject, error) {
+        clearCache();
+        failed = true;
+        reject(error);
+        roundEnded();
+    };
+
     // Process the response as json and call the resolve method.
     var loadJSON = function(resolve, reject, responseText) {
         var newJson;
         try {
             newJson = JSON.parse(responseText);
         } catch(err) {
-            clearCache();
-            reject(new Error("Invalid JSON - the endpoint is likely setup incorrectly", { cause: err }));
+            failRequest(reject, new Error("Invalid JSON - the endpoint is likely setup incorrectly", { cause: err }));
             return;
         }
         loadParsedJSON(resolve, reject, newJson);
@@ -528,39 +1113,18 @@ fiftyoneDegreesManager = function() {
     // returned with a success status code. If there was a problem then the
     // session storage items are invalidated and reject is called.
     var processRequest = function(resolve, reject){
-        // parameters is rendered from this page view's own query evidence, so
-        // it is already what the refresh should report and nothing from an
-        // earlier page view belongs in it. The values the snippets produce are
-        // the one thing that does carry over, and they come from their own
-        // storage below rather than from a stored copy of this object.
+        var body = buildBody();
 
-        // Get additional parameters in case they are not sent
-        // by the browser.
-		var savedValueParams = getParametersFromStorage();
-        for(var savedValueIndex in savedValueParams) {
-            var parts = savedValueParams[savedValueIndex].split('=');
-            parameters[parts[0]] = parts[1];
-        }
+        // The record of this request's inputs is computed here, at dispatch,
+        // from the map that is about to be sent, and never from a map built
+        // when the response arrives.
+        lastSent = toRecord(body);
 
-        var params = [];
-        for (var param in parameters) {
-            if (parameters.hasOwnProperty(param)) {
-                params.push(param+"="+parameters[param])
-            }
-        }
+        var params = toPairs(body);
 
-        // Additional evidence provided by the page. Sent in the request
-        // body only and never stored.
-        var pageEvidence = window["{{_objName}}Evidence"];
-        if (pageEvidence && typeof pageEvidence === "object") {
-            for (var evidenceKey in pageEvidence) {
-                if (Object.prototype.hasOwnProperty.call(pageEvidence, evidenceKey)) {
-                    params.push(encodeURIComponent(evidenceKey) + "=" + encodeURIComponent(pageEvidence[evidenceKey]));
-                }
-            }
-        }
-
-        // Add the session and sequence to the request
+        // Add the session and sequence to the request. Both are appended last
+        // and neither is part of the record, because both change on every
+        // request.
         if (sessionId) {
             params.push("session-id=" + sessionId);
         }
@@ -594,10 +1158,11 @@ fiftyoneDegreesManager = function() {
         // Request callback URL with additional parameters.
         var xhr = createCORSRequest('POST', '{{{_url}}}');
 
-        // If there is no support for HTTP requests then call reject and throw
-        // a no CORS support error.
+        // With no support for HTTP requests there is nothing to send. This
+        // exit goes through failRequest like every other failure exit, or
+        // the round is never ended and a refresh waiting on it is dropped.
         if (!xhr) {
-            reject(new Error('CORS not supported'));
+            failRequest(reject, new Error('CORS not supported'));
             return;
         }
 
@@ -610,8 +1175,8 @@ fiftyoneDegreesManager = function() {
             // An error status still reaches onload, and error details come back
             // as a JSON body, so they must not be treated as data or cached.
             if (xhr.status < 200 || xhr.status > 299) {
-                clearCache();
-                reject(new Error('Request failed with status ' + xhr.status));
+                failRequest(reject,
+                    new Error('Request failed with status ' + xhr.status));
                 return;
             }
 
@@ -623,24 +1188,36 @@ fiftyoneDegreesManager = function() {
             // the same moment, so that the two cannot disagree. Cleared before
             // loadJSON, which can re-enter processJsProperties and queue names
             // for the next request.
-            if (sessionStorage) {
-                sessionStorage.setItem(sessionKey, responseText);
-                for (var pending = 0; pending < jsPropertiesPending.length; pending++) {
-                    sessionStorage.setItem(
-                        sessionKey + "_property_" + jsPropertiesPending[pending], true);
+            if (typeof sessionStorage !== 'undefined' && sessionStorage) {
+                try {
+                    sessionStorage.setItem(sessionKey, responseText);
+                    // The record stored with a response is the record of the
+                    // request that produced it, computed at dispatch above.
+                    if (lastSent !== null) {
+                        sessionStorage.setItem(inputsKey, lastSent);
+                    }
+                    for (var flag = 0; flag < jsPropertiesPending.length; flag++) {
+                        sessionStorage.setItem(
+                            sessionKey + "_property_" + jsPropertiesPending[flag], true);
+                    }
+                } catch (err) {
+                    // Web storage is blocked or full. The response is still
+                    // used on this page view and is simply not kept.
                 }
             }
             jsPropertiesPending = [];
+            // Increment the sequence. The request has succeeded and its
+            // response is cached, and this has to happen before the response
+            // is processed because loadJSON can start the next round in the
+            // same turn and that round's body must carry the next number.
+            sequence++;
             // Load the JSON object from the response text
             loadJSON(resolve, reject, responseText);
-            // Increment the sequence on a successful request
-            sequence++;
 {{#_supportsFetch}}
         })
         .catch(error => {
             // Invalidate the cache on error.
-            clearCache();
-            reject(error);
+            failRequest(reject, error);
         });
 {{/_supportsFetch}}
 {{^_supportsFetch}}
@@ -649,14 +1226,66 @@ fiftyoneDegreesManager = function() {
         xhr.onerror = function () {
             // An error occurred with the request. Invalidate the cache and
             // return the details in the call to reject method.
-            clearCache();
-            reject(Error(xhr.statusText));
+            failRequest(reject, Error(xhr.statusText));
         };
 
         // Send the GET request.
         xhr.send(postBody);
 {{/_supportsFetch}}
     }
+
+    // A refresh round reports through these. The first round's promise has
+    // already settled by the time a refresh runs, so resolving it again would
+    // do nothing and rejecting it would swallow the error, and the instance
+    // is updated in loadParsedJSON on every path now.
+    var refreshResolve = function(value) {};
+    var refreshReject = function(value) { catchError(value); };
+
+    // Ask the server for a fresh 51Did, normally because the visitor's answer
+    // arrived after this script loaded. Public as {{_objName}}.refresh below.
+    //
+    // The stored snippet values are sent again and the snippets are not run
+    // again, because screen size, pixel ratio, client hints and the Apple
+    // profile read the device and not the consent state, so a second run
+    // would gather the same values at the cost of a full detection round, and
+    // a delayed snippet's value would be deleted and never gathered again.
+    // The request therefore carries every snippet's result, which is what the
+    // rule that a 51Did is created only after every other piece of data is
+    // complete requires.
+    //
+    // Two identifiers from one page view are never byte identical, because
+    // the signature carries a fresh random value on every call, so a page
+    // that refreshes twice holds two strings that verify the same and differ,
+    // and {{_objName}}.fodid holds whichever response arrived last. Page code
+    // reads the identifier after the last refresh it made has completed.
+    refresh = function() {
+        if (sequence >= maxIterations) {
+            // The iterations of this page view are finished. The server stops
+            // listing snippets at the same number, so there is nothing left
+            // to ask for.
+            console.log("51Degrees: the maximum of " + maxIterations + " iterations for this page view has been reached, refresh() does nothing.");
+            return;
+        }
+        if (!completed && !failed) {
+            // A round is in progress. That round's own next request is built
+            // at dispatch from the answer as it stands, so it carries
+            // anything that arrived while it was running.
+            refreshPending = true;
+            return;
+        }
+        if (inputs() === lastSent) {
+            return;
+        }
+        completed = false;
+        failed = false;
+        // jsPropertiesStarted is deliberately left alone. A refresh does not
+        // run the snippets again, and the hardware profile that saved nothing
+        // stays in that list so that only the next page view retries it, as
+        // the comment on its back out says. A snippet the refresh response
+        // lists for the first time is not in the list and still runs.
+        jsPropertiesPending = [];
+        processRequest(refreshResolve, refreshReject);
+    };
 {{/_updateEnabled}}
 
     // Function logs errors, used to 'reject' a promise or for error callbacks.
@@ -762,6 +1391,25 @@ fiftyoneDegreesManager = function() {
     }
 {{/_hasDelayedProperties}}
 
+{{#_updateEnabled}}
+{{#_userPrompt}}
+    // Register the listeners, then take whatever answer is already available,
+    // then let the comparison below and the first round use it. A listener
+    // can fire synchronously inside its own registration, before process()
+    // has run and before the object is assigned at the end of this file. That
+    // is safe because completed is false until the first round ends, so
+    // refresh() sees a round in progress and only marks it pending, and the
+    // first request carries the answer anyway.
+    registerListeners();
+    answer = readAnswer();
+    warnIfNoPlatform();
+
+{{/_userPrompt}}
+{{/_updateEnabled}}
+    // Compare this page view's inputs with the record of the request that
+    // produced the entry in session storage, once, before the first round.
+    applyInputsRecord();
+
 {{#_supportsPromises}}
     this.promise = new Promise(function(resolve, reject) {
         process(resolve,reject);
@@ -814,20 +1462,41 @@ fiftyoneDegreesManager = function() {
         }
     };
 
-    // Update this instance with the initial JSON payload.
+    // Ask for a fresh 51Did. Returns nothing. Page code rarely needs to call
+    // this, because the script watches the page's consent platform itself,
+    // and it is here for a page that knows something the script cannot see.
+    this.refresh = function() {
+        refresh();
+    };
+
+    // Update this instance with the initial JSON payload. Every later payload
+    // updates it from loadParsedJSON, so a later response reaches the object
+    // on the path without promises too.
     update.call(this, json);
 {{#_supportsPromises}}
-    var parent = this;
-    this.promise.then(function(value) {
-        // JSON has been updated so replace the current instance.
-        update.call(parent, value);
-        failed = false;
-        completed = true;
-    }).catch(catchError);
+    // loadParsedJSON updates the instance and sets the flags on every path,
+    // so the only work left for the first round's promise is to report a
+    // failure.
+    this.promise.catch(catchError);
 {{/_supportsPromises}}
 {{^_supportsPromises}}
     process(function(json) {}, catchError);
 {{/_supportsPromises}}
+}
+
+// Loading the script twice replaces the first instance and its state. The
+// Preference Management Platform adds this script only where the page's
+// document carries no client script tag, and where a tag is there it waits
+// for that tag to run, so that convenience never trips this warning and
+// nobody should "fix" it to allow for it. The value is tested and not the
+// property, because var {{_objName}} at the top level creates the global
+// property with the value undefined before any statement runs, so testing
+// the property would warn on every load. The text names the object and
+// nothing else, because printing the existing object would print its
+// payload, identifiers included.
+if (typeof window !== 'undefined' &&
+    typeof window["{{_objName}}"] !== 'undefined') {
+    console.warn("51Degrees: {{_objName}} already exists on this page. Loading the script twice replaces it. Load it once and call {{_objName}}.refresh() to update.");
 }
 
 var {{_objName}} = new fiftyoneDegreesManager();

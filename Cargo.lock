@@ -644,6 +644,8 @@ dependencies = [
 name = "fiftyone-javascript-builder"
 version = "4.5.2"
 dependencies = [
+ "fiftyone-cloud-request-engine",
+ "fiftyone-fodid-cloud",
  "fiftyone-json-builder",
  "fiftyone-pipeline-core",
  "fiftyone-pipeline-engines",

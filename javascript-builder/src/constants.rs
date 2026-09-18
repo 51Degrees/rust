@@ -100,6 +100,18 @@ pub const PROMISE_PROPERTY: &str = "Promise";
 /// The device-detection property value that indicates full promise support.
 pub const PROMISE_FULL_VALUE: &str = "Full";
 
+/// The name of the 51Did product in a cloud request engine's licensed
+/// products, compared ignoring case.
+///
+/// The cloud service reports the product as `FODid`, whilst the 51Did cloud
+/// engine stores its element data under `fodid`. The two differ only in case,
+/// so the comparison ignores case. A key whose licensed products include this
+/// product with at least one property gets the user prompt section of the
+/// template. The value is the 51Did cloud engine's element data key, copied
+/// rather than imported so this crate does not depend on the 51Did crates, and
+/// a test checks the two are still equal.
+pub const FODID_PRODUCT_NAME: &str = "fodid";
+
 /// The device-detection property consulted to decide whether the client browser
 /// supports the fetch API.
 pub const FETCH_PROPERTY: &str = "Fetch";
