@@ -3,7 +3,9 @@
 #
 # Each crate is published only when its current version is not already on
 # crates.io, so an ordinary push that does not bump versions is a no-op, and a
-# release is just a version bump (all crates share one version) merged to main.
+# release is a version bump merged to main. Every crate carries its own version
+# in its own manifest and they are not held in step, so a release bumps only the
+# crates that changed and the rest are skipped as already published.
 # After publishing a crate the script waits for the new version to appear on the
 # index so the next, dependent crate resolves it.
 #
@@ -22,33 +24,19 @@ if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
   exit 0
 fi
 
-# Dependency order: a crate appears after every workspace crate it depends on.
-CRATES=(
-  fiftyone-common-sys
-  fiftyone-device-detection-sys
-  fiftyone-ip-intelligence-sys
-  fiftyone-pipeline-core
-  fodid
-  fodid-client
-  fiftyone-caching
-  fiftyone-native
-  fiftyone-pipeline-engines
-  fiftyone-pipeline-engines-fiftyone
-  fiftyone-cloud-request-engine
-  fiftyone-device-detection-shared
-  fiftyone-fodid-cloud
-  fiftyone-ip-intelligence-shared
-  fiftyone-json-builder
-  fiftyone-device-detection-cloud
-  fiftyone-device-detection-onpremise
-  fiftyone-ip-intelligence-cloud
-  fiftyone-ip-intelligence-onpremise
-  fiftyone-javascript-builder
-  fiftyone-pipeline-web
-  fiftyone-pipeline-web-axum
-  fiftyone-ip-intelligence
-  fiftyone-device-detection
-)
+# The crates to publish, read from the single list both this script and
+# ci/setup-trusted-publishing.sh use, so a crate can never be published without
+# also being authorised. Blank lines and comments are skipped.
+CRATES_FILE="$(dirname "$0")/crates.txt"
+if [ ! -f "$CRATES_FILE" ]; then
+  echo "Crate list not found at $CRATES_FILE" >&2
+  exit 1
+fi
+mapfile -t CRATES < <(grep -vE '^[[:space:]]*(#|$)' "$CRATES_FILE")
+if [ "${#CRATES[@]}" -eq 0 ]; then
+  echo "Crate list $CRATES_FILE names no crates" >&2
+  exit 1
+fi
 
 UA="51degrees-rust-publish (support@51degrees.com)"
 
