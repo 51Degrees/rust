@@ -34,7 +34,9 @@ jobs:
     name: publish to crates.io
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # write, because a successful publish writes the tag the next release
+      # counts from, as the publish does in the other languages.
+      contents: write
       # Required to mint the OIDC token Trusted Publishing exchanges for a
       # short-lived crates.io token.
       id-token: write
@@ -58,6 +60,23 @@ jobs:
         id: version
         shell: pwsh
         run: |
+          # GitVersion counts from the last version tag. Given none it does
+          # not fail, it answers 0.0.1, and publishing that to crates.io
+          # could never be undone. So having no tags stops the run rather
+          # than being worked around quietly.
+          $tags = git tag --list | Where-Object { $_ -match '^v?[0-9]+[.][0-9]+[.][0-9]+$' }
+          if (-not $tags) {
+            Write-Output "::error title=No version tags::There is nothing for the version to count from, so this run has stopped."
+            Write-Output ""
+            Write-Output "GitVersion answers 0.0.1 where a repository has no version tags. It does not fail, so without this check that number would be written into all the crate manifests and published. crates.io can never be unpublished."
+            Write-Output ""
+            Write-Output "The crates already published are fodid 4.5.5 and fodid-client 4.5.0, so the line to continue from is 4.5.5. Create that tag on the commit those were built from, then run this again:"
+            Write-Output ""
+            Write-Output "    git tag 4.5.5 <commit> && git push origin 4.5.5"
+            Write-Output ""
+            Write-Output "This is needed once. After a release has gone out from here the tag is written by this workflow."
+            exit 1
+          }
           dotnet tool install --global GitVersion.Tool --version 6.*
           $v = dotnet-gitversion /showvariable SemVer
           if (-not $v) { throw 'GitVersion produced no version' }
@@ -100,6 +119,22 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: bash ci/publish-crates.sh
+
+      # The tag is what the next release counts from. The other languages get
+      # theirs from their publish, which is why they have a release history
+      # to read and this repository had none.
+      - name: Tag what was published
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if (git tag --list $env:VERSION) {
+            Write-Output "Tag $env:VERSION is already here, leaving it alone."
+            exit 0
+          }
+          git tag $env:VERSION
+          git push origin $env:VERSION
+          Write-Output "Tagged $env:VERSION"
 
   # AFTER publish: prove the just-released packages work by building and testing
   # the examples against crates.io (no source.toml patch). The pre-publish check
