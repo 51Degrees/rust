@@ -36,7 +36,27 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          # GitVersion reads the tags to work out the next version, and a
+          # shallow clone has none of them.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+      # The version comes from the tags, as it does in the other five
+      # languages, rather than from a number committed in each manifest. No
+      # commit can then release a version by accident, and all 24 crates move
+      # together instead of drifting apart, which is how three of them reached
+      # 4.6 while the other twenty one stayed at 4.5.2.
+      - name: Work out the version from the tags
+        id: version
+        shell: pwsh
+        run: |
+          dotnet tool install --global GitVersion.Tool --version 6.*
+          $v = dotnet-gitversion /showvariable SemVer
+          if (-not $v) { throw 'GitVersion produced no version' }
+          Write-Output "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Output "Releasing $v"
+      - name: Write that version into every crate
+        shell: pwsh
+        run: ./ci/set-crate-versions.ps1 -Version '${{ steps.version.outputs.version }}'
       - name: Copy the OWID source into fodid
         shell: pwsh
         run: ./ci/copy-owid-source.ps1
