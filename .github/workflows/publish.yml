@@ -1,8 +1,8 @@
 name: Publish
 
 # Publish the 51Degrees crates to crates.io when main changes, in dependency
-# order, skipping versions already published. To release, bump the shared
-# version and push to main.
+# order, skipping versions already published. The version comes from the tags,
+# so a release is a tag and no commit decides one on its own.
 #
 # Authentication uses crates.io Trusted Publishing: the
 # rust-lang/crates-io-auth-action exchanges this run's GitHub OIDC identity for a
@@ -14,6 +14,15 @@ name: Publish
 on:
   push:
     branches: [main]
+  # The only route that can allow a major or minor bump, so that releasing one
+  # is a person dispatching this workflow with their name on the run rather
+  # than something a commit message does quietly.
+  workflow_dispatch:
+    inputs:
+      allow-version-bump:
+        description: 'Publish even though the version moves the major or minor place.'
+        type: boolean
+        default: false
 
 # Never let two publish runs race; a second push waits for the first to finish.
 concurrency:
@@ -54,6 +63,30 @@ jobs:
           if (-not $v) { throw 'GitVersion produced no version' }
           Write-Output "version=$v" >> $env:GITHUB_OUTPUT
           Write-Output "Releasing $v"
+      # The same check the other five languages publish through, taken from
+      # common-ci rather than copied here, so there is one rule and not two
+      # that drift apart.
+      - name: Checkout common-ci
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/common-ci
+          path: common-ci
+      # Refuses a version that moves the major or minor place unless this run
+      # was dispatched by someone who asked for it. A push to main carries no
+      # inputs, so that route can never allow one and no commit message can
+      # release a 4.6 by itself. Three crates reached 4.6 overnight on
+      # 18 September 2026 by exactly that route.
+      #
+      # This runs before the version is written into the manifests, so a
+      # refused run leaves the tree alone as well as publishing nothing.
+      - name: Refuse a major or minor bump nobody approved
+        shell: pwsh
+        env:
+          ALLOW_VERSION_BUMP: ${{ inputs.allow-version-bump }}
+        run: >-
+          ./common-ci/steps/check-version-bump.ps1
+          -Version '${{ steps.version.outputs.version }}'
+          -RepoName '.'
       - name: Write that version into every crate
         shell: pwsh
         run: ./ci/set-crate-versions.ps1 -Version '${{ steps.version.outputs.version }}'
