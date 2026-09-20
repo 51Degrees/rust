@@ -45,21 +45,82 @@
 //!    [discovery](#discovery)) and strips each key's prefix following the evidence
 //!    precedence rules, so `query.user-agent` becomes `user-agent` and a query
 //!    value beats a header value of the same name.
-//! 2. POSTs the result as url-encoded form data (with the `resource` field) to
-//!    the `json` endpoint.
+//! 2. POSTs the result as url-encoded form data (with the credential, and the
+//!    asked-for property list when there is one) to the `json` endpoint.
 //! 3. Stores the raw JSON response body in its [`CloudRequestData`] under the
 //!    `cloud` data key.
+//!
+//! ## Credentials and the properties asked for
+//!
+//! An engine authenticates with a resource key, a license key, or both, and
+//! which of them is present decides whether the caller names the properties it
+//! wants. [`CloudRequestEngineBuilder::build`] settles the combination and
+//! refuses the ones the service cannot answer as the caller intends, with a
+//! message naming the setting to change.
+//!
+//! ```no_run
+//! # use fiftyone_cloud_request_engine::CloudRequestEngine;
+//! // A resource key states which properties it carries, so it is used on its
+//! // own and the service answers with all of them.
+//! let _engine = CloudRequestEngine::builder()
+//!     .resource_key("my-resource-key")
+//!     .build()
+//!     .unwrap();
+//!
+//! // A license key alongside a resource key adds the products it grants to
+//! // those the resource key carries, so the answer widens.
+//! let _engine = CloudRequestEngine::builder()
+//!     .resource_key("my-resource-key")
+//!     .license_key("my-license-key")
+//!     .build()
+//!     .unwrap();
+//!
+//! // A license key on its own names no properties, so the caller names the ones
+//! // it wants and the service answers with those alone.
+//! let _engine = CloudRequestEngine::builder()
+//!     .license_key("my-license-key")
+//!     .values(["device.ismobile", "device.iscrawler"])
+//!     .build()
+//!     .unwrap();
+//! ```
+//!
+//! A resource key is public by design, because it travels to the browser inside a
+//! script URL, so it is scoped to what a page is meant to read and it answers
+//! with everything it carries whatever the call asked for. A license key stays on
+//! the server and names what it wants per request, which is usually what a
+//! server-side caller needs.
+//!
+//! Because the combination is settled when the engine is built, a request cannot
+//! fail for this reason afterwards, so a downstream element always receives an
+//! answer rather than meeting a configuration mistake as a failed request on the
+//! critical path.
+//!
+//! A property the credential does not cover is left out of the answer without
+//! comment, since the service answers `200` and names nothing it dropped as long
+//! as one asked-for property is covered. The engine therefore compares what it
+//! asked for against what arrived and reports the difference once, as a warning
+//! on its element data and one line on stderr. It is an entitlement matter rather
+//! than a fault, so the request stands and the remaining properties are used.
 //!
 //! ## Discovery
 //!
 //! The accepted evidence keys (`evidencekeys`) and accessible properties
-//! (`accessibleproperties`) both depend on the resource key, so they are fetched
-//! from the cloud. The builder fetches both as it builds the engine, so a built
-//! engine is fully resolved and immutable with no lazy first-use discovery. If
-//! either fetch fails, [`CloudRequestEngineBuilder::build`] returns an error
-//! rather than producing a half-initialized engine.
+//! (`accessibleproperties`) are fetched from the cloud. The builder fetches them
+//! as it builds the engine, so a built engine is fully resolved and immutable
+//! with no lazy first-use discovery. If a fetch fails,
+//! [`CloudRequestEngineBuilder::build`] returns an error rather than producing a
+//! half-initialized engine.
 //!
-//! Because both results depend only on the resource key, a consumer can persist
+//! The accessible-properties request carries the resource key and, when one is
+//! set, the license key, because the cloud adds the products the license grants
+//! to those of the resource key. An engine holding a license key and no resource
+//! key is the exception, because the endpoint takes a resource key and refuses a
+//! request without one. The builder does not call it for such an engine, which
+//! therefore starts with no accessible properties, and a downstream cloud aspect
+//! engine reads the response JSON and infers each property's type from the value,
+//! as it already does for a resource key that grants it no product.
+//!
+//! Because both results depend only on the keys, a consumer can persist
 //! them and skip the build-time fetch on the next start. The builder retains the
 //! state it resolves, so [`CloudRequestEngineBuilder::export_state`] returns a
 //! serializable [`CloudEngineState`] snapshot after a build, and
@@ -86,11 +147,12 @@
 //!
 //! [`CloudRequestData`] (data key `cloud`) carries:
 //!
-//! | Field            | Type   | Description                                  |
-//! |------------------|--------|----------------------------------------------|
-//! | `cloud`          | string | The raw JSON response body.                  |
-//! | `json-response`  | string | The same raw JSON, under an alias field name.|
-//! | `process-started`| bool   | True once the engine began processing.       |
+//! | Field            | Type         | Description                            |
+//! |------------------|--------------|----------------------------------------|
+//! | `cloud`          | string       | The raw JSON response body.            |
+//! | `json-response`  | string       | The same raw JSON, under an alias field name. |
+//! | `process-started`| bool         | True once the engine began processing. |
+//! | `warnings`       | string list  | Advisory messages, being the service's own warnings and, once per engine, any asked-for property that did not come back. |
 //!
 //! ## Testing
 //!
