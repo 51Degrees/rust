@@ -87,6 +87,7 @@ path, so cloud-only users and most of CI build without a C compiler.
 | [`pipeline-examples`](examples/pipeline-examples) | Runnable pipeline examples: custom flow elements, caching, usage sharing and the combined-pipeline server-side examples. |
 | [`examples-benches`](examples/benches) | Criterion micro-benchmarks guarding the DD, IPI and JavaScript-builder throughput budgets. |
 | [`fodid`](fodid) | Standalone reader for the 51Did (51Degrees Identifier) returned by the cloud, described in the [identifiers documentation](https://51degrees.com/documentation/_identifiers__index.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=readme.md&utm_term=51did). It parses the OWID envelope and is independent of the pipeline stack. |
+| [`fodid-client`](fodid-client) | The server side of the 51Did two-step verification: fetches and caches the signing keys, verifies a signature offline or through the cloud, and redeems the sealed creator context result a browser relays, with the typed outcomes the other 51Did packages report. Builds without a network stack by default; the `reqwest-client` feature turns on the built-in transport. |
 
 ## Feature notes
 
@@ -285,13 +286,21 @@ automation. Its `Contract` category drives headless Chrome against a running
 example and checks that the page serves `51Degrees.core.js`, that client-side
 evidence flows back, and that the server renders a real detection result.
 
-CI does not run it here. The browser contract for this SDK runs in the
-[cloud](https://github.com/51Degrees/cloud) repository, in the language matrix
-alongside the .NET, Java, Node, Python and PHP examples, against the container
-that run builds. It used to run here against the public cloud, which made this
-the only SDK testing production data rather than the code under review.
+CI runs it here in the `contract` job of the Examples workflow
+(`.github/workflows/examples.yml`), through `ci/run-browser-contract.ps1`,
+against both device detection web examples built from this checkout. The
+cloud example (`dd-web-getting-started-cloud`) talks to the public cloud with
+the bespoke resource key. The on-premise example
+(`dd-web-getting-started-onprem`) loads the TAC data file, because the Lite
+file has neither `DeviceType` nor the screen size JavaScript properties the
+contract checks. A test that fails, or that the suite skips as inconclusive,
+fails the job. Start it on any branch with
+`gh workflow run Examples --ref <branch>`. The cloud service also runs the
+cloud example against its own container, alongside the .NET, Java, Node,
+Python and PHP examples.
 
-To run it locally, check out `selenium-api-tests` as a sibling of this repo and
+To run the contract against an example that is already running, set
+`EXAMPLE_URL` to its address, as the CI script does. To run it locally, check out `selenium-api-tests` as a sibling of this repo and
 let the suite launch the example itself through its `rust` descriptor. Point
 `CLOUD_ROOT_URL` at a cloud container rather than the public service, so the
 result reflects the code and data you are testing:

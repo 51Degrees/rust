@@ -1,0 +1,46 @@
+name: Nightly Pipeline
+
+# Runs at 01:00 UTC, the same time as every other 51Degrees repository, and
+# hands each pull request that is eligible for automation to the shared
+# common-ci workflow, which builds and tests the pull request merged into main
+# and merges it when every platform passes. Until this existed a pull request
+# here sat until somebody merged it by hand, and main is protected so the
+# author could not merge their own.
+#
+# Eligibility is decided centrally by common-ci steps/get-pull-requests.ps1,
+# being a pull request that is not a draft, has no review still requested, has
+# no review that is anything other than an approval, and either is approved by
+# somebody with write access or was raised by somebody with write access.
+#
+# pull-request.yml still runs on every push and pull request and remains the
+# primary gate, carrying the native build on all four platforms and the wasm
+# target. The examples check is examples.yml and the template drift check is
+# mustache-drift.yml, each its own workflow and each running on every pull
+# request as well. This runs the core gate again, being format, build, test,
+# lint and documentation on all four platforms, against what main will
+# actually contain once the pull request is merged.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dryrun:
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 1 * * *'
+
+jobs:
+  PullRequests:
+    name: Nightly Pull Requests
+    uses: 51Degrees/common-ci/.github/workflows/nightly-pull-requests.yml@main
+    with:
+      repo-name: ${{ github.event.repository.name }}
+      org-name: ${{ github.event.repository.owner.login }}
+      dryrun: ${{ inputs.dryrun || false }}
+      skip-compare-performance: true
+      # The native sources are compiled from scratch on every platform,
+      # because there is no cargo cache here, so allow longer than the
+      # two hour default before a build is called hung.
+      build-test-timeout-minutes: 180
+    secrets:
+      token: ${{ secrets.ACCESS_TOKEN }}

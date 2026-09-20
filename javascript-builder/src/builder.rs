@@ -22,12 +22,13 @@
 
 //! The builder for [`JavaScriptBuilderElement`].
 
+use fiftyone_cloud_request_engine::{CloudRequestEngine, LicensedProducts};
 use fiftyone_pipeline_core::constants::DEFAULT_JSON_ENDPOINT;
 use fiftyone_pipeline_core::{Error, Result};
 
 use crate::constants::{
     BUILDER_DEFAULT_ENABLE_COOKIES, BUILDER_DEFAULT_HOST, BUILDER_DEFAULT_MINIFY,
-    BUILDER_DEFAULT_OBJECT_NAME, BUILDER_DEFAULT_PROTOCOL,
+    BUILDER_DEFAULT_OBJECT_NAME, BUILDER_DEFAULT_PROTOCOL, FODID_PRODUCT_NAME,
 };
 use crate::element::JavaScriptBuilderElement;
 
@@ -56,6 +57,7 @@ pub struct JavaScriptBuilderElementBuilder {
     object_name: String,
     enable_cookies: bool,
     minify: bool,
+    user_prompt: bool,
 }
 
 impl JavaScriptBuilderElementBuilder {
@@ -68,7 +70,29 @@ impl JavaScriptBuilderElementBuilder {
             object_name: BUILDER_DEFAULT_OBJECT_NAME.to_owned(),
             enable_cookies: BUILDER_DEFAULT_ENABLE_COOKIES,
             minify: BUILDER_DEFAULT_MINIFY,
+            user_prompt: false,
         }
+    }
+
+    /// Decide whether the script carries the user prompt section from the
+    /// licensed products of the cloud request engine that serves this
+    /// pipeline.
+    ///
+    /// The section gathers the visitor's answer that a 51Did is created from,
+    /// so it is rendered only when the engine's resource key is licensed for
+    /// 51Did, meaning its licensed products include the 51Did product with at
+    /// least one property. The decision is taken from the licensed products and
+    /// not from the 51Did cloud engine's property list, because that engine
+    /// reports its default properties when the key grants no 51Did product, so
+    /// its list is populated either way. The request engine resolves its
+    /// licensed products when it is built, so the decision is taken here once.
+    /// Without a call to this method the section is left out.
+    pub fn set_cloud_request_engine(mut self, engine: &CloudRequestEngine) -> Self {
+        self.user_prompt = engine
+            .public_properties()
+            .map(grants_51did)
+            .unwrap_or(false);
+        self
     }
 
     /// Set whether client-side processing stores results in cookies.
@@ -113,8 +137,11 @@ impl JavaScriptBuilderElementBuilder {
     /// JavaScript.
     ///
     /// The name must be a valid JavaScript identifier (it must match
-    /// `[a-zA-Z_$][0-9a-zA-Z_$]*` in full). An invalid name is a configuration
-    /// error.
+    /// `[a-zA-Z_$][0-9a-zA-Z_$]*` in full) and must not be a reserved word,
+    /// `Infinity`, `NaN`, `undefined` or `fiftyoneDegreesManager`. An invalid
+    /// name is a configuration error. The same rule applies to a name
+    /// requested through the `query.fod-js-object-name` evidence, where an
+    /// invalid name is ignored with a warning logged.
     pub fn set_object_name(mut self, object_name: impl Into<String>) -> Result<Self> {
         let object_name = object_name.into();
         if is_valid_object_name(&object_name) {
@@ -123,7 +150,7 @@ impl JavaScriptBuilderElementBuilder {
         } else {
             Err(Error::configuration(format!(
                 "The JavaScript object name '{object_name}' is not valid. It must \
-                 be a valid JavaScript identifier."
+                 be a valid JavaScript identifier that is not a reserved word."
             )))
         }
     }
@@ -147,8 +174,18 @@ impl JavaScriptBuilderElementBuilder {
             self.object_name,
             self.enable_cookies,
             self.minify,
+            self.user_prompt,
         )
     }
+}
+
+/// True when the licensed products include the 51Did product with at least one
+/// property. The product name is compared ignoring case, because the cloud
+/// service reports it as `FODid`.
+fn grants_51did(products: &LicensedProducts) -> bool {
+    products.products.iter().any(|(name, product)| {
+        name.eq_ignore_ascii_case(FODID_PRODUCT_NAME) && !product.properties.is_empty()
+    })
 }
 
 impl Default for JavaScriptBuilderElementBuilder {
@@ -157,18 +194,37 @@ impl Default for JavaScriptBuilderElementBuilder {
     }
 }
 
+/// Names the object cannot have. These are the reserved words of the language,
+/// including those reserved only in strict mode and the literals `null`,
+/// `true` and `false`, plus the three global values a top level `var` cannot
+/// replace, so the object would silently never be created, and the name of
+/// the constructor the script itself defines.
+#[rustfmt::skip]
+const RESERVED_WORDS: &[&str] = &[
+    "await", "break", "case", "catch", "class", "const", "continue", "debugger",
+    "default", "delete", "do", "else", "enum", "export", "extends", "false",
+    "finally", "for", "function", "if", "implements", "import", "in",
+    "instanceof", "interface", "let", "new", "null", "package", "private",
+    "protected", "public", "return", "static", "super", "switch", "this",
+    "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield",
+    "Infinity", "NaN", "undefined", "fiftyoneDegreesManager",
+];
+
 /// True if the string is a valid JavaScript identifier per the
-/// `[a-zA-Z_$][0-9a-zA-Z_$]*` rule.
+/// `[a-zA-Z_$][0-9a-zA-Z_$]*` rule and is not one of [`RESERVED_WORDS`].
 ///
-/// The first character must be a letter, underscore or dollar sign; the rest may
-/// also be digits. An empty string is invalid.
-fn is_valid_object_name(name: &str) -> bool {
+/// The first character must be a letter, underscore or dollar sign, and the
+/// rest may also be digits. An empty string is invalid. The name is written
+/// into the script as a variable name, a session storage key and a property
+/// name without any escaping, so a name outside this rule would break the
+/// script or change what it does.
+pub(crate) fn is_valid_object_name(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
         Some(first) if is_identifier_start(first) => {}
         _ => return false,
     }
-    chars.all(is_identifier_part)
+    chars.all(is_identifier_part) && !RESERVED_WORDS.contains(&name)
 }
 
 /// True if the character may start a JavaScript identifier (letter, `_` or `$`).

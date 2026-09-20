@@ -49,30 +49,77 @@
 //!
 //! ## Identifier types
 //!
-//! Bits 6-7 of the flags byte select the [`IdType`], which determines the
-//! length and meaning of the match key:
+//! The flags byte carries the identifier type, read through
+//! [`FodId::id_type`], which determines the length and meaning of the match
+//! key:
 //!
 //! - [`IdType::Probabilistic`] (the default; legacy identifiers decode as this)
 //!   and [`IdType::HashedEmail`] carry a 32-byte SHA-256.
 //! - [`IdType::Random`] carries a 16-byte server-generated GUID.
 //! - [`IdType::Reserved`] is not yet assigned and is parsed best effort.
 //!
+//! ## The terms the identifier was created under
+//!
+//! The byte after the match key says which terms document the 51Did was
+//! created under, so that the terms travel with the identifier rather than
+//! beside it. It is an index into a table published in the specification and
+//! is not a version number, and [`FodId::terms`] answers with the address of
+//! the document, so a caller never handles the byte.
+//!
+//! An identifier whose payload ends at the match key carries no terms byte,
+//! and a missing byte is index 0, which answers with no address. An index
+//! added to the specification after this release answers with no address as
+//! well, and no address is ever built from an index this crate cannot name,
+//! since that would name a document nobody wrote. A caller therefore cannot
+//! tell an index of zero from an index this crate cannot name, which is
+//! deliberate, because both lead to the same place. This crate answers with
+//! the address and never fetches it.
+//!
+//! ## The payload version
+//!
+//! Bits 4 and 5 of the flags byte say which payload layout the identifier
+//! follows, and this crate reads version 0. A payload naming version 1, 2 or
+//! 3 is refused with [`Error::UnsupportedPayloadVersion`], which names the
+//! version it found. No field is read under the layout this crate knows once
+//! the version says otherwise, because a later version exists precisely
+//! because a field moved, so reading such a payload here would answer with
+//! values that are wrong rather than absent. The version is not exposed,
+//! because either this crate read the layout or there is no identifier to
+//! read fields from.
+//!
+//! ## A payload with no usage
+//!
+//! [`Usage`] has exactly three values. A payload whose usage bits 0 to 2 are
+//! all clear is refused with [`Error::NoUsage`], because every usage the
+//! cloud accepts sets bit 0, so such a payload is damaged or forged, and the
+//! only safe answer to it is not to pass the identifier on.
+//!
 //! ## Payload layout
 //!
-//! | Offset | Length | Field                                              |
-//! |-------:|-------:|----------------------------------------------------|
-//! |      0 |      1 | Flags (bits 0-2 usage, bits 6-7 type)              |
-//! |      1 |      4 | LicenseId (`u32` little endian)                    |
-//! |      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
-//! |      5 |     16 | Value: GUID (Random)                               |
+//! The payload is a five byte header, being a flags byte and a four byte
+//! little endian License Id, followed by the match key. Every field is read
+//! through a typed accessor on [`FodId`], and the offsets and lengths are
+//! internal to this crate, because reading a field out of the payload bytes
+//! by hand is how the usage comes out wrong. The layout is specified at
+//! <https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md>
+//! and the accessors every 51Did package offers at
+//! <https://github.com/51Degrees/specifications/blob/main/did-specification/package-surface.md>,
+//! and those two pages are the authority rather than any summary here.
 //!
-//! These lengths are lower bounds. The payload must hold the 5 byte header
+//! A terms byte follows the match key, read through [`FodId::terms`],
+//! which answers with the address of the document the identifier was
+//! created under. Where it sits depends on the match key length the type
+//! requires, which is a reason the offsets stay internal.
+//!
+//! The lengths given there are lower bounds. The payload must hold the header
 //! before the type can be read, and then the value the type requires, being
 //! 16 GUID bytes for a random identifier and 32 hash bytes for a
-//! probabilistic or hashed email one. A payload may carry more bytes after
-//! the value, and this crate accepts them and leaves them in place. There
-//! is no upper bound on a 51Did in this crate, so a reader built today keeps
-//! reading identifiers issued in a newer, longer shape.
+//! probabilistic or hashed email one. The terms byte follows the value, so
+//! where it sits depends on the value length the type requires, and a
+//! payload that ends at the value carries none. A payload may carry more
+//! bytes after the terms, and this crate accepts them and leaves them in
+//! place. There is no upper bound on a 51Did in this crate, so a reader
+//! built today keeps reading identifiers issued in a newer, longer shape.
 //!
 //! [`FodId`] [`Deref`](std::ops::Deref)s to the underlying [`Owid`], so
 //! a `FodId` can be used directly for all OWID level concerns (domain, date,
@@ -101,16 +148,18 @@
 //! result carries the same three facts: whether the read succeeded
 //! (`is_ok()`), the value (present only on success, never a partly read
 //! `FodId`), and the status, which is the [`Error`] variant on failure and
-//! "parsed" on success. The status vocabulary is the OWID one plus two
+//! "parsed" on success. The status vocabulary is the OWID one plus four
 //! 51Did statuses, checked in this order:
 //!
 //! | Status | Meaning |
 //! |---|---|
 //! | [`Error::Parse`] | The bytes are not an OWID envelope. The OWID reason is kept unchanged inside, read with [`ParseError::status`], for example [`ParseStatus::MissingInput`], [`ParseStatus::InvalidBase64`], [`ParseStatus::UnexpectedEnd`] or [`ParseStatus::ByteCountMismatch`]. |
 //! | [`Error::PayloadTooShort`] | The envelope is fine, but the payload cannot hold the 5 byte 51Did header, so the identifier type cannot be read. |
+//! | [`Error::UnsupportedPayloadVersion`] | The flags byte names a payload version other than 0, and the variant names the version found. |
+//! | [`Error::NoUsage`] | The flags byte sets none of usage bits 0 to 2. |
 //! | [`Error::InvalidTypePayloadLength`] | The header was read, and the payload is shorter than the value the identifier type requires (21 bytes in all for random, 37 for probabilistic and hashed email). |
 //!
-//! All three are data results, meaning the input was not a 51Did and the
+//! All five are data results, meaning the input was not a 51Did and the
 //! caller decides what to do with that. [`Error::Owid`] is the one
 //! exceptional variant. No read produces it. It appears only when a caller
 //! uses `?` on an OWID operation of a parsed value, such as serialising it
@@ -136,10 +185,15 @@
 //! // Reading answers whether the input is a 51Did, and nothing more.
 //! let fod_id = FodId::from_base64(base64_from_cloud)?;
 //!
-//! let flags: u8 = fod_id.flags();
+//! let usage = fod_id.usage(); // the highest usage granted, never a raw bit
+//! let indirect = fod_id.usage_is_indirect();
 //! let id_type = fod_id.id_type();
 //! let license_id: u32 = fod_id.license_id();
 //! let match_key: &[u8] = fod_id.match_key(); // the match key to compare (32 or 16 bytes)
+//!
+//! // The address of the terms document the identifier was created under,
+//! // and None where it names none this crate knows.
+//! let terms: Option<&str> = fod_id.terms();
 //!
 //! // Inherited OWID level fields and operations, available through Deref.
 //! let domain = fod_id.domain();
@@ -148,7 +202,9 @@
 //! // Verifying is the second question, asked of the parsed value.
 //! let status = fod_id.verify_status_with_public_key(public_pem, &[]);
 //! let genuine = status == SignatureStatus::Valid;
-//! # let _ = (flags, id_type, license_id, match_key, domain, round_trip, genuine);
+//! # let _ = (usage, indirect, id_type, license_id, match_key);
+//! # let _ = (domain, round_trip, genuine);
+//! # let _ = terms;
 //! # Ok(())
 //! # }
 //! ```
@@ -260,16 +316,10 @@ mod error;
 mod fodid;
 
 pub use error::{Error, Result};
-pub use fodid::{
-    FodId, IdType, FLAGS_OFFSET, GUID_LENGTH, HEADER_LENGTH, LICENSE_ID_LENGTH, LICENSE_ID_OFFSET,
-    MATCH_KEY_LENGTH, MATCH_KEY_OFFSET, PAYLOAD_LENGTH, RANDOM_PAYLOAD_LENGTH,
-};
-
-// The obsolete names for the match key constants, re-exported so callers
-// written against the earlier releases still compile. Using either one raises
-// a deprecation warning that names the replacement.
-#[allow(deprecated)]
-pub use fodid::{HASH_LENGTH, HASH_OFFSET};
+// The typed surface, and nothing else. The payload offsets and lengths stay
+// inside the crate, so the only way to read a field is the accessor that
+// names it. See the module comment in fodid.rs for why.
+pub use fodid::{FodId, IdType, Usage};
 
 // The OWID library, compiled into this crate as a private module. The source
 // is copied from the owid-rust submodule (https://github.com/51Degrees/owid-rust)

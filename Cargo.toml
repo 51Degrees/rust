@@ -12,6 +12,7 @@
 resolver = "2"
 members = [
     "fodid",
+    "fodid-client",
     "pipeline-core",
     "caching",
     "pipeline-engines",

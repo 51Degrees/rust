@@ -374,13 +374,19 @@ extern "C" {
     /// Allocates a results structure referencing the data set in `manager`. The
     /// returned pointer must be freed with [`fiftyoneDegreesResultsHashFree`].
     ///
-    /// The C signature takes `userAgentCapacity` and `overridesCapacity` as two
-    /// separate `uint32_t` parameters (see `hash.h`). `userAgentCapacity` is
-    /// accepted only for source compatibility and is ignored - results are
-    /// sized by the number of components in the data set. `overridesCapacity`
-    /// sizes the property-override array and MUST be passed explicitly: omitting
-    /// it leaves the C function reading the argument from an uninitialised
+    /// The device-detection-cxx sources on main take `userAgentCapacity` and
+    /// `overridesCapacity` as two separate `uint32_t` parameters (see
+    /// `hash.h`). `userAgentCapacity` is accepted only for source
+    /// compatibility and is ignored, because results are sized by the number of
+    /// components in the data set. `overridesCapacity` sizes the
+    /// property-override array and MUST be passed explicitly: omitting it
+    /// leaves the C function reading the argument from an uninitialised
     /// register, which sizes the override allocation from garbage and crashes.
+    ///
+    /// The copy of those sources vendored in this crate is older and takes
+    /// `overridesCapacity` alone, as its second parameter. A caller that wants
+    /// the same behaviour from both builds passes the same value in both
+    /// capacity positions, as `fiftyone-native` does.
     ///
     /// # Safety
     /// `manager` must be an initialized Hash manager.

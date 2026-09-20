@@ -34,8 +34,10 @@ use fiftyone_pipeline_core::{
     PropertyValue, PropertyValueType, Result,
 };
 use fiftyone_pipeline_engines_fiftyone::constants::{EVIDENCE_SEQUENCE, EVIDENCE_SESSIONID};
+use fiftyone_pipeline_engines_fiftyone::SequenceElement;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 
+use crate::builder::is_valid_object_name;
 use crate::constants::{
     DELAY_EXECUTION_MARKER, EVIDENCE_ENABLE_COOKIES, EVIDENCE_HOST_KEY, EVIDENCE_OBJECT_NAME,
     FALLBACK_PROTOCOL, FETCH_PROPERTY, JAVASCRIPT_BUILDER_ELEMENT_DATA_KEY,
@@ -64,10 +66,50 @@ const URL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'.')
     .remove(b'*');
 
+/// The longest session id the script is given, in bytes.
+const MAX_SESSION_ID_LENGTH: usize = 64;
+
+/// The session id to render, which is the one given when it is safe and an
+/// empty string when it is not.
+///
+/// The template writes the session id inside quotes without any escaping, so
+/// a value holding a quote, a backslash or a line break would end the string
+/// early and break the script or change what it does. The
+/// [javascript-builder specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/pipeline-elements/javascript-builder.md)
+/// says a session id that is not 1 to 64 ASCII letters, digits and hyphens is
+/// rendered as an empty string.
+fn safe_session_id(session_id: String) -> String {
+    let safe = !session_id.is_empty()
+        && session_id.len() <= MAX_SESSION_ID_LENGTH
+        && session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+    if safe {
+        session_id
+    } else {
+        String::new()
+    }
+}
+
+/// The sequence to render, which is the one given when it is positive and `1`
+/// when it is not.
+///
+/// The template writes the sequence as bare code, and the script counts its
+/// own requests up from it, so a value of zero or less is not a sequence the
+/// script can use. The specification says such a value is rendered as `1`.
+fn safe_sequence(sequence: i32) -> i32 {
+    if sequence > 0 {
+        sequence
+    } else {
+        1
+    }
+}
+
 /// Generates a JavaScript include to be run on the client device.
 ///
 /// The element renders the bundled Mustache template with the JSON payload
-/// produced by the JSON builder, the request's session and sequence evidence,
+/// produced by the JSON builder, the session id and sequence number (from the
+/// sequence element's data, or from evidence when no sequence element ran),
 /// a callback URL and the request parameters, then optionally minifies the
 /// result. The generated JavaScript is stored on the flow data under the
 /// [`crate::JAVASCRIPT_BUILDER_ELEMENT_DATA_KEY`] element data key. It implements
@@ -79,8 +121,11 @@ const URL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 /// - **protocol**: the configured protocol if set, else the `header.protocol`
 ///   evidence, else `https`.
 /// - **host**: the configured host if set, else the `header.host` evidence.
-/// - **object name**: the `query.fod-js-object-name` evidence if present, else
-///   the configured object name (default `fod`).
+/// - **object name**: the `query.fod-js-object-name` evidence if present and a
+///   valid JavaScript identifier that is not a reserved word, `Infinity`,
+///   `NaN`, `undefined` or `fiftyoneDegreesManager`, else the configured
+///   object name (default `fod`). An invalid requested name, the empty string
+///   included, is ignored with a warning logged through the `log` crate.
 /// - **enable cookies**: the `query.fod-js-enable-cookies` evidence parsed as a
 ///   boolean if present, else the configured default (true).
 /// - **callback URL**: built only when protocol, host and endpoint are all
@@ -89,12 +134,22 @@ const URL_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
 /// - **parameters**: every `query.*` evidence entry except the session id and
 ///   sequence, with the prefix stripped and the key and value URL-encoded,
 ///   serialized as a JSON object.
+/// - **session id**: the session id from the flow data when it is 1 to 64
+///   ASCII letters, digits and hyphens, else an empty string, because the
+///   template writes it inside quotes without any escaping.
+/// - **sequence**: the sequence from the flow data when it is a positive 32
+///   bit integer, else `1`, because the template writes it as bare code.
 /// - **has delayed properties**: true when the JSON payload contains the
 ///   `delayexecution` marker.
 /// - **supports promises**: true when the device-detection `Promise` property is
 ///   `Full`. The check is latched off once the property proves unavailable.
 /// - **supports fetch**: true when the device-detection `Fetch` property is
 ///   true. The check is latched off once the property proves unavailable.
+/// - **user prompt**: true when the builder was given a cloud request engine
+///   whose licensed products include 51Did, through
+///   [`JavaScriptBuilderElementBuilder::set_cloud_request_engine`]. The
+///   section it controls sits inside the update section, so it is only
+///   rendered when a callback URL was built as well.
 ///
 /// # Example
 ///
@@ -132,6 +187,9 @@ pub struct JavaScriptBuilderElement {
     object_name: String,
     enable_cookies: bool,
     minify: bool,
+    /// Whether the script carries the user prompt section, decided by the
+    /// builder from the cloud request engine's licensed products.
+    user_prompt: bool,
 
     /// Latches that short-circuit the Promise/Fetch property lookups once they
     /// have proved unavailable. Stored atomically because
@@ -160,6 +218,7 @@ impl JavaScriptBuilderElement {
         object_name: String,
         enable_cookies: bool,
         minify: bool,
+        user_prompt: bool,
     ) -> Self {
         // The template is parsed once at construction. The embedded source is a
         // valid Mustache template, so parsing it cannot fail in practice. The
@@ -186,6 +245,7 @@ impl JavaScriptBuilderElement {
             object_name,
             enable_cookies,
             minify,
+            user_prompt,
             promise_property_available: AtomicBool::new(true),
             fetch_property_available: AtomicBool::new(true),
         }
@@ -217,11 +277,24 @@ impl JavaScriptBuilderElement {
             .to_owned()
     }
 
-    /// Resolve the object name: `query.fod-js-object-name` evidence if present,
-    /// else the configured object name.
+    /// Resolve the object name: `query.fod-js-object-name` evidence if present
+    /// and a valid JavaScript identifier, else the configured object name.
+    ///
+    /// A requested name that is not valid is ignored with a warning logged,
+    /// because it would be written into the script as given. The requested
+    /// text is left out of the warning so that it cannot reach the log either.
     fn resolve_object_name(&self, data: &FlowData) -> String {
         match data.evidence().get(EVIDENCE_OBJECT_NAME) {
-            Some(name) => name.to_owned(),
+            Some(name) if is_valid_object_name(name) => name.to_owned(),
+            Some(_) => {
+                log::warn!(
+                    "The requested JavaScript object name ({}) is not a valid JavaScript \
+                     identifier, so the configured name '{}' is used.",
+                    EVIDENCE_OBJECT_NAME,
+                    self.object_name
+                );
+                self.object_name.clone()
+            }
             None => self.object_name.clone(),
         }
     }
@@ -263,17 +336,56 @@ impl JavaScriptBuilderElement {
         Some(format!("{protocol}://{host}{normalised_endpoint}"))
     }
 
-    /// Read the session id evidence, or an empty string if absent.
+    /// The session id the script is given, which is the value read from the
+    /// flow data when it is safe to render and an empty string otherwise.
+    ///
+    /// See [`safe_session_id`] for what safe means here.
+    fn rendered_session_id(data: &FlowData) -> String {
+        safe_session_id(Self::session_id(data))
+    }
+
+    /// The sequence the script is given, which is the value read from the flow
+    /// data when it is a positive number and `1` otherwise.
+    fn rendered_sequence(data: &FlowData) -> i32 {
+        safe_sequence(Self::sequence(data))
+    }
+
+    /// The session id for the template.
+    ///
+    /// The specification takes it from the sequence element's data, because
+    /// on a first request there is no `query.session-id` evidence and the
+    /// sequence element is what creates the id. Evidence is immutable here, so
+    /// the id the sequence element creates is only in its element data.
+    /// Reading evidence alone left `fod.sessionId` empty on every first page.
+    /// Evidence is still read when no sequence element ran, and an empty
+    /// string is used when neither has a value.
     fn session_id(data: &FlowData) -> String {
+        if let Some(id) = data
+            .get(SequenceElement::KEY)
+            .and_then(|sequence| sequence.session_id())
+        {
+            return id.to_owned();
+        }
         data.evidence()
             .get(EVIDENCE_SESSIONID)
             .unwrap_or("")
             .to_owned()
     }
 
-    /// Read the sequence evidence as an integer, defaulting to `1` when absent
-    /// or unparseable.
+    /// The sequence number for the template.
+    ///
+    /// Taken from the sequence element's data, which has already added one to
+    /// any `query.sequence` evidence, as the specification says. Without a
+    /// sequence element the evidence is read instead, and `1` is used when
+    /// that is absent or does not parse.
     fn sequence(data: &FlowData) -> i32 {
+        if let Some(sequence) = data
+            .get(SequenceElement::KEY)
+            .and_then(|sequence| sequence.sequence())
+            .and_then(|sequence| i32::try_from(sequence).ok())
+        {
+            return sequence;
+        }
         data.evidence()
             .get(EVIDENCE_SEQUENCE)
             .and_then(|s| s.trim().parse::<i32>().ok())
@@ -387,8 +499,8 @@ impl JavaScriptBuilderElement {
 
         let json_object = Self::json_object(data);
         let parameters = Self::build_parameters(data);
-        let session_id = Self::session_id(data);
-        let sequence = Self::sequence(data);
+        let session_id = Self::rendered_session_id(data);
+        let sequence = Self::rendered_sequence(data);
 
         let url = Self::build_url(&protocol, &host, &self.endpoint);
         let update_enabled = url.as_ref().is_some_and(|u| !u.is_empty());
@@ -407,6 +519,7 @@ impl JavaScriptBuilderElement {
             enable_cookies,
             update_enabled,
             has_delayed_properties,
+            self.user_prompt,
         );
 
         let content = resource.render(&self.template);
@@ -482,6 +595,60 @@ mod tests {
             .build()
             .expect("pipeline builds");
         pipeline.create_flow_data_with(builder.build())
+    }
+
+    #[test]
+    fn safe_session_id_keeps_a_safe_id() {
+        for id in ["abc-123", "a", &"a".repeat(64), "0", "A-0-z"] {
+            assert_eq!(safe_session_id(id.to_owned()), id, "{id:?} was emptied");
+        }
+    }
+
+    #[test]
+    fn safe_session_id_empties_anything_else() {
+        for id in [
+            "",
+            "a\"b",
+            "a\\b",
+            "</script>",
+            "a b",
+            "ab\n",
+            "caf\u{e9}",
+            &"a".repeat(65),
+        ] {
+            assert_eq!(safe_session_id(id.to_owned()), "", "{id:?} was kept");
+        }
+    }
+
+    #[test]
+    fn safe_sequence_keeps_a_positive_number() {
+        for sequence in [1, 2, i32::MAX] {
+            assert_eq!(safe_sequence(sequence), sequence);
+        }
+    }
+
+    #[test]
+    fn safe_sequence_replaces_anything_else_with_one() {
+        for sequence in [0, -1, i32::MIN] {
+            assert_eq!(safe_sequence(sequence), 1);
+        }
+    }
+
+    #[test]
+    fn rendered_session_id_and_sequence_come_from_evidence() {
+        let data = flow_data_with(&[("query.session-id", "abc-123"), ("query.sequence", "7")]);
+        assert_eq!(
+            JavaScriptBuilderElement::rendered_session_id(&data),
+            "abc-123"
+        );
+        assert_eq!(JavaScriptBuilderElement::rendered_sequence(&data), 7);
+    }
+
+    #[test]
+    fn rendered_session_id_and_sequence_are_safe() {
+        let data = flow_data_with(&[("query.session-id", "a\"b"), ("query.sequence", "-1")]);
+        assert_eq!(JavaScriptBuilderElement::rendered_session_id(&data), "");
+        assert_eq!(JavaScriptBuilderElement::rendered_sequence(&data), 1);
     }
 
     #[test]
@@ -573,6 +740,28 @@ mod tests {
         assert_eq!(element.resolve_object_name(&data), "custom");
         let data = flow_data_with(&[]);
         assert_eq!(element.resolve_object_name(&data), "fod");
+    }
+
+    #[test]
+    fn invalid_object_name_from_evidence_is_ignored() {
+        let element = JavaScriptBuilderElement::builder()
+            .set_object_name("configured")
+            .unwrap()
+            .build();
+        for name in [
+            "a;b",
+            "9bad",
+            "x\"y",
+            "",
+            "class",
+            "Infinity",
+            "NaN",
+            "undefined",
+            "fiftyoneDegreesManager",
+        ] {
+            let data = flow_data_with(&[("query.fod-js-object-name", name)]);
+            assert_eq!(element.resolve_object_name(&data), "configured");
+        }
     }
 
     #[test]

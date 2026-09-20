@@ -40,6 +40,7 @@ use fiftyone_pipeline_core::{Evidence, Pipeline};
 struct Captured {
     body: String,
     origin: Option<String>,
+    user_agent: Option<String>,
 }
 
 /// Start a local server that answers the three cloud endpoints and reports back
@@ -72,9 +73,18 @@ fn start_server(
                     .iter()
                     .find(|h| h.field.equiv("Origin"))
                     .map(|h| h.value.as_str().to_owned());
+                let user_agent = request
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.equiv("User-Agent"))
+                    .map(|h| h.value.as_str().to_owned());
                 let mut body = String::new();
                 let _ = request.as_reader().read_to_string(&mut body);
-                let _ = tx.send(Captured { body, origin });
+                let _ = tx.send(Captured {
+                    body,
+                    origin,
+                    user_agent,
+                });
                 let response = tiny_http::Response::from_string(data_json);
                 let _ = request.respond(response);
             }
@@ -145,6 +155,18 @@ fn posts_url_encoded_form_with_stripped_prefixes_and_origin() {
     );
     // The Origin header was sent.
     assert_eq!(captured.origin.as_deref(), Some("https://example.com"));
+    // The end user's User-Agent travels only as evidence in the body, never in
+    // the request's own User-Agent header. The cloud service treats a request
+    // whose own header names a browser as a browser page, and such a page gets
+    // no 51Did until it has returned the results of every snippet.
+    assert!(
+        captured
+            .user_agent
+            .as_deref()
+            .is_none_or(|ua| !ua.contains("query-ua") && !ua.contains("header-ua")),
+        "the evidence User-Agent must not be sent as the HTTP User-Agent, got {:?}",
+        captured.user_agent
+    );
 }
 
 #[test]

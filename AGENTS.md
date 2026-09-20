@@ -111,6 +111,20 @@ manifest's `include`, so `cargo publish` packages it.
   builds and tests `examples/` against the just-released crates.io packages.
 - `utm-link-lint.yml` — see UTM conventions below. Runs on every PR.
 - `mustache-drift.yml` — guards the generated JavaScript resource template.
+  Push and pull request builds compare against a pinned upstream commit
+  rather than the branch, because the canonical template is being changed by
+  the create last programme in the cloud service, so comparing against the
+  branch would fail work here that has nothing to do with that programme.
+  The weekly schedule and a manual run still compare against the branch, so
+  a real drift is still reported. 51Degrees/rust#52 lifts the pin, by moving
+  the bundled asset and `UPSTREAM_PINNED_REF` to the same commit in one pull
+  request.
+- `nightly-performance.yml` — nightly (and on-demand) on-premise throughput
+  run that feeds the documentation performance graphs. Its Rust adapter lives
+  in this repo at `ci/run-performance-tests.ps1`; only the shared comparison
+  step (`compare-performance.ps1`) comes from common-ci. See
+  [ci/missing-ci-scripts.md](ci/missing-ci-scripts.md) for how this relates to
+  the org-standard reusable-workflow contract and the planned direction.
 
 ## Conventions and gotchas
 
@@ -140,5 +154,9 @@ manifest's `include`, so `cargo publish` packages it.
 
 When working on `fodid`, keep the three levels distinct: the **51Did** is the
 identifier as a whole; the **envelope** (also called the wrapper) is the signed
-OWID that carries it and changes on every issue; the **value** is the stable,
-comparable payload read through `FodId::hash`. Compare values, never envelopes.
+OWID that carries it and changes on every issue; the **match key** is the
+stable, comparable part of the payload, read through `FodId::match_key`.
+Compare match keys, never envelopes. The payload offsets and lengths are
+internal to the crate, so every field is read through its typed accessor,
+and the layout is specified at
+https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md
