@@ -20,6 +20,7 @@ fiftyone-native
 fiftyone-pipeline-engines
 fiftyone-pipeline-engines-fiftyone
 fiftyone-cloud-request-engine
+fiftyone-derived-properties
 fiftyone-device-detection-shared
 fiftyone-fodid-cloud
 fiftyone-ip-intelligence-shared
