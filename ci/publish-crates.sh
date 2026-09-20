@@ -2,10 +2,12 @@
 # Publish the 51Degrees workspace crates to crates.io in dependency order.
 #
 # Each crate is published only when its current version is not already on
-# crates.io, so an ordinary push that does not bump versions is a no-op, and a
-# release is a version bump merged to main. Every crate carries its own version
-# in its own manifest and they are not held in step, so a release bumps only the
-# crates that changed and the rest are skipped as already published.
+# crates.io, so an ordinary push that does not bump the version is a no-op.
+# The version is not committed in the manifests. The publish workflow works it
+# out from the tags with GitVersion and ci/set-crate-versions.ps1 writes it into
+# every crate, so all of them move together, as the packages of the other five
+# languages do. Three crates once reached 4.6 while the other twenty one stayed
+# at 4.5.2, which is what holding them in step prevents.
 # After publishing a crate the script waits for the new version to appear on the
 # index so the next, dependent crate resolves it.
 #
