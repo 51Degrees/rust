@@ -59,10 +59,12 @@
 //!    [`FactorOutcome`] of each factor.
 //!
 //! One rule matters more than the rest, and every 51Did package applies it.
-//! A factor of `misconfigured` is read on its own as
-//! [`FactorOutcome::Misconfigured`] and never falls through to a mismatch,
-//! because it says the checking service could not determine that factor,
-//! and reading it as a mismatch would report a replay indicator for
+//! A factor of `misconfigured` or `notrecorded` is read on its own, as
+//! [`FactorOutcome::Misconfigured`] or [`FactorOutcome::NotRecorded`], and
+//! never falls through to a mismatch, because neither says the connection
+//! differs. The first says the checking service could not determine the
+//! factor and the second says the creating service recorded no value for it,
+//! so reading either as a mismatch would report a replay indicator for
 //! something the identifier says nothing about.
 //!
 //! ## Signature checks without the cloud

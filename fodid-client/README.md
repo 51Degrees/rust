@@ -105,9 +105,12 @@ async fn redeem(
                     match factor {
                         FactorOutcome::Mismatch => println!("{name} differs"),
                         FactorOutcome::Verified => {}
-                        // Not a mismatch. The checking service could not
-                        // determine this factor, so it says nothing.
+                        // Neither is a mismatch. The checking service could
+                        // not determine the factor, or the creating service
+                        // recorded no value for it, so neither says anything
+                        // about the connection.
                         FactorOutcome::Misconfigured => {}
+                        FactorOutcome::NotRecorded => {}
                     }
                 }
             }

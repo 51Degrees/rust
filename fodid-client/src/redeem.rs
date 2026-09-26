@@ -81,8 +81,8 @@ impl RedeemResult {
     /// body that is not one, or carries no `context`, gives
     /// [`ContextOutcome::Unreadable`] with the body kept in
     /// [`RedeemResult::body`]. Factor values are read with
-    /// [`FactorOutcome::from_cloud`], so `misconfigured` never falls through
-    /// to a mismatch.
+    /// [`FactorOutcome::from_cloud`], so neither `misconfigured` nor
+    /// `notrecorded` falls through to a mismatch.
     pub fn from_response(status: u16, body: &str) -> Self {
         let value: serde_json::Value = match serde_json::from_str(body) {
             Ok(value) => value,
@@ -367,6 +367,43 @@ mod tests {
             !factors.values().any(|f| *f == FactorOutcome::Mismatch),
             "nothing here is a replay indicator"
         );
+    }
+
+    #[test]
+    fn a_not_recorded_factor_is_its_own_outcome() {
+        let result = RedeemResult::from_response(
+            200,
+            r#"{"context":"mismatch",
+                "factors":{"transport":"notrecorded","device":"verified",
+                           "browserip":"mismatch","asn":"misconfigured",
+                           "platformversion":"notrecorded"}}"#,
+        );
+        let factors = result.factors().expect("factors are present");
+        assert_eq!(
+            factors["transport"],
+            FactorOutcome::NotRecorded,
+            "the creating service recorded no value for this factor, so the \
+             identifier says nothing about it"
+        );
+        assert_eq!(factors["platformversion"], FactorOutcome::NotRecorded);
+        assert_ne!(factors["transport"], FactorOutcome::Mismatch);
+        assert_ne!(factors["transport"], FactorOutcome::Misconfigured);
+        assert_eq!(factors["browserip"], FactorOutcome::Mismatch);
+        assert_eq!(factors["asn"], FactorOutcome::Misconfigured);
+        assert_eq!(factors["device"], FactorOutcome::Verified);
+    }
+
+    #[test]
+    fn every_factor_outcome_reports_the_clouds_own_word() {
+        for (outcome, word) in [
+            (FactorOutcome::Verified, "verified"),
+            (FactorOutcome::Mismatch, "mismatch"),
+            (FactorOutcome::Misconfigured, "misconfigured"),
+            (FactorOutcome::NotRecorded, "notrecorded"),
+        ] {
+            assert_eq!(outcome.as_cloud(), word);
+            assert_eq!(FactorOutcome::from_cloud(Some(word)), outcome);
+        }
     }
 
     #[test]
