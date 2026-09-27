@@ -78,7 +78,7 @@
 //! for example if it is compromised, so a signature that fails under every
 //! key held is checked once more after a fetch within the same limit.
 //! [`covers`] and [`merge_keys`] apply the same rule to a list a caller holds
-//! itself.
+//! itself, and [`DidClient::fetch_keys_from`] fetches for such a list.
 //!
 //! [`DidClient::verify_signature_detailed`] says why a check did not pass,
 //! as a [`SignatureCheck`], and only [`SignatureCheck::Invalid`] means the

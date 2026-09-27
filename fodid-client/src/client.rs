@@ -369,6 +369,58 @@ impl DidClient {
         Ok(keys)
     }
 
+    /// Fetches the key list from the cloud and returns the entries as the
+    /// answer gives them, sorted by start, without holding or merging them.
+    ///
+    /// This is for a caller that keeps its own key list rather than using
+    /// this client's, and adds each answer to it with [`merge_keys`].
+    /// `since` is sent as the key route's `datetime`, in whole seconds at or
+    /// before it, so the answer holds the entries starting at or after it,
+    /// and `None` fetches the whole list. [`covers`] and [`merge_keys`] say
+    /// which to send when. The request is the one this client's own fetches
+    /// make. With a licence key it is the bare `id/key` route carrying that
+    /// key in [`LICENCE_KEY_HEADER`] and no resource key, for the reasons
+    /// [`DidClientBuilder::licence_key`] gives, and without one the resource
+    /// key is the last segment of the route. The answer is read by
+    /// [`parse_keys`].
+    ///
+    /// No limit applies, so the caller decides how often to fetch, and the
+    /// keys this client holds for its own lookups are left as they are.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Transport`] when the cloud cannot be reached,
+    /// [`Error::UnexpectedStatus`] when it answers with a status other than
+    /// 200, and [`Error::Protocol`] when the answer is not a key list or has
+    /// an entry whose end is not after its start.
+    pub async fn fetch_keys_from(&self, since: Option<DateTime<Utc>>) -> Result<Vec<DidPublicKey>> {
+        let (mut url, headers) = match &self.licence_key {
+            Some(licence_key) => (
+                format!("{}id/key", self.endpoint),
+                vec![(LICENCE_KEY_HEADER.to_string(), licence_key.clone())],
+            ),
+            None => (
+                format!(
+                    "{}id/key/{}",
+                    self.endpoint,
+                    escape_data_string(&self.resource_key)
+                ),
+                Vec::new(),
+            ),
+        };
+        if let Some(since) = since {
+            // Whole seconds, which is at or before `since`, so the answer
+            // carries the entry starting then, whose end may have changed.
+            let datetime = since.to_rfc3339_opts(SecondsFormat::Secs, true);
+            url = format!("{url}?datetime={}", escape_data_string(&datetime));
+        }
+        let response = self.send(HttpMethod::Get, url, headers, Vec::new()).await?;
+        if response.status != 200 {
+            return Err(self.unexpected("key", &response));
+        }
+        parse_keys(&response.body)
+    }
+
     /// The key in force when the identifier was created, being the entry
     /// whose start is latest on or before the identifier's date, unless that
     /// entry's end has passed by then.
@@ -672,45 +724,16 @@ impl DidClient {
         }
     }
 
-    /// Fetches the key list and merges the answer into the keys held, being
-    /// the whole list where `since` is `None`, which also resets its age, and
-    /// otherwise the entries starting at or after `since`, sent as
-    /// `datetime`. Called only by the caller that set the in-flight flag,
-    /// and clears that flag however it ends, the future being dropped before
-    /// it finishes included, so no waiter is left waiting on a fetch that
-    /// will never land.
-    ///
-    /// With a licence key the request is the bare `id/key` route carrying
-    /// that key in [`LICENCE_KEY_HEADER`] and no resource key, for the
-    /// reasons [`DidClientBuilder::licence_key`] gives. Without a licence
-    /// key the resource key is the last segment of the route.
+    /// Fetches the key list as [`DidClient::fetch_keys_from`] does and merges
+    /// the answer into the keys held, being the whole list where `since` is
+    /// `None`, which also resets its age, and otherwise the entries starting
+    /// at or after `since`. Called only by the caller that set the in-flight
+    /// flag, and clears that flag however it ends, the future being dropped
+    /// before it finishes included, so no waiter is left waiting on a fetch
+    /// that will never land.
     async fn fetch_keys(&self, since: Option<DateTime<Utc>>) -> Result<Vec<DidPublicKey>> {
         let _finished = FetchFinishes { client: self };
-        let (mut url, headers) = match &self.licence_key {
-            Some(licence_key) => (
-                format!("{}id/key", self.endpoint),
-                vec![(LICENCE_KEY_HEADER.to_string(), licence_key.clone())],
-            ),
-            None => (
-                format!(
-                    "{}id/key/{}",
-                    self.endpoint,
-                    escape_data_string(&self.resource_key)
-                ),
-                Vec::new(),
-            ),
-        };
-        if let Some(since) = since {
-            // Whole seconds, which is at or before `since`, so the answer
-            // carries the entry starting then, whose end may have changed.
-            let datetime = since.to_rfc3339_opts(SecondsFormat::Secs, true);
-            url = format!("{url}?datetime={}", escape_data_string(&datetime));
-        }
-        let response = self.send(HttpMethod::Get, url, headers, Vec::new()).await?;
-        if response.status != 200 {
-            return Err(self.unexpected("key", &response));
-        }
-        let answer = parse_keys(&response.body)?;
+        let answer = self.fetch_keys_from(since).await?;
         let keys = {
             let mut cache = self.lock_cache();
             let held = cache.keys.get_or_insert_with(Vec::new);
@@ -1872,6 +1895,75 @@ mod tests {
             3,
             "only a fetch in the past holds the next one back"
         );
+    }
+
+    #[tokio::test]
+    async fn fetching_from_a_cutoff_sends_it_and_returns_the_answer_unmerged() {
+        let fixture = Fixture::new();
+        let now = whole_second_now();
+        let started = now - Duration::days(1);
+        let next = now + Duration::minutes(10);
+        let answer = key_list(&[
+            (started, Some(next), &fixture.public_pem),
+            (next, Some(next + Duration::days(7)), "next"),
+        ]);
+        let http = FakeHttp::answering(vec![
+            (200, &fixture.keys_json()),
+            (200, &answer),
+            (200, &answer),
+        ]);
+        let client = new_client(http.clone());
+        let held = client.public_keys().await.unwrap();
+        // A cutoff with a fraction of a second is sent as the whole second
+        // at or before it.
+        let since = started + Duration::milliseconds(500);
+        let fetched = client.fetch_keys_from(Some(since)).await.unwrap();
+        assert_eq!(
+            fetched,
+            parse_keys(&answer).unwrap(),
+            "the answer alone, without the earlier key the client holds"
+        );
+        assert_eq!(
+            client.public_keys().await.unwrap(),
+            held,
+            "the keys the client holds are left as they are"
+        );
+        let requests = http.requests();
+        assert_eq!(
+            requests[1].url,
+            format!(
+                "{ENDPOINT}id/key/{}?datetime={}",
+                escape_data_string(RESOURCE_KEY),
+                escape_data_string(&as_datetime(started))
+            )
+        );
+        client.fetch_keys_from(None).await.unwrap();
+        let requests = http.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(datetime_of(&requests[2]), None, "no cutoff, the whole list");
+    }
+
+    #[tokio::test]
+    async fn fetching_from_a_cutoff_on_a_licence_key_reads_the_answer_strictly() {
+        let now = whole_second_now();
+        let unreadable = key_list(&[(now, Some(now), "no period")]);
+        let http = FakeHttp::answering(vec![(200, &unreadable)]);
+        let client = new_client_with_licence(http.clone());
+        let error = client.fetch_keys_from(Some(now)).await.unwrap_err();
+        assert!(matches!(error, Error::Protocol(_)), "{error}");
+        let requests = http.requests();
+        assert_eq!(
+            requests[0].url,
+            format!(
+                "{ENDPOINT}id/key?datetime={}",
+                escape_data_string(&as_datetime(now))
+            )
+        );
+        assert_eq!(
+            requests[0].headers,
+            vec![(LICENCE_KEY_HEADER.to_string(), "licence-value".to_string())]
+        );
+        assert!(client.lock_cache().keys.is_none(), "nothing was held");
     }
 
     #[tokio::test]

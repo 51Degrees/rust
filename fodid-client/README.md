@@ -170,8 +170,10 @@ client picks up the replacement on the first signature that fails under the
 keys it holds, by fetching the keys from the one held for the identifier's
 date onwards, within the same once a minute limit, and checking that
 signature once more, or at the latest at the daily fetch of the whole list. A
-server that holds its own copy of the key list, rather than using
-`DidClient`, follows the same rule with `covers` and `merge_keys`.
+server that holds its own copy of the key list, rather than using the
+client's, follows the same rule with `covers` and `merge_keys`, and fetches
+with `DidClient::fetch_keys_from`, which sends the request the client's own
+fetches send and returns the answer without holding it.
 
 The fetch is made with the licence key when the builder was given one, sent
 in the `X-51D-License-Key` request header, and the resource key is then left

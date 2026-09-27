@@ -138,8 +138,10 @@ pub fn candidates_for_date(keys: &[DidPublicKey], at: DateTime<Utc>) -> Vec<&Did
 /// list covers nothing.
 ///
 /// Where this is false, fetch the key route again with the newest start held
-/// as `datetime`, add the answer with [`merge_keys`], and then choose the
-/// keys with [`candidates_for_date`]. Fetch for this reason at most once a
+/// as `datetime`, for example with
+/// [`DidClient::fetch_keys_from`](crate::DidClient::fetch_keys_from), add
+/// the answer with [`merge_keys`], and then choose the keys with
+/// [`candidates_for_date`]. Fetch for this reason at most once a
 /// minute, so that a 51Did dated in a period not published yet, or given a
 /// false date, cannot send every lookup to the cloud. A list that covers the
 /// moment is still fetched again when a signature fails under every
