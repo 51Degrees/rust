@@ -56,6 +56,11 @@ pub const KEY_CACHE_LIFETIME: Duration = Duration::days(1);
 /// version.
 pub const USER_AGENT: &str = concat!("fodid-client/", env!("CARGO_PKG_VERSION"));
 
+/// The request header the signing key fetch carries the licence key in,
+/// where the builder was given one. A header rather than the URL, because a
+/// URL is written to access logs.
+pub const LICENCE_KEY_HEADER: &str = "X-51D-License-Key";
+
 /// The longest encoded value the client will parse or send.
 ///
 /// A guard against obviously malformed input, so the client does no work
@@ -102,9 +107,12 @@ struct KeyCache {
 /// client is the server side, which holds the licence key the browser never
 /// sees.
 ///
-/// Credentials never travel in a URL. The resource key is part of the route,
-/// as the endpoints accept, and the licence key travels only in a POST form
-/// body, because a query string is written to access logs.
+/// The licence key never travels in a URL, because a URL is written to
+/// access logs. The redeem call sends it in the POST form body, and the
+/// signing key fetch sends it in the [`LICENCE_KEY_HEADER`] header. The
+/// resource key is part of the route for the verify call and for a key fetch
+/// made without a licence key, as those endpoints accept, and the redeem
+/// call sends it in the form body.
 ///
 /// Every method that may reach the network is `async` and is awaited. The
 /// futures are driven by whatever runtime the host has, because the crate
@@ -149,9 +157,16 @@ pub struct DidClientBuilder {
 }
 
 impl DidClientBuilder {
-    /// A licence key of the same account, server side only. Needed to
-    /// redeem where the account holds licence keys, and sent only in the
-    /// redeem form body. An empty value is the same as none.
+    /// A licence key of the same account, server side only, and never put
+    /// in a URL. An empty value is the same as none.
+    ///
+    /// The redeem call sends it in the form body, where it is needed if the
+    /// account holds licence keys. The signing key fetch sends it in the
+    /// [`LICENCE_KEY_HEADER`] header in place of the resource key in the
+    /// route. A call from a server carries no `Origin` or `Referer`, so the
+    /// cloud refuses one made on a resource key restricted to named web
+    /// domains. The cloud also reads the resource key first when a request
+    /// carries both keys, which is why the fetch sends the licence key alone.
     pub fn licence_key(mut self, licence_key: impl Into<String>) -> Self {
         let value = licence_key.into();
         self.licence_key = if value.is_empty() { None } else { Some(value) };
@@ -310,7 +325,9 @@ impl DidClient {
     ///
     /// [`Error::Transport`] when the cloud cannot be reached, and
     /// [`Error::UnexpectedStatus`] when it answers with a status other than
-    /// 200.
+    /// 200. A 401 means the cloud refused the key the fetch was made with,
+    /// for example a resource key restricted to named web domains, which a
+    /// server avoids by giving the builder a licence key.
     pub async fn public_keys(&self) -> Result<Vec<DidPublicKey>> {
         self.keys_where(|cache| cache.keys.is_none()).await
     }
@@ -424,7 +441,9 @@ impl DidClient {
             self.endpoint,
             escape_data_string(&self.resource_key)
         );
-        let response = self.send(HttpMethod::Get, url, Vec::new()).await?;
+        let response = self
+            .send(HttpMethod::Get, url, Vec::new(), Vec::new())
+            .await?;
         if response.status == 200 || response.status == 400 {
             if let Some(valid) = read_valid(&response.body) {
                 return Ok(valid);
@@ -510,7 +529,7 @@ impl DidClient {
             form.push(("license".to_string(), licence_key.clone()));
         }
         let url = format!("{}id/redeem", self.endpoint);
-        let response = self.send(HttpMethod::Post, url, form).await?;
+        let response = self.send(HttpMethod::Post, url, Vec::new(), form).await?;
         match response.status {
             200 | 503 => Ok(RedeemResult::from_response(response.status, &response.body)),
             400 => Err(Error::InvalidArgument(self.redacted(
@@ -588,14 +607,28 @@ impl DidClient {
     /// set the in-flight flag, and clears that flag however it ends, the
     /// future being dropped before it finishes included, so no waiter is
     /// left waiting on a fetch that will never land.
+    ///
+    /// With a licence key the request is the bare `id/key` route carrying
+    /// that key in [`LICENCE_KEY_HEADER`] and no resource key, for the
+    /// reasons [`DidClientBuilder::licence_key`] gives. Without a licence
+    /// key the resource key is the last segment of the route.
     async fn fetch_keys(&self) -> Result<Vec<DidPublicKey>> {
         let _finished = FetchFinishes { client: self };
-        let url = format!(
-            "{}id/key/{}",
-            self.endpoint,
-            escape_data_string(&self.resource_key)
-        );
-        let response = self.send(HttpMethod::Get, url, Vec::new()).await?;
+        let (url, headers) = match &self.licence_key {
+            Some(licence_key) => (
+                format!("{}id/key", self.endpoint),
+                vec![(LICENCE_KEY_HEADER.to_string(), licence_key.clone())],
+            ),
+            None => (
+                format!(
+                    "{}id/key/{}",
+                    self.endpoint,
+                    escape_data_string(&self.resource_key)
+                ),
+                Vec::new(),
+            ),
+        };
+        let response = self.send(HttpMethod::Get, url, headers, Vec::new()).await?;
         if response.status != 200 {
             return Err(self.unexpected("key", &response));
         }
@@ -622,6 +655,7 @@ impl DidClient {
         &self,
         method: HttpMethod,
         url: String,
+        headers: Vec<(String, String)>,
         form: Vec<(String, String)>,
     ) -> Result<DidHttpResponse> {
         let request = DidHttpRequest {
@@ -629,6 +663,7 @@ impl DidClient {
             url,
             form,
             user_agent: USER_AGENT.to_string(),
+            headers,
         };
         // Every request in this crate goes through here, so a transport that
         // quotes the address it was given is cleaned in one place rather than
@@ -1042,12 +1077,68 @@ mod tests {
             requests[0].url,
             format!("{ENDPOINT}id/key/{}", escape_data_string(RESOURCE_KEY))
         );
+        assert!(requests[0].headers.is_empty(), "no licence key, no header");
         assert!(requests[0].form.is_empty());
         assert_eq!(requests[0].user_agent, USER_AGENT);
         assert_eq!(
             USER_AGENT,
             concat!("fodid-client/", env!("CARGO_PKG_VERSION"))
         );
+    }
+
+    #[tokio::test]
+    async fn with_a_licence_key_the_keys_are_fetched_on_it_in_a_header() {
+        let fixture = Fixture::new();
+        let http = FakeHttp::answering(vec![(200, &fixture.keys_json())]);
+        let client = new_client_with_licence(http.clone());
+        assert_eq!(client.public_keys().await.unwrap().len(), 2);
+        let requests = http.requests();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.method, HttpMethod::Get);
+        // The bare route, with no resource key segment.
+        assert_eq!(request.url, format!("{ENDPOINT}id/key"));
+        assert_eq!(
+            request.headers,
+            vec![(LICENCE_KEY_HEADER.to_string(), "licence-value".to_string())]
+        );
+        assert_eq!(LICENCE_KEY_HEADER, "X-51D-License-Key");
+        assert!(request.form.is_empty());
+        assert_eq!(request.user_agent, USER_AGENT);
+    }
+
+    #[tokio::test]
+    async fn the_licence_key_is_in_no_url_of_any_call() {
+        let fixture = Fixture::new();
+        let http = FakeHttp::answering(vec![
+            (200, &fixture.keys_json()),
+            (200, r#"{"valid":true}"#),
+            (200, r#"{"context":"verified"}"#),
+        ]);
+        let client = new_client_with_licence(http.clone());
+        assert!(client.verify_signature(&fixture.fod_id).await.unwrap());
+        assert!(client.verify(&fixture.fod_id).await.unwrap());
+        client
+            .redeem(&fixture.fod_id, "sealed", None)
+            .await
+            .unwrap();
+        let requests = http.requests();
+        assert_eq!(requests.len(), 3, "a key fetch, a verify and a redeem");
+        for request in &requests {
+            assert!(
+                !request.url.contains("licence-value"),
+                "the licence key is in {}",
+                request.url
+            );
+        }
+        assert_eq!(requests[0].url, format!("{ENDPOINT}id/key"));
+        // Verify keeps the resource key in its route and sends no header.
+        assert!(requests[1].url.starts_with(&format!(
+            "{ENDPOINT}id/verify/{}?",
+            escape_data_string(RESOURCE_KEY)
+        )));
+        assert!(requests[1].headers.is_empty());
+        assert!(requests[2].headers.is_empty());
     }
 
     #[tokio::test]
@@ -1439,6 +1530,7 @@ mod tests {
             "no licence key, no field"
         );
         assert_eq!(request.form.len(), 4);
+        assert!(request.headers.is_empty());
         assert_eq!(request.user_agent, USER_AGENT);
     }
 
@@ -1457,6 +1549,10 @@ mod tests {
         assert_eq!(form_value(request, "challenge"), Some("nonce-1"));
         assert_eq!(request.form.len(), 5);
         assert!(!request.url.contains("licence-value"));
+        assert!(
+            request.headers.is_empty(),
+            "redeem sends the licence key in the form and no header"
+        );
     }
 
     #[tokio::test]

@@ -61,6 +61,11 @@ pub struct DidHttpRequest {
     pub form: Vec<(String, String)>,
     /// The `User-Agent` to send, naming this package and its version.
     pub user_agent: String,
+    /// Further headers to send, as name and value. The signing key fetch
+    /// carries the licence key in one where the client was given a licence
+    /// key, so a transport sends every one of them and never copies a value
+    /// into an error message or a log.
+    pub headers: Vec<(String, String)>,
 }
 
 /// Whatever the server answered, whatever the status.
@@ -102,9 +107,10 @@ pub struct DidHttpResponse {
 ///         request: &'a DidHttpRequest,
 ///     ) -> LocalBoxFuture<'a, Result<DidHttpResponse, String>> {
 ///         Box::pin(async move {
-///             // Hand request.url, request.form (url-encoded for a POST)
-///             // and request.user_agent to the host's own fetch, await it,
-///             // then return the status and body it answered with.
+///             // Hand request.url, request.headers, request.form
+///             // (url-encoded for a POST) and request.user_agent to the
+///             // host's own fetch, await it, then return the status and
+///             // body it answered with.
 ///             let _ = (request.method == HttpMethod::Post, &request.url);
 ///             Err("not connected in this example".to_string())
 ///         })
@@ -114,7 +120,9 @@ pub struct DidHttpResponse {
 pub trait DidHttpClient: Send + Sync {
     /// Sends the request and resolves to whatever the server answered,
     /// whatever the status. The future borrows the request and the
-    /// transport for `'a`.
+    /// transport for `'a`. Every one of [`DidHttpRequest::headers`] is sent
+    /// beside the `User-Agent`, because the signing key fetch carries the
+    /// licence key in one.
     ///
     /// Resolve to `Err` with a human readable message ONLY when the request
     /// did not complete, being a connection failure, a timeout, or an answer
@@ -123,11 +131,12 @@ pub trait DidHttpClient: Send + Sync {
     /// what each status means and says so in its own words.
     ///
     /// The message travels into an error that anything may print, and the
-    /// address carries the resource key in its route, so an implementation
+    /// address can carry the resource key in its route, so an implementation
     /// that quotes the address should pass the message through
-    /// [`crate::redact::redact`] first. The client cleans the message again on
-    /// the way out, with the credentials it holds, so an implementation that
-    /// forgets is still covered.
+    /// [`crate::redact::redact`] first. A header value is never quoted,
+    /// because it can be the licence key. The client cleans the message
+    /// again on the way out, with the credentials it holds, so an
+    /// implementation that forgets is still covered.
     fn send<'a>(
         &'a self,
         request: &'a DidHttpRequest,
@@ -178,10 +187,13 @@ impl DidHttpClient for ReqwestClient {
         request: &'a DidHttpRequest,
     ) -> LocalBoxFuture<'a, Result<DidHttpResponse, String>> {
         Box::pin(async move {
-            let builder = match request.method {
+            let mut builder = match request.method {
                 HttpMethod::Get => self.client.get(&request.url),
                 HttpMethod::Post => self.client.post(&request.url).form(&request.form),
             };
+            for (name, value) in &request.headers {
+                builder = builder.header(name.as_str(), value.as_str());
+            }
             // The address carries the resource key in its route, and reqwest
             // puts the address into its own message too, so the whole line is
             // cleaned rather than only the part this code wrote.
@@ -206,5 +218,78 @@ impl DidHttpClient for ReqwestClient {
             })?;
             Ok(DidHttpResponse { status, body })
         })
+    }
+}
+
+#[cfg(all(test, feature = "reqwest-client"))]
+mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread::JoinHandle;
+
+    use super::*;
+    use crate::client::LICENCE_KEY_HEADER;
+
+    /// Answers one request on a local port with an empty key list, and hands
+    /// back the request head as it arrived, so the test sees what the
+    /// built-in transport put on the wire.
+    fn serve_once() -> (String, JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+        let base = format!("http://{}/", listener.local_addr().expect("the port"));
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept the request");
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).expect("read the request head");
+                head.push(byte[0]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n[]")
+                .expect("answer the request");
+            String::from_utf8_lossy(&head).into_owned()
+        });
+        (base, server)
+    }
+
+    #[tokio::test]
+    async fn the_built_in_transport_sends_every_header() {
+        let (base, server) = serve_once();
+        // No proxy, so a proxy set in the environment cannot take the
+        // request somewhere other than the local port.
+        let transport = ReqwestClient {
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("the HTTP client builds"),
+        };
+        let request = DidHttpRequest {
+            method: HttpMethod::Get,
+            url: format!("{base}id/key"),
+            form: Vec::new(),
+            user_agent: "fodid-client/test".to_string(),
+            headers: vec![(LICENCE_KEY_HEADER.to_string(), "licence-value".to_string())],
+        };
+        let response = transport
+            .send(&request)
+            .await
+            .expect("the request completes");
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, "[]");
+        // Header names are not case sensitive, so the head is read in lower
+        // case.
+        let head = server
+            .join()
+            .expect("the local server finished")
+            .to_ascii_lowercase();
+        assert!(head.starts_with("get /id/key http/1.1\r\n"), "{head}");
+        assert!(
+            head.contains("\r\nx-51d-license-key: licence-value\r\n"),
+            "{head}"
+        );
+        assert!(
+            head.contains("\r\nuser-agent: fodid-client/test\r\n"),
+            "{head}"
+        );
     }
 }

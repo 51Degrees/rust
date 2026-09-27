@@ -95,9 +95,12 @@
 //! rustls that runs on a tokio runtime, which the builder uses when no
 //! transport is given.
 //!
-//! Credentials never travel in a URL. The resource key is part of the
-//! route, as the endpoints accept, and the licence key travels only in the
-//! redeem form body, because a query string is written to access logs.
+//! The licence key never travels in a URL, because a URL is written to
+//! access logs. The redeem call sends it in the form body, and the signing
+//! key fetch sends it in the [`LICENCE_KEY_HEADER`] header instead of
+//! putting the resource key in the route, which lets a server fetch the
+//! keys when its resource key is restricted to named web domains. A
+//! transport therefore sends every header a request carries.
 //!
 //! ## Example
 //!
@@ -149,7 +152,7 @@ mod redeem;
 
 pub use client::{
     DidClient, DidClientBuilder, DEFAULT_ENDPOINT, ENDPOINT_ENVIRONMENT_VARIABLE,
-    KEY_CACHE_LIFETIME, MAXIMUM_ENCODED_LENGTH, USER_AGENT,
+    KEY_CACHE_LIFETIME, LICENCE_KEY_HEADER, MAXIMUM_ENCODED_LENGTH, USER_AGENT,
 };
 pub use error::{Error, Result};
 pub use http::{DidHttpClient, DidHttpRequest, DidHttpResponse, HttpMethod, LocalBoxFuture};

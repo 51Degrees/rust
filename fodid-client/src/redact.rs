@@ -22,13 +22,13 @@
 
 //! Removing credentials from text that is about to be shown to a person.
 //!
-//! A 51Did call carries a resource key, and the redeem call also carries a
-//! licence key. The 51Did routes take the resource key as part of the route,
-//! so it sits in every address, and the service repeats the key back inside
-//! its own reply when it cannot read it. Both of those are exactly what an
-//! error message likes to quote. An error is printed by tests, by logs and by
-//! whatever a consumer does with it, so anything that reaches an error has to
-//! have the credentials taken out of it first.
+//! A 51Did call carries a resource key or a licence key, and the redeem call
+//! can carry both. The 51Did routes take the resource key as part of the
+//! route, so it sits in the address, and the service repeats a key back
+//! inside its own reply when it cannot read it. Both of those are exactly
+//! what an error message likes to quote. An error is printed by tests, by
+//! logs and by whatever a consumer does with it, so anything that reaches an
+//! error has to have the credentials taken out of it first.
 //!
 //! [`redact_with`] is for code that knows the credentials it is holding, which
 //! is the stronger form because it matches the exact value whatever the value
