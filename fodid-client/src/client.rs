@@ -28,12 +28,12 @@ use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use fodid::FodId;
 
 use crate::error::{Error, Result};
 use crate::http::{DidHttpClient, DidHttpRequest, DidHttpResponse, HttpMethod};
-use crate::key::{candidates_for_date, in_force_at, parse_keys, DidPublicKey};
+use crate::key::{candidates_for_date, covers, in_force_at, merge_keys, parse_keys, DidPublicKey};
 use crate::outcome::SignatureCheck;
 use crate::redeem::RedeemResult;
 
@@ -47,10 +47,22 @@ pub const DEFAULT_ENDPOINT: &str = "https://cloud.51degrees.com/api/v4/";
 /// service.
 pub const ENDPOINT_ENVIRONMENT_VARIABLE: &str = "FOD_CLOUD_API_URL";
 
-/// How old the cached key list may be before a lookup fetches it again. Keys
-/// are published up to three months ahead of their start, so a day is far
-/// inside that margin.
+/// How old the held key list may be before a lookup fetches the whole list
+/// again, with no `datetime`. Only a fetch of the whole list, which the first
+/// fetch is too, resets the list's age.
+///
+/// A key may be replaced before its end, for example if it is compromised.
+/// The client picks up the replacement on the first signature that fails
+/// under the keys it holds, or at the latest once the list is this old.
 pub const KEY_CACHE_LIFETIME: Duration = Duration::days(1);
+
+/// The least time between two fetches made because the keys held do not
+/// cover a 51Did's date, or because a signature failed under every key held
+/// for its date. A 51Did dated in a period not published yet, or given a
+/// false date, then costs at most one request a minute however often it is
+/// presented. The first fetch and the fetch of the whole list once it is
+/// [`KEY_CACHE_LIFETIME`] old neither count towards this nor wait for it.
+const REFETCH_INTERVAL: Duration = Duration::minutes(1);
 
 /// The `User-Agent` every request carries, naming this crate and its
 /// version.
@@ -74,15 +86,21 @@ pub const MAXIMUM_ENCODED_LENGTH: usize = 4096;
 /// time on without waiting.
 type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
-/// The cached key schedule, when it was fetched, and the fetch in flight.
+/// The held keys, when they were last fetched, and the fetch in flight.
 ///
 /// The lock around this is only ever held between awaits, never across
 /// one, so a slow fetch blocks no other caller. A caller that finds a fetch
 /// already in flight waits for that one to land instead of starting a
 /// second, which is what keeps concurrent lookups down to one request.
 struct KeyCache {
+    /// Every key fetched so far, merged by start, or `None` before the first
+    /// fetch lands.
     keys: Option<Vec<DidPublicKey>>,
+    /// When the whole list last landed, which sets its age.
     fetched_at: DateTime<Utc>,
+    /// When the latest fetch [`REFETCH_INTERVAL`] spaces started, landed or
+    /// not.
+    refetched_at: Option<DateTime<Utc>>,
     /// Counts the fetches that have landed, so a caller that waited on
     /// another caller's fetch can tell whether one did.
     generation: u64,
@@ -91,6 +109,17 @@ struct KeyCache {
     /// The callers waiting for the fetch in flight to finish, woken when it
     /// lands or fails.
     waiters: Vec<Waker>,
+}
+
+/// What a lookup needs before the keys held can answer it.
+enum Need {
+    /// Nothing, because the keys held answer it.
+    Nothing,
+    /// The whole list, fetched with no `datetime`, which resets its age.
+    Whole,
+    /// A fetch spaced by [`REFETCH_INTERVAL`] of the entries starting at or
+    /// after the moment given, or of the whole list where none is given.
+    Refetch(Option<DateTime<Utc>>),
 }
 
 /// Everything a server does with a 51Did against the 51Degrees cloud: fetch
@@ -233,6 +262,7 @@ impl DidClientBuilder {
             cache: Mutex::new(KeyCache {
                 keys: None,
                 fetched_at,
+                refetched_at: None,
                 generation: 0,
                 fetching: false,
                 waiters: Vec::new(),
@@ -316,10 +346,11 @@ impl DidClient {
         self.licence_key.is_some()
     }
 
-    /// The signing public keys the cloud publishes, fetched on first use and
-    /// then answered from the cache. Use [`DidClient::public_key_for`] to
-    /// pick the key for one identifier, which also refreshes the cache when
-    /// it is stale.
+    /// The signing public keys held, fetched on first use. A later fetch
+    /// adds to them and never removes one, because a 51Did made long ago
+    /// verifies against the key of its own period. Use
+    /// [`DidClient::public_key_for`] to pick the key for one identifier,
+    /// which also fetches the keys again when that is due.
     ///
     /// # Errors
     ///
@@ -329,16 +360,25 @@ impl DidClient {
     /// for example a resource key restricted to named web domains, which a
     /// server avoids by giving the builder a licence key.
     pub async fn public_keys(&self) -> Result<Vec<DidPublicKey>> {
-        self.keys_where(|cache| cache.keys.is_none()).await
+        let (keys, _) = self
+            .keys_where(|cache| match cache.keys {
+                None => Need::Whole,
+                Some(_) => Need::Nothing,
+            })
+            .await?;
+        Ok(keys)
     }
 
     /// The key in force when the identifier was created, being the entry
-    /// whose start is latest on or before the identifier's date. The cache
-    /// is fetched again, once, before answering when it holds no entry on
-    /// or before the date, when the date is later than the newest start
-    /// held, or when the cache is older than [`KEY_CACHE_LIFETIME`].
+    /// whose start is latest on or before the identifier's date, unless that
+    /// entry's end has passed by then.
     ///
-    /// Answers `None` when the date precedes the whole schedule.
+    /// The whole list is fetched first when none is held or it is older
+    /// than [`KEY_CACHE_LIFETIME`]. The entries from the newest start held
+    /// onwards are fetched first when the keys held do not cover the date as
+    /// [`covers`] decides, at most once a minute.
+    ///
+    /// Answers `None` when no key held is in force at the date.
     ///
     /// # Errors
     ///
@@ -346,7 +386,7 @@ impl DidClient {
     /// needed and did not answer with 200.
     pub async fn public_key_for(&self, fod_id: &FodId) -> Result<Option<DidPublicKey>> {
         let date = fod_id.date();
-        let keys = self.keys_covering(date).await?;
+        let (keys, _) = self.keys_covering(date).await?;
         Ok(in_force_at(&keys, date).cloned())
     }
 
@@ -369,30 +409,30 @@ impl DidClient {
     /// section and is accepted, because the signature covers the whole
     /// payload.
     ///
+    /// The keys are fetched as for [`DidClient::public_key_for`]. When no
+    /// key tried verifies the signature, and no fetch landed for this check,
+    /// the entries from the start of the key held for the identifier's date
+    /// onwards are fetched, within the same once a minute limit, and the
+    /// check is made once more before the answer is given, because a key may
+    /// be replaced before its end.
+    ///
     /// # Errors
     ///
     /// [`Error::Transport`] and [`Error::UnexpectedStatus`] when a key fetch
     /// was needed and did not answer with 200.
     pub async fn verify_signature_detailed(&self, fod_id: &FodId) -> Result<SignatureCheck> {
         let date = fod_id.date();
-        let keys = self.keys_covering(date).await?;
-        let candidates = candidates_for_date(&keys, date);
-        if candidates.is_empty() {
-            return Ok(SignatureCheck::NoKey);
+        let (keys, fetched) = self.keys_covering(date).await?;
+        let check = check_signature(fod_id, &keys, date);
+        // A list fetched for this check cannot get better by fetching again.
+        if fetched || matches!(check, SignatureCheck::Verified | SignatureCheck::NoKey) {
+            return Ok(check);
         }
-        let mut unusable = false;
-        for candidate in candidates {
-            match fod_id.verify_with_public_key(candidate.public_key_pem(), &[]) {
-                Ok(true) => return Ok(SignatureCheck::Verified),
-                Ok(false) => {}
-                Err(_) => unusable = true,
-            }
+        let fresh = self.keys_after_failure(date).await?;
+        if fresh == keys {
+            return Ok(check);
         }
-        Ok(if unusable {
-            SignatureCheck::KeyUnusable
-        } else {
-            SignatureCheck::Invalid
-        })
+        Ok(check_signature(fod_id, &fresh, date))
     }
 
     /// Verifies the identifier's signature through the cloud's verify
@@ -540,81 +580,113 @@ impl DidClient {
         }
     }
 
-    /// The cached keys, fetched again first when
-    /// [`DidClient::public_key_for`] says a fetch is due for the date.
-    async fn keys_covering(&self, date: DateTime<Utc>) -> Result<Vec<DidPublicKey>> {
+    /// The keys held for a question about the date, and whether a fetch
+    /// landed for it. The whole list is fetched first when none is held or
+    /// it is older than [`KEY_CACHE_LIFETIME`], and the entries from the
+    /// newest start held onwards when the keys held do not cover the date as
+    /// [`covers`] decides.
+    async fn keys_covering(&self, date: DateTime<Utc>) -> Result<(Vec<DidPublicKey>, bool)> {
         self.keys_where(|cache| match &cache.keys {
-            None => true,
-            Some(keys) => self.needs_refresh(keys, cache.fetched_at, date),
+            None => Need::Whole,
+            Some(_) if (self.clock)() - cache.fetched_at > KEY_CACHE_LIFETIME => Need::Whole,
+            Some(keys) if !covers(keys, date) => {
+                Need::Refetch(keys.iter().map(DidPublicKey::starts_at).max())
+            }
+            Some(_) => Need::Nothing,
         })
         .await
     }
 
-    /// The cached keys, fetched first when `stale` says the cache as it
-    /// stands will not do.
+    /// The keys held after a signature failed under every key held for its
+    /// date, fetched again first from the start of the key held for that
+    /// date onwards. The key may have been replaced before its end, and the
+    /// answer then carries its entry with the earlier end, and the
+    /// replacement, which starts inside its period.
+    async fn keys_after_failure(&self, date: DateTime<Utc>) -> Result<Vec<DidPublicKey>> {
+        let (keys, _) = self
+            .keys_where(|cache| match &cache.keys {
+                None => Need::Whole,
+                Some(keys) => Need::Refetch(start_held_for(keys, date)),
+            })
+            .await?;
+        Ok(keys)
+    }
+
+    /// Whether a fetch [`REFETCH_INTERVAL`] spaces may start now, being when
+    /// none has started within it. A clock set back is no reason to stop
+    /// fetching, so only a start in the past holds the next one back.
+    fn refetch_due(&self, cache: &KeyCache) -> bool {
+        cache.refetched_at.is_none_or(|started| {
+            let elapsed = (self.clock)() - started;
+            elapsed < Duration::zero() || elapsed >= REFETCH_INTERVAL
+        })
+    }
+
+    /// The keys held, fetched first when `need` says the keys as they stand
+    /// will not do, and whether a fetch landed on this caller's behalf.
     ///
     /// When another caller's fetch is already in flight this one waits for
     /// that fetch instead of making a second request, and answers from the
     /// keys that fetch landed. Only when the other fetch failed does this
-    /// caller make a request of its own, so an answer here is always backed
-    /// by at most one request made on this caller's behalf.
-    async fn keys_where(&self, stale: impl Fn(&KeyCache) -> bool) -> Result<Vec<DidPublicKey>> {
+    /// caller make a request of its own, and a fetch [`REFETCH_INTERVAL`]
+    /// spaces only where the spacing allows it, so an answer here is always
+    /// backed by at most one request made on this caller's behalf.
+    async fn keys_where(
+        &self,
+        need: impl Fn(&KeyCache) -> Need,
+    ) -> Result<(Vec<DidPublicKey>, bool)> {
         loop {
             // Everything under the lock is a plain read or a flag write, and
             // the lock is dropped before anything is awaited.
             let (generation, fetch) = {
                 let mut cache = self.lock_cache();
-                if !stale(&cache) {
-                    return Ok(cache.keys.clone().unwrap_or_default());
-                }
+                let (since, spaced) = match need(&cache) {
+                    Need::Nothing => return Ok((cache.keys.clone().unwrap_or_default(), false)),
+                    Need::Whole => (None, false),
+                    Need::Refetch(since) => (since, true),
+                };
                 if cache.fetching {
-                    (cache.generation, false)
+                    // Waiting for a fetch already in flight costs no request,
+                    // so the spacing does not hold it back.
+                    (cache.generation, None)
+                } else if spaced && !self.refetch_due(&cache) {
+                    return Ok((cache.keys.clone().unwrap_or_default(), false));
                 } else {
                     cache.fetching = true;
-                    (cache.generation, true)
+                    if spaced {
+                        cache.refetched_at = Some((self.clock)());
+                    }
+                    (cache.generation, Some(since))
                 }
             };
-            if fetch {
-                return self.fetch_keys().await;
+            if let Some(since) = fetch {
+                return Ok((self.fetch_keys(since).await?, true));
             }
             FetchFinished { client: self }.await;
             let cache = self.lock_cache();
             if cache.generation != generation {
-                return Ok(cache.keys.clone().unwrap_or_default());
+                return Ok((cache.keys.clone().unwrap_or_default(), true));
             }
             // The fetch waited on did not land, so this caller goes round
-            // again and, finding nothing in flight, makes its own.
+            // again and, finding nothing in flight, may make its own.
         }
     }
 
-    fn needs_refresh(
-        &self,
-        keys: &[DidPublicKey],
-        fetched_at: DateTime<Utc>,
-        date: DateTime<Utc>,
-    ) -> bool {
-        if (self.clock)() - fetched_at > KEY_CACHE_LIFETIME {
-            return true;
-        }
-        if in_force_at(keys, date).is_none() {
-            return true;
-        }
-        let newest = keys.iter().map(DidPublicKey::starts_at).max();
-        newest.is_none_or(|newest| date > newest)
-    }
-
-    /// Fetches the key list and stores it. Called only by the caller that
-    /// set the in-flight flag, and clears that flag however it ends, the
-    /// future being dropped before it finishes included, so no waiter is
-    /// left waiting on a fetch that will never land.
+    /// Fetches the key list and merges the answer into the keys held, being
+    /// the whole list where `since` is `None`, which also resets its age, and
+    /// otherwise the entries starting at or after `since`, sent as
+    /// `datetime`. Called only by the caller that set the in-flight flag,
+    /// and clears that flag however it ends, the future being dropped before
+    /// it finishes included, so no waiter is left waiting on a fetch that
+    /// will never land.
     ///
     /// With a licence key the request is the bare `id/key` route carrying
     /// that key in [`LICENCE_KEY_HEADER`] and no resource key, for the
     /// reasons [`DidClientBuilder::licence_key`] gives. Without a licence
     /// key the resource key is the last segment of the route.
-    async fn fetch_keys(&self) -> Result<Vec<DidPublicKey>> {
+    async fn fetch_keys(&self, since: Option<DateTime<Utc>>) -> Result<Vec<DidPublicKey>> {
         let _finished = FetchFinishes { client: self };
-        let (url, headers) = match &self.licence_key {
+        let (mut url, headers) = match &self.licence_key {
             Some(licence_key) => (
                 format!("{}id/key", self.endpoint),
                 vec![(LICENCE_KEY_HEADER.to_string(), licence_key.clone())],
@@ -628,17 +700,28 @@ impl DidClient {
                 Vec::new(),
             ),
         };
+        if let Some(since) = since {
+            // Whole seconds, which is at or before `since`, so the answer
+            // carries the entry starting then, whose end may have changed.
+            let datetime = since.to_rfc3339_opts(SecondsFormat::Secs, true);
+            url = format!("{url}?datetime={}", escape_data_string(&datetime));
+        }
         let response = self.send(HttpMethod::Get, url, headers, Vec::new()).await?;
         if response.status != 200 {
             return Err(self.unexpected("key", &response));
         }
-        let keys = parse_keys(&response.body)?;
-        {
+        let answer = parse_keys(&response.body)?;
+        let keys = {
             let mut cache = self.lock_cache();
-            cache.keys = Some(keys.clone());
-            cache.fetched_at = (self.clock)();
+            let held = cache.keys.get_or_insert_with(Vec::new);
+            merge_keys(held, answer);
+            let keys = held.clone();
+            if since.is_none() {
+                cache.fetched_at = (self.clock)();
+            }
             cache.generation += 1;
-        }
+            keys
+        };
         Ok(keys)
     }
 
@@ -732,6 +815,39 @@ impl Drop for FetchFinishes<'_> {
     }
 }
 
+/// The start of the key held for the moment, being the newest held key that
+/// starts at or before it, or the first key held where none does.
+fn start_held_for(keys: &[DidPublicKey], at: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let starts = keys.iter().map(DidPublicKey::starts_at);
+    starts
+        .clone()
+        .filter(|start| *start <= at)
+        .max()
+        .or_else(|| starts.min())
+}
+
+/// Checks the identifier's signature under the keys held for its date, best
+/// first, and says why when none of them verifies it.
+fn check_signature(fod_id: &FodId, keys: &[DidPublicKey], date: DateTime<Utc>) -> SignatureCheck {
+    let candidates = candidates_for_date(keys, date);
+    if candidates.is_empty() {
+        return SignatureCheck::NoKey;
+    }
+    let mut unusable = false;
+    for candidate in candidates {
+        match fod_id.verify_with_public_key(candidate.public_key_pem(), &[]) {
+            Ok(true) => return SignatureCheck::Verified,
+            Ok(false) => {}
+            Err(_) => unusable = true,
+        }
+    }
+    if unusable {
+        SignatureCheck::KeyUnusable
+    } else {
+        SignatureCheck::Invalid
+    }
+}
+
 /// Refuses a string that cannot be a 51Did before any key is fetched or any
 /// call is made. The length guard comes first, so that nothing is parsed for
 /// a value far larger than any identifier, then the value is parsed, so that
@@ -802,10 +918,12 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Mutex;
 
+    use chrono::SubsecRound;
     use fodid::{Creator, Crypto};
 
     use super::*;
     use crate::http::LocalBoxFuture;
+    use crate::key::BOUNDARY_TOLERANCE_MINUTES;
     use crate::outcome::ContextOutcome;
 
     const RESOURCE_KEY: &str = "AQS5HKcy-resource";
@@ -923,10 +1041,11 @@ mod tests {
     const HEADER_LENGTH: usize = 5;
     const MATCH_KEY_LENGTH: usize = 32;
 
-    /// A signing key pair standing in for the cloud's, and the 51Did it
+    /// A signing key pair standing in for the cloud's, and a 51Did it
     /// signs.
     struct Fixture {
         public_pem: String,
+        creator: Creator,
         fod_id: FodId,
     }
 
@@ -935,35 +1054,109 @@ mod tests {
             let crypto = Crypto::new();
             let public_pem = crypto.public_key_pem().expect("export public key");
             let creator = Creator::new("51degrees.com", crypto).expect("create creator");
-            // A non-marketing probabilistic identifier. The flags byte sets
-            // usage bit 0, because a payload with no usage bit is refused.
-            let mut payload = vec![0u8; HEADER_LENGTH + MATCH_KEY_LENGTH];
-            payload[0] = 0b0000_0001;
-            let owid = creator.create(payload).expect("sign the envelope");
-            let fod_id = FodId::from_owid(owid).expect("a 51Did");
-            Self { public_pem, fod_id }
+            let fod_id = sign(&creator);
+            Self {
+                public_pem,
+                creator,
+                fod_id,
+            }
+        }
+
+        /// Another 51Did signed now under the same key.
+        fn another(&self) -> FodId {
+            sign(&self.creator)
         }
 
         fn encoded(&self) -> String {
             self.fod_id.as_base64().expect("encode")
         }
 
-        /// A key list whose one entry started yesterday and whose second
-        /// entry is published ahead, as the cloud does, so an identifier
-        /// created now is inside the schedule and before the newest start.
+        /// A key list as the key route gives it, being this fixture's key in
+        /// force from yesterday for a week and the key before it, so an
+        /// identifier created now is inside the period of the newest key.
         fn keys_json(&self) -> String {
             self.keys_json_with(&self.public_pem)
         }
 
         fn keys_json_with(&self, pem: &str) -> String {
-            let now = Utc::now();
-            let yesterday = (now - Duration::days(1)).to_rfc3339();
-            let next_month = (now + Duration::days(30)).to_rfc3339();
-            let escaped = pem.replace('\n', "\\n");
-            format!(
-                r#"[{{"startsAt":"{yesterday}","publicKey":"{escaped}"}},
-                    {{"startsAt":"{next_month}","publicKey":"another"}}]"#
-            )
+            let now = whole_second_now();
+            key_list(&[
+                (
+                    now - Duration::days(8),
+                    Some(now - Duration::days(1)),
+                    "earlier",
+                ),
+                (now - Duration::days(1), Some(now + Duration::days(6)), pem),
+            ])
+        }
+    }
+
+    /// A 51Did signed now. A non-marketing probabilistic identifier, whose
+    /// flags byte sets usage bit 0 because a payload with no usage bit is
+    /// refused.
+    fn sign(creator: &Creator) -> FodId {
+        let mut payload = vec![0u8; HEADER_LENGTH + MATCH_KEY_LENGTH];
+        payload[0] = 0b0000_0001;
+        let owid = creator.create(payload).expect("sign the envelope");
+        FodId::from_owid(owid).expect("a 51Did")
+    }
+
+    /// Now, to the whole second, the form a start is sent back in as
+    /// `datetime`.
+    fn whole_second_now() -> DateTime<Utc> {
+        Utc::now().trunc_subsecs(0)
+    }
+
+    /// A time as the key route writes it, with seven fractional digits and
+    /// `Z`.
+    fn cloud_time(time: DateTime<Utc>) -> String {
+        format!(
+            "{}.{:07}Z",
+            time.format("%Y-%m-%dT%H:%M:%S"),
+            time.timestamp_subsec_nanos() / 100
+        )
+    }
+
+    /// One entry of a key route answer, being a start, an end where there
+    /// is one, and a public key.
+    type Entry<'a> = (DateTime<Utc>, Option<DateTime<Utc>>, &'a str);
+
+    /// A key route answer holding the entries given.
+    fn key_list(entries: &[Entry<'_>]) -> String {
+        let entries: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|(start, end, pem)| {
+                let mut entry = serde_json::json!({
+                    "startsAt": cloud_time(*start),
+                    "publicKey": pem,
+                });
+                if let Some(end) = end {
+                    entry["endsAt"] = cloud_time(*end).into();
+                }
+                entry
+            })
+            .collect();
+        serde_json::Value::from(entries).to_string()
+    }
+
+    /// A start as a key fetch sends it in `datetime`.
+    fn as_datetime(start: DateTime<Utc>) -> String {
+        start.to_rfc3339_opts(SecondsFormat::Secs, true)
+    }
+
+    /// The `datetime` a key fetch carried, decoded, or `None` without one.
+    fn datetime_of(request: &DidHttpRequest) -> Option<String> {
+        let (_, value) = request.url.split_once("?datetime=")?;
+        Some(value.replace("%3A", ":"))
+    }
+
+    /// A clock the test moves on by hand.
+    #[derive(Clone)]
+    struct TestClock(Arc<Mutex<DateTime<Utc>>>);
+
+    impl TestClock {
+        fn advance(&self, by: Duration) {
+            *self.0.lock().unwrap() += by;
         }
     }
 
@@ -982,6 +1175,19 @@ mod tests {
             .http_client(http)
             .build()
             .expect("the client builds")
+    }
+
+    /// A client whose key cache ages against a clock the test moves on.
+    fn new_client_with_clock(http: Arc<FakeHttp>) -> (DidClient, TestClock) {
+        let clock = TestClock(Arc::new(Mutex::new(Utc::now())));
+        let reading = clock.clone();
+        let client = DidClient::builder(RESOURCE_KEY)
+            .endpoint(ENDPOINT)
+            .http_client(http)
+            .clock(move || *reading.0.lock().unwrap())
+            .build()
+            .expect("the client builds");
+        (client, clock)
     }
 
     fn form_value<'a>(request: &'a DidHttpRequest, name: &str) -> Option<&'a str> {
@@ -1206,33 +1412,67 @@ mod tests {
         assert_eq!(http.requests().len(), 1, "still inside the lifetime");
         *now.lock().unwrap() += Duration::minutes(2);
         client.public_key_for(&fixture.fod_id).await.unwrap();
-        assert_eq!(http.requests().len(), 2, "stale, so fetched again");
+        let requests = http.requests();
+        assert_eq!(requests.len(), 2, "stale, so fetched again");
+        assert_eq!(datetime_of(&requests[1]), None, "as a whole");
     }
 
     #[tokio::test]
-    async fn a_date_before_every_key_held_is_fetched_again() {
+    async fn the_whole_list_is_fetched_after_a_day_whatever_the_minute_limit() {
+        // A list with no end, so every identifier made now sends the client
+        // back for the entries from the newest start onwards. Those fetches
+        // do not reset the list's age, and the fetch of the whole list once
+        // it is a day old neither waits for the minute nor restarts it.
         let fixture = Fixture::new();
-        // A schedule that only starts tomorrow does not cover an identifier
-        // created now, so the client looks again before answering.
-        let tomorrow = (Utc::now() + Duration::days(1)).to_rfc3339();
-        let later = format!(r#"[{{"startsAt":"{tomorrow}","publicKey":"x"}}]"#);
-        let http = FakeHttp::answering(vec![(200, &later), (200, &later), (200, &later)]);
-        let client = new_client(http.clone());
-        assert!(client
-            .public_key_for(&fixture.fod_id)
-            .await
-            .unwrap()
-            .is_none());
-        assert!(client
-            .public_key_for(&fixture.fod_id)
-            .await
-            .unwrap()
-            .is_none());
+        let started = whole_second_now() - Duration::days(1);
+        let json = key_list(&[(started, None, &fixture.public_pem)]);
+        let http = FakeHttp::answering(vec![(200, json.as_str()); 4]);
+        let (client, clock) = new_client_with_clock(http.clone());
+        client.public_keys().await.unwrap();
+        clock.advance(KEY_CACHE_LIFETIME - Duration::seconds(30));
+        assert!(client.verify_signature(&fixture.another()).await.unwrap());
+        clock.advance(Duration::seconds(40));
+        assert!(client.verify_signature(&fixture.another()).await.unwrap());
+        clock.advance(Duration::seconds(25));
+        assert!(client.verify_signature(&fixture.another()).await.unwrap());
+        let requests = http.requests();
+        assert_eq!(requests.len(), 4);
+        let sent: Vec<Option<String>> = requests.iter().map(datetime_of).collect();
         assert_eq!(
-            http.requests().len(),
-            2,
-            "each lookup fetched, none covered"
+            sent,
+            vec![
+                None,
+                Some(as_datetime(started)),
+                None,
+                Some(as_datetime(started)),
+            ],
+            "whole, from the newest start, whole 40 seconds later, and from \
+             the newest start a minute after the one before"
         );
+    }
+
+    #[tokio::test]
+    async fn a_date_before_every_key_held_has_no_key_without_a_fetch() {
+        let fixture = Fixture::new();
+        // A list that starts tomorrow holds no key for an identifier created
+        // now. A fetch only brings keys that start at or after the newest
+        // start held, so the client answers from what it holds rather than
+        // asking again.
+        let tomorrow = whole_second_now() + Duration::days(1);
+        let later = key_list(&[(tomorrow, Some(tomorrow + Duration::days(7)), "x")]);
+        let http = FakeHttp::answering(vec![(200, &later)]);
+        let (client, clock) = new_client_with_clock(http.clone());
+        assert!(client
+            .public_key_for(&fixture.fod_id)
+            .await
+            .unwrap()
+            .is_none());
+        clock.advance(REFETCH_INTERVAL);
+        assert!(client
+            .public_key_for(&fixture.fod_id)
+            .await
+            .unwrap()
+            .is_none());
         assert_eq!(
             client
                 .verify_signature_detailed(&fixture.fod_id)
@@ -1240,35 +1480,43 @@ mod tests {
                 .unwrap(),
             SignatureCheck::NoKey
         );
-        assert_eq!(
-            http.requests().len(),
-            3,
-            "the signature check looked again too"
-        );
+        assert_eq!(http.requests().len(), 1, "only the first lookup fetched");
     }
 
     #[tokio::test]
-    async fn a_date_after_the_newest_start_held_is_fetched_again() {
+    async fn a_list_with_no_ends_is_fetched_again_at_most_once_a_minute() {
         let fixture = Fixture::new();
-        // A schedule with no key published ahead: the newest start is
-        // yesterday, and an identifier created now is later than it, so the
-        // cloud may have published a newer key and the client looks again.
-        let yesterday = (Utc::now() - Duration::days(1)).to_rfc3339();
-        let escaped = fixture.public_pem.replace('\n', "\\n");
-        let json = format!(r#"[{{"startsAt":"{yesterday}","publicKey":"{escaped}"}}]"#);
-        let http = FakeHttp::answering(vec![(200, &json), (200, &json)]);
-        let client = new_client(http.clone());
+        // Only keys whose periods have started, and no ends. The list covers
+        // nothing after its newest start, which has passed, so an identifier
+        // created now sends the client back to the cloud, but no more than
+        // once a minute. The start has a fraction of a second, which the
+        // fetch sends as the whole second before it.
+        let started = whole_second_now() - Duration::days(1) + Duration::milliseconds(500);
+        let json = key_list(&[(started, None, &fixture.public_pem)]);
+        let http = FakeHttp::answering(vec![(200, json.as_str()); 3]);
+        let (client, clock) = new_client_with_clock(http.clone());
         assert!(client
             .public_key_for(&fixture.fod_id)
             .await
             .unwrap()
             .is_some());
-        assert!(client
-            .public_key_for(&fixture.fod_id)
-            .await
-            .unwrap()
-            .is_some());
-        assert_eq!(http.requests().len(), 2);
+        assert_eq!(http.requests().len(), 1, "the first fetch answers itself");
+        assert!(client.verify_signature(&fixture.another()).await.unwrap());
+        assert_eq!(
+            http.requests().len(),
+            2,
+            "the first fetch does not hold back one the date needs"
+        );
+        assert!(client.verify_signature(&fixture.another()).await.unwrap());
+        assert_eq!(http.requests().len(), 2, "not again within the minute");
+        clock.advance(REFETCH_INTERVAL);
+        assert!(client.verify_signature(&fixture.another()).await.unwrap());
+        let requests = http.requests();
+        assert_eq!(requests.len(), 3, "again once the minute had passed");
+        assert_eq!(datetime_of(&requests[0]), None, "nothing was held");
+        let since = Some(as_datetime(started.trunc_subsecs(0)));
+        assert_eq!(datetime_of(&requests[1]), since);
+        assert_eq!(datetime_of(&requests[2]), since);
     }
 
     #[tokio::test]
@@ -1349,6 +1597,305 @@ mod tests {
         assert!(client.verify_signature(&fixture.fod_id).await.unwrap());
     }
 
+    // Keeping the key list current.
+
+    #[tokio::test]
+    async fn identifiers_inside_the_period_held_verify_with_no_more_fetches() {
+        // The newest key held ends a week from now, so every identifier made
+        // now is covered, however long passes between them.
+        let fixture = Fixture::new();
+        let http = FakeHttp::answering(vec![(200, &fixture.keys_json())]);
+        let (client, clock) = new_client_with_clock(http.clone());
+        for _ in 0..5 {
+            assert!(client.verify_signature(&fixture.another()).await.unwrap());
+            clock.advance(REFETCH_INTERVAL);
+        }
+        assert_eq!(http.requests().len(), 1, "only the first fetch");
+    }
+
+    #[tokio::test]
+    async fn a_date_near_the_end_held_fetches_once_for_the_new_key() {
+        let old = Fixture::new();
+        let new = Fixture::new();
+        // The newest key held ends the boundary tolerance after the
+        // identifier's date, so the key after it may be a candidate and is
+        // fetched. That key signed the identifier. The answer starts at the
+        // newest start held, as the key route's does for that `datetime`.
+        let started = whole_second_now() - Duration::days(7);
+        let tolerance = Duration::minutes(BOUNDARY_TOLERANCE_MINUTES);
+        let ends = (new.fod_id.date() + tolerance).trunc_subsecs(0);
+        let held = key_list(&[
+            (started - Duration::days(7), Some(started), "earlier"),
+            (started, Some(ends), &old.public_pem),
+        ]);
+        let published = key_list(&[
+            (started, Some(ends), &old.public_pem),
+            (ends, Some(ends + Duration::days(7)), &new.public_pem),
+        ]);
+        let http = FakeHttp::answering(vec![(200, &held), (200, &published)]);
+        let client = new_client(http.clone());
+        assert_eq!(client.public_keys().await.unwrap().len(), 2);
+        // The lookup fetches before any signature is checked.
+        assert!(client.public_key_for(&new.fod_id).await.unwrap().is_some());
+        let requests = http.requests();
+        assert_eq!(requests.len(), 2, "exactly one fetch for the identifier");
+        assert_eq!(
+            requests[1].url,
+            format!(
+                "{ENDPOINT}id/key/{}?datetime={}",
+                escape_data_string(RESOURCE_KEY),
+                escape_data_string(&as_datetime(started))
+            ),
+            "the newest start held"
+        );
+        assert_eq!(
+            client.verify_signature_detailed(&new.fod_id).await.unwrap(),
+            SignatureCheck::Verified
+        );
+        assert_eq!(http.requests().len(), 2, "and none for the check");
+        assert_eq!(
+            client.public_keys().await.unwrap().len(),
+            3,
+            "the answer was merged, and the earlier key kept"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_later_licence_key_fetch_sends_the_datetime_on_the_bare_route() {
+        let fixture = Fixture::new();
+        let started = whole_second_now() - Duration::days(1);
+        let json = key_list(&[(started, None, &fixture.public_pem)]);
+        let http = FakeHttp::answering(vec![(200, &json), (200, &json)]);
+        let client = new_client_with_licence(http.clone());
+        client.public_keys().await.unwrap();
+        assert!(client.verify_signature(&fixture.fod_id).await.unwrap());
+        let requests = http.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].url,
+            format!(
+                "{ENDPOINT}id/key?datetime={}",
+                escape_data_string(&as_datetime(started))
+            )
+        );
+        assert_eq!(
+            requests[1].headers,
+            vec![(LICENCE_KEY_HEADER.to_string(), "licence-value".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn keys_ahead_with_no_ends_cover_a_current_identifier() {
+        // A list that carries keys whose periods start later, and no ends,
+        // covers an identifier made now until the newest of those starts.
+        let fixture = Fixture::new();
+        let now = whole_second_now();
+        let list = key_list(&[
+            (now - Duration::days(1), None, &fixture.public_pem),
+            (now + Duration::days(6), None, "next"),
+            (now + Duration::days(13), None, "after"),
+        ]);
+        let http = FakeHttp::answering(vec![(200, &list)]);
+        let (client, clock) = new_client_with_clock(http.clone());
+        for _ in 0..3 {
+            assert!(client.verify_signature(&fixture.another()).await.unwrap());
+            clock.advance(REFETCH_INTERVAL);
+        }
+        assert_eq!(http.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dates_after_the_end_fetch_once_a_minute_and_have_no_key() {
+        // The newest key held ended yesterday and no key after it is
+        // published. An identifier made now is past that end, so the key
+        // that signed it is not a candidate and the answer is no key rather
+        // than a failed signature.
+        let fixture = Fixture::new();
+        let now = whole_second_now();
+        let list = key_list(&[(
+            now - Duration::days(8),
+            Some(now - Duration::days(1)),
+            &fixture.public_pem,
+        )]);
+        let http = FakeHttp::answering(vec![(200, &list), (200, &list), (200, &list)]);
+        let (client, clock) = new_client_with_clock(http.clone());
+        client.public_keys().await.unwrap();
+        for fod_id in [fixture.another(), fixture.another()] {
+            assert_eq!(
+                client.verify_signature_detailed(&fod_id).await.unwrap(),
+                SignatureCheck::NoKey
+            );
+            assert!(client.public_key_for(&fod_id).await.unwrap().is_none());
+        }
+        assert_eq!(http.requests().len(), 2, "one fetch within the minute");
+        clock.advance(REFETCH_INTERVAL);
+        assert_eq!(
+            client
+                .verify_signature_detailed(&fixture.fod_id)
+                .await
+                .unwrap(),
+            SignatureCheck::NoKey
+        );
+        assert_eq!(
+            http.requests().len(),
+            3,
+            "and one more once the minute had passed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_later_answer_with_an_end_replaces_the_entry_held_without_one() {
+        let fixture = Fixture::new();
+        let now = whole_second_now();
+        let started = now - Duration::days(1);
+        let ends = now + Duration::days(6);
+        let without = key_list(&[(started, None, &fixture.public_pem)]);
+        let with = key_list(&[(started, Some(ends), &fixture.public_pem)]);
+        let http = FakeHttp::answering(vec![(200, &without), (200, &with)]);
+        let (client, clock) = new_client_with_clock(http.clone());
+        assert_eq!(client.public_keys().await.unwrap()[0].ends_at(), None);
+        // The newest start has passed and the list has no end, so the
+        // identifier is not covered and the list is fetched again.
+        assert!(client.verify_signature(&fixture.fod_id).await.unwrap());
+        let keys = client.public_keys().await.unwrap();
+        assert_eq!(keys.len(), 1, "replaced rather than added");
+        assert_eq!(keys[0].ends_at(), Some(ends));
+        clock.advance(REFETCH_INTERVAL);
+        assert!(client.verify_signature(&fixture.another()).await.unwrap());
+        assert_eq!(
+            http.requests().len(),
+            2,
+            "the end now covers the identifier"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_key_replaced_before_its_end_is_picked_up_on_the_first_failure() {
+        let old = Fixture::new();
+        let new = Fixture::new();
+        let now = whole_second_now();
+        let started = now - Duration::days(1);
+        // The next key is held too, published in the short window before it
+        // starts, so it is the newest start held.
+        let next = now + Duration::minutes(10);
+        let next_pem = Crypto::new().public_key_pem().unwrap();
+        let ends = next + Duration::days(7);
+        // The old key was replaced an hour ago. The answer gives it that
+        // earlier end and adds the replacement, which starts at that moment.
+        let replaced = now - Duration::hours(1);
+        let held = key_list(&[
+            (started, Some(next), &old.public_pem),
+            (next, Some(ends), &next_pem),
+        ]);
+        let answer = key_list(&[
+            (started, Some(replaced), &old.public_pem),
+            (replaced, Some(next), &new.public_pem),
+            (next, Some(ends), &next_pem),
+        ]);
+        let http = FakeHttp::answering(vec![(200, &held), (200, &answer)]);
+        let client = new_client(http.clone());
+        client.public_keys().await.unwrap();
+        // Signed with the replacement after it started, so the keys held
+        // fail it, and the one fetch that follows brings the replacement.
+        assert_eq!(
+            client.verify_signature_detailed(&new.fod_id).await.unwrap(),
+            SignatureCheck::Verified
+        );
+        let requests = http.requests();
+        assert_eq!(requests.len(), 2, "exactly one fetch");
+        assert_eq!(
+            datetime_of(&requests[1]),
+            Some(as_datetime(started)),
+            "the start of the key held for the date, not the newest start"
+        );
+        // Signed with the replaced key after the replacement started, which
+        // the merged list refuses, with no further fetch inside the minute.
+        assert_eq!(
+            client
+                .verify_signature_detailed(&old.another())
+                .await
+                .unwrap(),
+            SignatureCheck::Invalid
+        );
+        assert_eq!(http.requests().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn concurrent_identifiers_the_list_does_not_cover_share_one_fetch() {
+        let old = Fixture::new();
+        let new = Fixture::new();
+        // The held key ended five minutes ago, and the answer adds the key
+        // that started then, which signed both identifiers.
+        let now = whole_second_now();
+        let started = now - Duration::days(7);
+        let boundary = now - Duration::minutes(5);
+        let held = key_list(&[(started, Some(boundary), &old.public_pem)]);
+        let published = key_list(&[
+            (started, Some(boundary), &old.public_pem),
+            (
+                boundary,
+                Some(boundary + Duration::days(7)),
+                &new.public_pem,
+            ),
+        ]);
+        // Two answers only, so a third request would fail and show below.
+        let http = FakeHttp::answering(vec![(200, &held), (200, &published)]);
+        let client = new_client(http.clone());
+        client.public_keys().await.unwrap();
+        let second_fod_id = new.another();
+        let (first, second) = tokio::join!(
+            client.verify_signature(&new.fod_id),
+            client.verify_signature(&second_fod_id),
+        );
+        assert!(first.unwrap());
+        assert!(
+            second.unwrap(),
+            "the second waited for the first one's fetch"
+        );
+        assert_eq!(http.requests().len(), 2, "one fetch served both");
+    }
+
+    #[tokio::test]
+    async fn a_clock_set_back_does_not_stop_fetching() {
+        let fixture = Fixture::new();
+        let started = whole_second_now() - Duration::days(1);
+        let json = key_list(&[(started, None, &fixture.public_pem)]);
+        let http = FakeHttp::answering(vec![(200, json.as_str()); 3]);
+        let (client, clock) = new_client_with_clock(http.clone());
+        client.public_keys().await.unwrap();
+        assert!(client.verify_signature(&fixture.fod_id).await.unwrap());
+        assert_eq!(http.requests().len(), 2);
+        clock.advance(-Duration::minutes(10));
+        assert!(client.verify_signature(&fixture.fod_id).await.unwrap());
+        assert_eq!(
+            http.requests().len(),
+            3,
+            "only a fetch in the past holds the next one back"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_answer_with_an_end_not_after_its_start_merges_nothing() {
+        let fixture = Fixture::new();
+        let now = whole_second_now();
+        let started = now - Duration::days(1);
+        let held = key_list(&[(started, None, &fixture.public_pem)]);
+        let unreadable = key_list(&[
+            (started, Some(now + Duration::days(6)), &fixture.public_pem),
+            (now, Some(now), "no period"),
+        ]);
+        let http = FakeHttp::answering(vec![(200, &held), (200, &unreadable)]);
+        let client = new_client(http.clone());
+        client.public_keys().await.unwrap();
+        let error = client.public_key_for(&fixture.fod_id).await.unwrap_err();
+        assert!(matches!(error, Error::Protocol(_)), "{error}");
+        assert_eq!(
+            client.public_keys().await.unwrap(),
+            vec![DidPublicKey::new(started, fixture.public_pem.clone())],
+            "nothing from the answer was merged, the valid entry included"
+        );
+    }
+
     // Offline signature checking.
 
     #[tokio::test]
@@ -1369,10 +1916,9 @@ mod tests {
     async fn a_signature_under_another_key_is_invalid() {
         let fixture = Fixture::new();
         let other = Crypto::new().public_key_pem().unwrap();
-        let client = new_client(FakeHttp::answering(vec![(
-            200,
-            &fixture.keys_json_with(&other),
-        )]));
+        let keys = fixture.keys_json_with(&other);
+        let http = FakeHttp::answering(vec![(200, &keys), (200, &keys)]);
+        let client = new_client(http.clone());
         assert_eq!(
             client
                 .verify_signature_detailed(&fixture.fod_id)
@@ -1380,7 +1926,19 @@ mod tests {
                 .unwrap(),
             SignatureCheck::Invalid
         );
+        assert_eq!(
+            http.requests().len(),
+            1,
+            "a list fetched for the check is not fetched again for it"
+        );
         assert!(!client.verify_signature(&fixture.fod_id).await.unwrap());
+        assert_eq!(
+            http.requests().len(),
+            2,
+            "fetched once more in case the key was replaced"
+        );
+        assert!(!client.verify_signature(&fixture.fod_id).await.unwrap());
+        assert_eq!(http.requests().len(), 2, "not again within the minute");
     }
 
     #[tokio::test]

@@ -67,13 +67,22 @@
 //!
 //! ## Signature checks without the cloud
 //!
-//! The cloud publishes the schedule of signing keys, each in force from its
-//! start until the next one starts. [`DidClient::verify_signature`] fetches
-//! that schedule once a day, keeps it in a per-instance cache, and checks an
-//! identifier's signature against the key in force at its creation time
-//! without a cloud call. [`DidClient::verify_signature_detailed`] says why a
-//! check did not pass, as a [`SignatureCheck`], and only
-//! [`SignatureCheck::Invalid`] means the identifier should be distrusted.
+//! The cloud publishes the signing keys whose periods have started, each in
+//! force from its start until its end, which is the next key's start.
+//! [`DidClient::verify_signature`] holds the keys it has fetched in a
+//! per-instance cache and checks an identifier's signature against the key
+//! in force at its creation time without a cloud call. It adds to the keys
+//! it holds by fetching those from the newest one onwards for an identifier
+//! dated at or near the end of that key, at most once a minute, and by
+//! fetching the whole list once a day. A key may be replaced before its end,
+//! for example if it is compromised, so a signature that fails under every
+//! key held is checked once more after a fetch within the same limit.
+//! [`covers`] and [`merge_keys`] apply the same rule to a list a caller holds
+//! itself.
+//!
+//! [`DidClient::verify_signature_detailed`] says why a check did not pass,
+//! as a [`SignatureCheck`], and only [`SignatureCheck::Invalid`] means the
+//! identifier should be distrusted.
 //!
 //! ## Awaiting the client
 //!
@@ -157,7 +166,8 @@ pub use client::{
 pub use error::{Error, Result};
 pub use http::{DidHttpClient, DidHttpRequest, DidHttpResponse, HttpMethod, LocalBoxFuture};
 pub use key::{
-    candidates_for_date, in_force_at, parse_keys, DidPublicKey, BOUNDARY_TOLERANCE_MINUTES,
+    candidates_for_date, covers, in_force_at, merge_keys, parse_keys, DidPublicKey,
+    BOUNDARY_TOLERANCE_MINUTES,
 };
 pub use outcome::{ContextOutcome, Factor, FactorOutcome, SignatureCheck, SignatureOutcome};
 pub use redeem::RedeemResult;
