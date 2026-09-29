@@ -135,9 +135,9 @@ fn failure(client: DidClient, call: Call) -> (String, String) {
     (error.to_string(), format!("{error:?}"))
 }
 
-/// Which call the test makes. Each one puts the resource key somewhere
-/// different, being the route for the key and verify calls and the form body
-/// for redeem.
+/// Which call the test makes. Without a licence key each one puts the
+/// resource key somewhere different, being the route for the key and verify
+/// calls and the form body for redeem.
 enum Call {
     Keys,
     Verify,
@@ -249,6 +249,42 @@ fn a_licence_key_the_service_repeats_back_is_removed_by_value() {
     );
     assert!(
         shown.contains("is not valid for this resource"),
+        "the service's reason was lost: {shown}"
+    );
+}
+
+#[test]
+fn a_key_fetch_on_a_licence_key_refused_with_it_quoted_does_not_print_it() {
+    // With a licence key the key fetch sends it in a header, and a 401 is
+    // how the service refuses a licence key it will not accept.
+    let licence = "licence-value-that-looks-like-nothing";
+    let transport = Scripted::answering(
+        401,
+        format!(r#"{{"errors":["the licence '{licence}' is not valid"]}}"#),
+    );
+    let client = DidClient::builder(NOT_A_KEY)
+        .licence_key(licence)
+        .endpoint("https://cloud.example.test/api/v4/")
+        .http_client(transport)
+        .build()
+        .expect("the client builds");
+    let (shown, debugged) = failure(client, Call::Keys);
+
+    assert!(
+        !shown.contains(licence),
+        "the licence was displayed: {shown}"
+    );
+    assert!(
+        !debugged.contains(licence),
+        "the licence was debugged: {debugged}"
+    );
+    assert!(shown.contains("401"), "the status was lost: {shown}");
+    assert!(
+        shown.contains("key endpoint"),
+        "the operation was lost: {shown}"
+    );
+    assert!(
+        shown.contains("is not valid"),
         "the service's reason was lost: {shown}"
     );
 }

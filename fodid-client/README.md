@@ -80,8 +80,9 @@ async fn redeem(
     challenge: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // One client for the process. It is Send + Sync and its key cache is
-    // shared, so build it once and reuse it. The licence key is sent only
-    // in the redeem form body and is never exposed by the client.
+    // shared, so build it once and reuse it. The licence key is sent in the
+    // redeem form body and in a header on the signing key fetch, never in a
+    // URL, and is never exposed by the client.
     let client = DidClient::builder("your-resource-key")
         .licence_key("your-licence-key")
         .http_client(transport)
@@ -105,9 +106,12 @@ async fn redeem(
                     match factor {
                         FactorOutcome::Mismatch => println!("{name} differs"),
                         FactorOutcome::Verified => {}
-                        // Not a mismatch. The checking service could not
-                        // determine this factor, so it says nothing.
+                        // Neither is a mismatch. The checking service could
+                        // not determine the factor, or the creating service
+                        // recorded no value for it, so neither says anything
+                        // about the connection.
                         FactorOutcome::Misconfigured => {}
+                        FactorOutcome::NotRecorded => {}
                     }
                 }
             }
@@ -155,11 +159,33 @@ is not a 51Did is refused locally, before any call is made.
 
 ### Checking a signature without the cloud
 
-The cloud publishes the schedule of signing keys, each in force from its
-start until the next one starts. The client fetches that schedule on first
-use and again when it is a day old, when no key covers the identifier's date,
-or when the date is later than the newest start it holds. Concurrent callers
-that each find the schedule needs fetching share one fetch.
+The cloud publishes the signing keys whose periods have started, each in
+force from its start until its end, which is the next key's start. The client
+fetches the whole list on first use and holds it, adding what each later
+fetch brings, so an identifier made long ago still verifies against the key
+of its own period. It fetches the keys from the newest one it holds onwards
+when an identifier is dated at or near the end of that key, at most once a
+minute, and fetches the whole list again once a day. Concurrent callers that
+each find the keys need fetching share one fetch.
+
+A key may be replaced before its end, for example if it is compromised. The
+client picks up the replacement on the first signature that fails under the
+keys it holds, by fetching the keys from the one held for the identifier's
+date onwards, within the same once a minute limit, and checking that
+signature once more, or at the latest at the daily fetch of the whole list. A
+server that holds its own copy of the key list, rather than using the
+client's, follows the same rule with `covers` and `merge_keys`, and fetches
+with `DidClient::fetch_keys_from`, which sends the request the client's own
+fetches send and returns the answer without holding it.
+
+The fetch is made with the licence key when the builder was given one, sent
+in the `X-51D-License-Key` request header, and the resource key is then left
+out of the route. A call from a server carries no `Origin` or `Referer`, so
+the cloud refuses one made on a resource key restricted to named web domains,
+and the cloud reads the resource key first when a request carries both keys.
+A server whose resource key is restricted gives the builder its licence key
+for that reason. Without a licence key the fetch carries the resource key in
+the route.
 
 ```rust,no_run
 use std::sync::Arc;
@@ -204,6 +230,8 @@ returns a `LocalBoxFuture`, a boxed future that is not required to be
 still implement it. A host with its own HTTP stack implements the trait and
 hands the client an `Arc` of it. A transport resolves to `Err` only when the
 request did not complete, because the client decides what each status means.
+A transport also sends every header in `request.headers` beside the
+`User-Agent`, because the signing key fetch carries the licence key in one.
 
 ```rust
 use fodid_client::{
@@ -218,9 +246,9 @@ impl DidHttpClient for HostTransport {
         request: &'a DidHttpRequest,
     ) -> LocalBoxFuture<'a, Result<DidHttpResponse, String>> {
         Box::pin(async move {
-            // Hand request.url, request.form (url-encoded for a POST) and
-            // request.user_agent to the host's own fetch, await it, then
-            // return the status and body it answered with.
+            // Hand request.url, request.headers, request.form (url-encoded
+            // for a POST) and request.user_agent to the host's own fetch,
+            // await it, then return the status and body it answered with.
             let _ = (request.method == HttpMethod::Post, &request.url);
             Err("not connected in this example".to_string())
         })

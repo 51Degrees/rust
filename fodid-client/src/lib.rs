@@ -59,21 +59,32 @@
 //!    [`FactorOutcome`] of each factor.
 //!
 //! One rule matters more than the rest, and every 51Did package applies it.
-//! A factor of `misconfigured` is read on its own as
-//! [`FactorOutcome::Misconfigured`] and never falls through to a mismatch,
-//! because it says the checking service could not determine that factor,
-//! and reading it as a mismatch would report a replay indicator for
+//! A factor of `misconfigured` or `notrecorded` is read on its own, as
+//! [`FactorOutcome::Misconfigured`] or [`FactorOutcome::NotRecorded`], and
+//! never falls through to a mismatch, because neither says the connection
+//! differs. The first says the checking service could not determine the
+//! factor and the second says the creating service recorded no value for it,
+//! so reading either as a mismatch would report a replay indicator for
 //! something the identifier says nothing about.
 //!
 //! ## Signature checks without the cloud
 //!
-//! The cloud publishes the schedule of signing keys, each in force from its
-//! start until the next one starts. [`DidClient::verify_signature`] fetches
-//! that schedule once a day, keeps it in a per-instance cache, and checks an
-//! identifier's signature against the key in force at its creation time
-//! without a cloud call. [`DidClient::verify_signature_detailed`] says why a
-//! check did not pass, as a [`SignatureCheck`], and only
-//! [`SignatureCheck::Invalid`] means the identifier should be distrusted.
+//! The cloud publishes the signing keys whose periods have started, each in
+//! force from its start until its end, which is the next key's start.
+//! [`DidClient::verify_signature`] holds the keys it has fetched in a
+//! per-instance cache and checks an identifier's signature against the key
+//! in force at its creation time without a cloud call. It adds to the keys
+//! it holds by fetching those from the newest one onwards for an identifier
+//! dated at or near the end of that key, at most once a minute, and by
+//! fetching the whole list once a day. A key may be replaced before its end,
+//! for example if it is compromised, so a signature that fails under every
+//! key held is checked once more after a fetch within the same limit.
+//! [`covers`] and [`merge_keys`] apply the same rule to a list a caller holds
+//! itself, and [`DidClient::fetch_keys_from`] fetches for such a list.
+//!
+//! [`DidClient::verify_signature_detailed`] says why a check did not pass,
+//! as a [`SignatureCheck`], and only [`SignatureCheck::Invalid`] means the
+//! identifier should be distrusted.
 //!
 //! ## Awaiting the client
 //!
@@ -95,9 +106,12 @@
 //! rustls that runs on a tokio runtime, which the builder uses when no
 //! transport is given.
 //!
-//! Credentials never travel in a URL. The resource key is part of the
-//! route, as the endpoints accept, and the licence key travels only in the
-//! redeem form body, because a query string is written to access logs.
+//! The licence key never travels in a URL, because a URL is written to
+//! access logs. The redeem call sends it in the form body, and the signing
+//! key fetch sends it in the [`LICENCE_KEY_HEADER`] header instead of
+//! putting the resource key in the route, which lets a server fetch the
+//! keys when its resource key is restricted to named web domains. A
+//! transport therefore sends every header a request carries.
 //!
 //! ## Example
 //!
@@ -149,12 +163,13 @@ mod redeem;
 
 pub use client::{
     DidClient, DidClientBuilder, DEFAULT_ENDPOINT, ENDPOINT_ENVIRONMENT_VARIABLE,
-    KEY_CACHE_LIFETIME, MAXIMUM_ENCODED_LENGTH, USER_AGENT,
+    KEY_CACHE_LIFETIME, LICENCE_KEY_HEADER, MAXIMUM_ENCODED_LENGTH, USER_AGENT,
 };
 pub use error::{Error, Result};
 pub use http::{DidHttpClient, DidHttpRequest, DidHttpResponse, HttpMethod, LocalBoxFuture};
 pub use key::{
-    candidates_for_date, in_force_at, parse_keys, DidPublicKey, BOUNDARY_TOLERANCE_MINUTES,
+    candidates_for_date, covers, in_force_at, merge_keys, parse_keys, DidPublicKey,
+    BOUNDARY_TOLERANCE_MINUTES,
 };
 pub use outcome::{ContextOutcome, Factor, FactorOutcome, SignatureCheck, SignatureOutcome};
 pub use redeem::RedeemResult;

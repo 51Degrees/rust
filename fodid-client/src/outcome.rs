@@ -205,21 +205,27 @@ pub enum FactorOutcome {
     /// identifier says nothing about it either way. Nothing a caller sends
     /// can produce it.
     Misconfigured,
+    /// The service that created the identifier recorded no value for this
+    /// factor, so the identifier says nothing about it and there was nothing
+    /// to compare.
+    ///
+    /// This is neither a mismatch nor [`FactorOutcome::Misconfigured`], which
+    /// says the checking service could not determine the factor.
+    NotRecorded,
 }
 
 impl FactorOutcome {
     /// Maps the cloud's factor string.
     ///
-    /// `misconfigured` is read on its own, because it is the one value that
-    /// must NOT fall through to a mismatch. It says the checking service
-    /// could not determine that factor, so reading it as a mismatch would
-    /// report a replay indicator for something the identifier says nothing
-    /// about. Everything else that is not the one word `verified` is a
-    /// mismatch, so an unexpected value never reads as a pass.
+    /// `verified`, `misconfigured` and `notrecorded` are each read on their
+    /// own, because none of them is a mismatch. Anything else, including a
+    /// word this client does not know, is a mismatch, so an unexpected value
+    /// never reads as a pass.
     pub fn from_cloud(value: Option<&str>) -> Self {
         match value {
             Some("verified") => Self::Verified,
             Some("misconfigured") => Self::Misconfigured,
+            Some("notrecorded") => Self::NotRecorded,
             _ => Self::Mismatch,
         }
     }
@@ -230,6 +236,7 @@ impl FactorOutcome {
             Self::Verified => "verified",
             Self::Mismatch => "mismatch",
             Self::Misconfigured => "misconfigured",
+            Self::NotRecorded => "notrecorded",
         }
     }
 }
