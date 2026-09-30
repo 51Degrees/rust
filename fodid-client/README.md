@@ -150,6 +150,12 @@ async fn redeem(
 }
 ```
 
+`factors()` is `Some` on a mismatch, on a misconfigured result where the
+transport was compared, and whenever any factor is `NotRecorded`, whatever
+the overall result. A `NotRecorded` factor is left out of the verdict, so
+`Verified` can arrive beside factors that are `NotRecorded`, and the factors
+then say how many the verdict rests on.
+
 The redeem call counts as one use of the resource key, the second of the two
 a browser-based context check costs. A 400 from the service comes back as
 `Error::InvalidArgument` carrying the service's own message, a 404 as
@@ -159,8 +165,11 @@ is not a 51Did is refused locally, before any call is made.
 
 ### Checking a signature without the cloud
 
-The cloud publishes the signing keys whose periods have started, each in
-force from its start until its end, which is the next key's start. The client
+The cloud publishes the signing keys whose periods have started, plus the
+next key from fifteen minutes before its start. Each entry carries its start
+and its end, read through `starts_at` and `ends_at`, the end being the next
+key's start, which the newest entry carries too although the next key is not
+yet published, and a key is in force from its start until its end. The client
 fetches the whole list on first use and holds it, adding what each later
 fetch brings, so an identifier made long ago still verifies against the key
 of its own period. It fetches the keys from the newest one it holds onwards
