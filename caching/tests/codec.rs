@@ -41,8 +41,9 @@ fn entry(value: &str, expires: Option<SystemTime>) -> Entry<String> {
     }
 }
 
-/// The bytes of version 1, worked out by hand from the layout, so a change
-/// to the format fails here rather than in a store that reads old entries.
+/// The bytes of version 1, worked out from the layout apart from this
+/// crate's code, so a change to the format fails here rather than in a
+/// store that reads old entries.
 #[test]
 fn writes_the_documented_layout() {
     let bytes = encode_entry(
