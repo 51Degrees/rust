@@ -1,0 +1,98 @@
+name: Loading cache on WebAssembly
+
+# Builds, lints and tests fiftyone-loading-cache on the two WebAssembly
+# targets the services that use it run on. The native build in
+# pull-request.yml already covers it on every operating system through the
+# workspace.
+#
+# wasm32-wasip1 tests run under wasmtime. wasm32-unknown-unknown has no
+# clock, so it catches any use of Instant or SystemTime::now, and its tests
+# run under Node because the crate imports nothing from its host. The
+# standard library prints nothing there, so ci/run-wasm-unknown.mjs reports
+# a failing test through the exit status alone. Doctests are left out on
+# that target because they build caches on the system clock, which it lacks.
+#
+# The crate needs neither the C/C++ sources nor the submodules, and this
+# workflow reads no secrets.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same ref cancels an in-flight run so the queue stays short.
+concurrency:
+  group: loading-cache-wasm-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Fail the build on any compiler or rustdoc warning.
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wasip1:
+    name: loading cache (wasm32-wasip1)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with wasm target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: loading-cache-wasm32-wasip1
+
+      - name: Install wasmtime (the wasm test runner)
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+
+      - name: cargo clippy (wasm32-wasip1)
+        run: cargo clippy -p fiftyone-loading-cache --all-targets --target wasm32-wasip1 -- -D warnings
+
+      - name: cargo test (wasm32-wasip1, executed under wasmtime)
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+        run: cargo test -p fiftyone-loading-cache --target wasm32-wasip1
+
+  unknown:
+    name: loading cache (wasm32-unknown-unknown)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with wasm target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: loading-cache-wasm32-unknown-unknown
+
+      - name: Install Node (the wasm test runner)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: cargo clippy (wasm32-unknown-unknown)
+        run: cargo clippy -p fiftyone-loading-cache --all-targets --target wasm32-unknown-unknown -- -D warnings
+
+      - name: cargo test (wasm32-unknown-unknown, executed under Node)
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: node ${{ github.workspace }}/ci/run-wasm-unknown.mjs
+        run: cargo test -p fiftyone-loading-cache --target wasm32-unknown-unknown --tests

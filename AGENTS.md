@@ -13,8 +13,8 @@ workspace of runnable examples.
 - **Library workspace** (repository root): the pipeline core and engines,
   Device Detection and IP Intelligence (cloud and on-premise), the cloud
   request engine, the JSON and JavaScript builders, the axum web integration,
-  the `fodid` 51Did reader, and the general loading cache. Each concern is its own crate so a consumer
-  depends only on what it uses.
+  the `fodid` 51Did reader, and the general loading cache. Each concern is
+  its own crate so a consumer depends only on what it uses.
 - **Example workspace** (`examples/`): excluded from the root workspace
   (`exclude = ["examples"]`). It depends on the **published** crates from
   crates.io by default, so a fresh checkout of `examples/` builds the way a
@@ -104,10 +104,10 @@ manifest's `include`, so `cargo publish` packages it.
 
 - `pull-request.yml` — fmt, build, test, clippy and doc on Windows, Linux
   (two LTS) and macOS (Intel and Apple Silicon), plus a wasm32-wasip1 job for
-  the cloud crates and the loading cache, and a wasm32-unknown-unknown job
-  for the loading cache that runs its tests under Node through
-  `ci/run-wasm-unknown.mjs`. Runs on pushes to `main` and PRs targeting
-  `main`.
+  the cloud crates. Runs on pushes to `main` and PRs targeting `main`.
+- `loading-cache-wasm.yml` builds, lints and tests the loading cache on
+  wasm32-wasip1 under wasmtime and on wasm32-unknown-unknown under Node,
+  through `ci/run-wasm-unknown.mjs`. Same triggers, and it reads no secrets.
 - `examples.yml` — builds and tests `examples/` against local source
   (`source.toml`) before a release. Runs on every PR.
 - `publish.yml` — publishes on push to `main`, then a `verify-published` job
