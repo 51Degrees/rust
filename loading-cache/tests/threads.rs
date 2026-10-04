@@ -59,6 +59,14 @@ impl Wake for Unpark {
 /// is never woken would hang, so waiting long without a wake fails the test
 /// instead.
 fn block_on_parking<F: Future>(future: F) -> F::Output {
+    block_on_parking_then(future, || {})
+}
+
+/// As [`block_on_parking`], calling `after_first_poll` once the future has
+/// been polled once. A call to the cache has joined or started the load by
+/// then.
+fn block_on_parking_then<F: Future>(future: F, after_first_poll: impl FnOnce()) -> F::Output {
+    let mut after_first_poll = Some(after_first_poll);
     let unpark = Arc::new(Unpark {
         thread: thread::current(),
         woken: AtomicBool::new(false),
@@ -70,6 +78,9 @@ fn block_on_parking<F: Future>(future: F) -> F::Output {
         unpark.woken.store(false, Ordering::SeqCst);
         if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
             return output;
+        }
+        if let Some(after_first_poll) = after_first_poll.take() {
+            after_first_poll();
         }
         // Parking can end without a wake, so only the deadline passing
         // without one is a failure.
@@ -148,21 +159,26 @@ fn threads_share_a_failure() {
             .clock(clock.shared())
             .build(),
     );
-    let barrier = Arc::new(Barrier::new(THREADS + 1));
+    let barrier = Arc::new(Barrier::new(THREADS));
+    let joined = Arc::new(AtomicUsize::new(0));
 
     let threads: Vec<_> = (0..THREADS)
         .map(|_| {
             let cache = Arc::clone(&cache);
             let barrier = Arc::clone(&barrier);
+            let joined = Arc::clone(&joined);
             thread::spawn(move || {
                 barrier.wait();
-                block_on_parking(cache.get(&7))
+                block_on_parking_then(cache.get(&7), || {
+                    joined.fetch_add(1, Ordering::SeqCst);
+                })
             })
         })
         .collect();
-    barrier.wait();
-    // Gives every thread time to join the load before it may finish.
-    thread::sleep(Duration::from_millis(200));
+    // The load may fail only once every thread has joined it.
+    while joined.load(Ordering::SeqCst) < THREADS {
+        thread::yield_now();
+    }
     source.gate.open();
 
     for thread in threads {
