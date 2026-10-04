@@ -19,6 +19,7 @@ engine, native and web layers.
 
 ```
 core            fiftyone-pipeline-core, fiftyone-caching
+                fiftyone-loading-cache
   |
 engines         fiftyone-pipeline-engines
   |             fiftyone-pipeline-engines-fiftyone
@@ -41,9 +42,12 @@ examples        examples-shared, device-detection-examples,
                 ip-intelligence-examples, pipeline-examples
 ```
 
-- **core** (`fiftyone-pipeline-core`, `fiftyone-caching`). FlowData, the
-  FlowElement/Pipeline traits, immutable Evidence, ElementData, TypedKey,
-  WeightedValue, errors and constants, plus the sharded-LRU cache.
+- **core** (`fiftyone-pipeline-core`, `fiftyone-caching`,
+  `fiftyone-loading-cache`). FlowData, the FlowElement/Pipeline traits,
+  immutable Evidence, ElementData, TypedKey, WeightedValue, errors and
+  constants, plus the sharded-LRU cache and the general loading cache. The
+  loading cache depends on no other crate here, so services outside the
+  pipeline can use it.
 - **engines** (`fiftyone-pipeline-engines`,
   `fiftyone-pipeline-engines-fiftyone`, `fiftyone-cloud-request-engine`,
   `fiftyone-derived-properties`, `fiftyone-json-builder`,

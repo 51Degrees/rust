@@ -234,6 +234,8 @@ jobs:
   # data-update service disabled (default-features = false), so this job needs
   # neither the C/C++ sources the -sys crates compile nor the data submodules,
   # and it runs on Linux alone because a cross-compile to wasm is host-neutral.
+  # The general loading cache is built, linted and tested here too, since
+  # services on WebAssembly hosts depend on it.
   #
   # Beyond compiling, the wasm-safe test suites are executed on the target under
   # wasmtime, so the pure-Rust logic is exercised on wasm rather than only built.
@@ -284,6 +286,7 @@ jobs:
       - name: cargo build (wasm32-wasip1, reqwest disabled)
         run: |
           for crate in \
+            fiftyone-loading-cache \
             fiftyone-cloud-request-engine \
             fiftyone-device-detection-cloud \
             fiftyone-ip-intelligence-cloud \
@@ -299,6 +302,7 @@ jobs:
       - name: cargo clippy (wasm32-wasip1, reqwest disabled)
         run: |
           for crate in \
+            fiftyone-loading-cache \
             fiftyone-cloud-request-engine \
             fiftyone-device-detection-cloud \
             fiftyone-ip-intelligence-cloud \
@@ -330,6 +334,7 @@ jobs:
         run: |
           for crate in \
             fiftyone-caching \
+            fiftyone-loading-cache \
             fiftyone-pipeline-core \
             fiftyone-json-builder \
             fiftyone-javascript-builder \
@@ -342,3 +347,45 @@ jobs:
             cargo test -p "${crate}" --no-default-features --target wasm32-wasip1
             echo "::endgroup::"
           done
+
+  # The general loading cache must also build and run on
+  # wasm32-unknown-unknown, which JavaScript hosts such as edge platforms
+  # run. That target has no clock, so this catches any use of Instant or
+  # SystemTime::now. The crate imports nothing from its host, so its tests
+  # run under Node with no wasm-bindgen. The standard library prints nothing
+  # there, so ci/run-wasm-unknown.mjs reports a failing test through the
+  # exit status alone. Doctests are left out because they build caches on
+  # the system clock, which the target lacks.
+  wasm-unknown:
+    name: wasm (wasm32-unknown-unknown)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with wasm target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-unknown-unknown
+
+      - name: Install Node (the wasm test runner)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: cargo build (wasm32-unknown-unknown)
+        run: cargo build -p fiftyone-loading-cache --target wasm32-unknown-unknown
+
+      - name: cargo clippy (wasm32-unknown-unknown)
+        run: cargo clippy -p fiftyone-loading-cache --all-targets --target wasm32-unknown-unknown -- -D warnings
+
+      - name: cargo test (wasm32-unknown-unknown, executed under Node)
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: node ${{ github.workspace }}/ci/run-wasm-unknown.mjs
+        run: cargo test -p fiftyone-loading-cache --target wasm32-unknown-unknown --tests

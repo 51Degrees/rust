@@ -20,7 +20,7 @@ minification opt-in.
 
 ## Crates
 
-The workspace has 29 members, arranged in dependency order from the
+The workspace has 30 members, arranged in dependency order from the
 pure-Rust core up to the runnable examples.
 
 ### Core
@@ -29,6 +29,7 @@ pure-Rust core up to the runnable examples.
 |-------|----------------|
 | [`fiftyone-pipeline-core`](pipeline-core) | FlowData, the FlowElement/Pipeline traits, immutable Evidence, ElementData, TypedKey, WeightedValue, errors and constants. |
 | [`fiftyone-caching`](caching) | Sharded-LRU cache trait and the default implementation used to wrap an engine. |
+| [`fiftyone-loading-cache`](loading-cache) | General loading cache that collapses concurrent loads of a key into one, over pluggable stores, for native and WebAssembly hosts. Depends on no other 51Degrees crate. |
 
 ### Engines and builders
 

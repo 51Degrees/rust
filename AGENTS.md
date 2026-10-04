@@ -13,7 +13,7 @@ workspace of runnable examples.
 - **Library workspace** (repository root): the pipeline core and engines,
   Device Detection and IP Intelligence (cloud and on-premise), the cloud
   request engine, the JSON and JavaScript builders, the axum web integration,
-  and the `fodid` 51Did reader. Each concern is its own crate so a consumer
+  the `fodid` 51Did reader, and the general loading cache. Each concern is its own crate so a consumer
   depends only on what it uses.
 - **Example workspace** (`examples/`): excluded from the root workspace
   (`exclude = ["examples"]`). It depends on the **published** crates from
@@ -104,7 +104,10 @@ manifest's `include`, so `cargo publish` packages it.
 
 - `pull-request.yml` — fmt, build, test, clippy and doc on Windows, Linux
   (two LTS) and macOS (Intel and Apple Silicon), plus a wasm32-wasip1 job for
-  the cloud crates. Runs on pushes to `main` and PRs targeting `main`.
+  the cloud crates and the loading cache, and a wasm32-unknown-unknown job
+  for the loading cache that runs its tests under Node through
+  `ci/run-wasm-unknown.mjs`. Runs on pushes to `main` and PRs targeting
+  `main`.
 - `examples.yml` — builds and tests `examples/` against local source
   (`source.toml`) before a release. Runs on every PR.
 - `publish.yml` — publishes on push to `main`, then a `verify-published` job
@@ -147,6 +150,11 @@ manifest's `include`, so `cargo publish` packages it.
   metadata URLs are allow-listed as untagged.
 - **Code style.** Wrap code and doc comments to about 80 columns (soft limit;
   do not break URLs or string literals to hit it). This keeps diffs reviewable.
+- **Loading cache.** `loading-cache` depends on no other crate in the
+  workspace, so services outside the pipeline can use it, and it must keep
+  building and running on wasm32-unknown-unknown, where the standard library
+  has no clock. Take every time from its `Clock`, never from `Instant` or
+  `SystemTime::now`.
 - **MSRV.** The workspace pins `rust-version = "1.94"` (the JavaScript builder's
   minifier toolchain needs a recent compiler).
 
