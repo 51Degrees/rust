@@ -22,7 +22,9 @@ name: Caching on WebAssembly
 # cloudflare feature's stores and spawner run on workerd, the Workers
 # runtime, through Miniflare. caching/host-tests/cloudflare holds a Worker
 # built with worker-build, and its test.mjs drives it with concurrent
-# requests.
+# requests. The spin feature's store runs on Spin itself, where
+# caching/host-tests/spin holds a component its test.mjs calls, and the
+# rest of the crate's tests run on wasm32-wasip2 under wasmtime.
 #
 # The crate needs neither the C/C++ sources nor the submodules, and this
 # workflow reads no secrets.
@@ -193,4 +195,60 @@ jobs:
 
       - name: Run the test Worker's checks on workerd
         working-directory: caching/host-tests/cloudflare
+        run: node test.mjs
+
+  spin:
+    name: caching spin (wasm32-wasip2, on Spin)
+    runs-on: ubuntu-24.04
+    env:
+      SPIN_VERSION: 4.2.1
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with wasm target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: caching-spin
+          workspaces: |
+            . -> target
+            caching/host-tests/spin -> target
+
+      - name: Install wasmtime (the wasm test runner)
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+
+      - name: Install Node (it drives the test component)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Spin
+        run: |
+          mkdir -p "$RUNNER_TEMP/spin"
+          curl -fsSL "https://github.com/spinframework/spin/releases/download/v${SPIN_VERSION}/spin-v${SPIN_VERSION}-linux-amd64.tar.gz"             | tar -xz -C "$RUNNER_TEMP/spin"
+          echo "$RUNNER_TEMP/spin" >> "$GITHUB_PATH"
+
+      - name: cargo clippy (wasm32-wasip2, spin)
+        run: cargo clippy -p fiftyone-caching --no-default-features --features spin --all-targets --target wasm32-wasip2 -- -D warnings
+
+      - name: cargo doc (wasm32-wasip2, spin)
+        run: cargo doc -p fiftyone-caching --no-deps --no-default-features --features spin --target wasm32-wasip2
+
+      - name: cargo test (wasm32-wasip2, executed under wasmtime)
+        env:
+          CARGO_TARGET_WASM32_WASIP2_RUNNER: wasmtime
+        run: cargo test -p fiftyone-caching --target wasm32-wasip2
+
+      - name: Build the test component
+        working-directory: caching/host-tests/spin
+        run: cargo build --target wasm32-wasip2 --release
+
+      - name: Run the test component's checks on Spin
+        working-directory: caching/host-tests/spin
         run: node test.mjs

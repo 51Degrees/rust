@@ -222,6 +222,8 @@ pub mod cloudflare;
 mod cloudflare;
 #[cfg(all(feature = "fastly", target_os = "wasi", target_env = "p1"))]
 pub mod fastly;
+#[cfg(all(feature = "spin", target_os = "wasi", target_env = "p2"))]
+pub mod spin;
 // The Fastly store's own logic is tested on every target, without the SDK.
 #[cfg(all(
     test,

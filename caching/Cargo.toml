@@ -23,6 +23,9 @@ fastly = ["dep:fastly"]
 # module, for wasm32-unknown-unknown on Cloudflare Workers. Use it with
 # default features off, because the pipeline feature does not build there.
 cloudflare = ["dep:worker"]
+# A store over Spin's key-value store, in the spin module, for wasm32-wasip2
+# on Spin 4. The SDK is only a dependency there.
+spin = ["dep:spin-sdk"]
 
 [dependencies]
 fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core", optional = true }
@@ -47,6 +50,11 @@ fastly = { version = "0.13", optional = true }
 # The Cloudflare Workers SDK, which builds for wasm32-unknown-unknown only.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 worker = { version = "0.8", optional = true }
+
+# The Spin SDK, which builds for wasm32-wasip2 only. Only its key-value
+# interface is used.
+[target.'cfg(all(target_os = "wasi", target_env = "p2"))'.dependencies]
+spin-sdk = { version = "7", optional = true, default-features = false, features = ["key-value"] }
 
 # The multi-threaded spawner test runs loads on a tokio runtime, which needs
 # threads, so it is a native-only test dependency.

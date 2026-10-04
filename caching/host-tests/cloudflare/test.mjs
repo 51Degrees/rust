@@ -59,4 +59,4 @@ await check("a later request reads the KV store rather than loading", async () =
 
 await mf.dispose();
 console.log(failed === 0 ? "all checks passed" : `${failed} checks failed`);
-process.exit(failed === 0 ? 0 : 1);
+process.exitCode = failed === 0 ? 0 : 1;
