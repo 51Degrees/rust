@@ -51,9 +51,9 @@ pub enum ByteLookup<R> {
 /// in the [entry format](crate::encode_entry).
 ///
 /// The keys it is given are made by [`EncodedStore`] and hold only ASCII
-/// letters, digits, `-`, `.`, `_`, `~`, `%` and the namespace's own
-/// characters. A store that fails reports a miss or drops the write, as a
-/// [`Store`] does.
+/// letters, digits, `-`, `.`, `_`, `~` and `%`, after the namespace and a
+/// `/` when one is set. A store that fails reports a miss or drops the
+/// write, as a [`Store`] does.
 pub trait ByteStore {
     /// Held by the caller the store chose to fill a missing key, as
     /// [`Store::Reservation`] is. A store that never makes callers wait uses

@@ -305,7 +305,7 @@ mod binding {
     /// whole seconds, rounded up, and at least the minute Workers KV allows.
     /// [`EncodedStore`](crate::EncodedStore) checks each entry's own drop
     /// time when it reads it, so a shorter lifetime still holds. A write
-    /// can take up to a minute to be seen in other locations, a key takes
+    /// can take a minute or more to be seen in other locations, a key takes
     /// at most one write a second, and a write over that limit is dropped.
     /// Keys are up to 512 bytes.
     pub struct KvStore {
