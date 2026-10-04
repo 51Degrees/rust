@@ -175,6 +175,7 @@ pub struct Source {
     loads: Arc<AtomicUsize>,
     pub gate: Gate,
     failing: Arc<AtomicBool>,
+    failing_loads: Arc<AtomicUsize>,
 }
 
 impl Source {
@@ -184,6 +185,7 @@ impl Source {
             loads: Arc::default(),
             gate: Gate::opened(),
             failing: Arc::default(),
+            failing_loads: Arc::default(),
         }
     }
 
@@ -202,6 +204,11 @@ impl Source {
     pub fn fail(&self, failing: bool) {
         self.failing.store(failing, Ordering::SeqCst);
     }
+
+    /// Fails the first `loads` loads and answers the rest.
+    pub fn fail_first(&self, loads: usize) {
+        self.failing_loads.store(loads, Ordering::SeqCst);
+    }
 }
 
 impl Loader<u32, String> for Source {
@@ -210,7 +217,8 @@ impl Loader<u32, String> for Source {
     async fn load(&self, key: &u32) -> Result<Loaded<String>, String> {
         let load = self.loads.fetch_add(1, Ordering::SeqCst) + 1;
         self.gate.pass().await;
-        if self.failing.load(Ordering::SeqCst) {
+        if self.failing.load(Ordering::SeqCst) || load <= self.failing_loads.load(Ordering::SeqCst)
+        {
             Err(format!("load {load} of {key} failed"))
         } else {
             Ok(Loaded::new(format!("{key} from load {load}")))
