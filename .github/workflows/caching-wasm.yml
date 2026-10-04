@@ -1,16 +1,20 @@
-name: Loading cache on WebAssembly
+name: Caching on WebAssembly
 
-# Builds, lints and tests fiftyone-loading-cache on the two WebAssembly
-# targets the services that use it run on. The native build in
-# pull-request.yml already covers it on every operating system through the
-# workspace.
+# Lints and tests fiftyone-caching, the loading cache included, on the two
+# WebAssembly targets services built with it run on. The native build in
+# pull-request.yml covers it on every operating system through the workspace,
+# and its wasm job tests the crate on wasm32-wasip1 with default features off.
 #
-# wasm32-wasip1 tests run under wasmtime. wasm32-unknown-unknown has no
-# clock, so it catches any use of Instant or SystemTime::now, and its tests
-# run under Node because the crate imports nothing from its host. The
-# standard library prints nothing there, so ci/run-wasm-unknown.mjs reports
-# a failing test through the exit status alone. Doctests are left out on
-# that target because they build caches on the system clock, which it lacks.
+# Here wasm32-wasip1 runs with default features, so DataKeyedCache and the
+# pipeline are covered there too, under wasmtime. wasm32-unknown-unknown runs
+# with default features off, since only the pipeline feature needs
+# fiftyone-pipeline-core, which brings getrandom. That target has no clock and
+# no randomness, so it catches any use of Instant, SystemTime::now or a
+# run-time seed. Its tests run under Node because the crate imports nothing
+# from its host. The standard library prints nothing there, so
+# ci/run-wasm-unknown.mjs reports a failing test through the exit status
+# alone. Doctests are left out on that target because they use the system
+# clock, which it lacks.
 #
 # The crate needs neither the C/C++ sources nor the submodules, and this
 # workflow reads no secrets.
@@ -24,7 +28,7 @@ on:
 
 # A newer push to the same ref cancels an in-flight run so the queue stays short.
 concurrency:
-  group: loading-cache-wasm-${{ github.ref }}
+  group: caching-wasm-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -38,7 +42,7 @@ env:
 
 jobs:
   wasip1:
-    name: loading cache (wasm32-wasip1)
+    name: caching (wasm32-wasip1)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout workspace
@@ -53,21 +57,21 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          key: loading-cache-wasm32-wasip1
+          key: caching-wasm32-wasip1
 
       - name: Install wasmtime (the wasm test runner)
         uses: bytecodealliance/actions/wasmtime/setup@v1
 
       - name: cargo clippy (wasm32-wasip1)
-        run: cargo clippy -p fiftyone-loading-cache --all-targets --target wasm32-wasip1 -- -D warnings
+        run: cargo clippy -p fiftyone-caching --all-targets --target wasm32-wasip1 -- -D warnings
 
       - name: cargo test (wasm32-wasip1, executed under wasmtime)
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
-        run: cargo test -p fiftyone-loading-cache --target wasm32-wasip1
+        run: cargo test -p fiftyone-caching --target wasm32-wasip1
 
   unknown:
-    name: loading cache (wasm32-unknown-unknown)
+    name: caching (wasm32-unknown-unknown)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout workspace
@@ -82,17 +86,17 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          key: loading-cache-wasm32-unknown-unknown
+          key: caching-wasm32-unknown-unknown
 
       - name: Install Node (the wasm test runner)
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: cargo clippy (wasm32-unknown-unknown)
-        run: cargo clippy -p fiftyone-loading-cache --all-targets --target wasm32-unknown-unknown -- -D warnings
+      - name: cargo clippy (wasm32-unknown-unknown, default features off)
+        run: cargo clippy -p fiftyone-caching --no-default-features --all-targets --target wasm32-unknown-unknown -- -D warnings
 
-      - name: cargo test (wasm32-unknown-unknown, executed under Node)
+      - name: cargo test (wasm32-unknown-unknown, default features off, executed under Node)
         env:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: node ${{ github.workspace }}/ci/run-wasm-unknown.mjs
-        run: cargo test -p fiftyone-loading-cache --target wasm32-unknown-unknown --tests
+        run: cargo test -p fiftyone-caching --no-default-features --target wasm32-unknown-unknown --tests

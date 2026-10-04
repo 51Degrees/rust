@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, SystemTime};
 
-use fiftyone_loading_cache::{Clock, Entry, Loaded, Loader, Lookup, MemoryStore, Store};
+use fiftyone_caching::{Clock, Entry, Loaded, Lookup, LruStore, Store, ValueLoader};
 
 /// A clock that moves only when the test moves it.
 #[derive(Clone)]
@@ -73,10 +73,10 @@ pub fn secs(secs: u64) -> Duration {
 
 /// A store in memory on the test clock, with one shard so eviction order
 /// is exact.
-pub fn memory(clock: &TestClock, capacity: usize) -> MemoryStore<u32, String> {
-    MemoryStore::builder()
-        .capacity(capacity)
-        .shards(1)
+pub fn lru(clock: &TestClock, size: usize) -> LruStore<u32, String> {
+    LruStore::builder()
+        .size(size)
+        .concurrency(1)
         .clock(clock.shared())
         .build()
 }
@@ -211,7 +211,7 @@ impl Source {
     }
 }
 
-impl Loader<u32, String> for Source {
+impl ValueLoader<u32, String> for Source {
     type Error = String;
 
     async fn load(&self, key: &u32) -> Result<Loaded<String>, String> {
@@ -244,7 +244,7 @@ impl<L> Counted<L> {
     }
 }
 
-impl<L: Loader<u32, String>> Loader<u32, String> for Counted<L> {
+impl<L: ValueLoader<u32, String>> ValueLoader<u32, String> for Counted<L> {
     type Error = L::Error;
 
     async fn load(&self, key: &u32) -> Result<Loaded<String>, L::Error> {
@@ -330,7 +330,7 @@ impl Store<u32, String> for KeepsEverything {
 /// reservation. Later callers wait until it is filled, and then get the
 /// entry, or dropped, and then get a miss.
 pub struct WaitingStore {
-    inner: MemoryStore<u32, String>,
+    inner: LruStore<u32, String>,
     loads_in_progress: Arc<Mutex<HashMap<u32, Arc<Pending>>>>,
     waited: AtomicUsize,
 }
@@ -372,7 +372,7 @@ impl Drop for Reservation {
 impl WaitingStore {
     pub fn new(clock: &TestClock) -> Self {
         WaitingStore {
-            inner: memory(clock, 1000),
+            inner: lru(clock, 1000),
             loads_in_progress: Arc::default(),
             waited: AtomicUsize::new(0),
         }

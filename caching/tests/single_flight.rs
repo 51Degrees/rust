@@ -21,14 +21,14 @@
  * ********************************************************************* */
 
 //! One load per key at a time, with many requests interleaved on one
-//! thread. Every check runs once over the memory store and once over a
+//! thread. Every check runs once over the LruStore and once over a
 //! store that makes callers wait, so the one cache is shown to work with
 //! both kinds of store.
 
 mod common;
 
 use common::*;
-use fiftyone_loading_cache::{LoadingCache, Store};
+use fiftyone_caching::{LoadingCache, Store};
 
 const CALLERS: usize = 8;
 
@@ -140,8 +140,8 @@ fn a_stored_value_is_not_loaded_again<S: Store<u32, String>>(make: fn(&TestClock
     assert_eq!(source.loads(), 1);
 }
 
-fn memory_store(clock: &TestClock) -> fiftyone_loading_cache::MemoryStore<u32, String> {
-    memory(clock, 100)
+fn lru_store(clock: &TestClock) -> fiftyone_caching::LruStore<u32, String> {
+    lru(clock, 100)
 }
 
 /// Generates one test per store for a check.
@@ -151,8 +151,8 @@ macro_rules! for_each_store {
             use super::*;
 
             #[test]
-            fn memory_store() {
-                $check(super::memory_store);
+            fn lru_store() {
+                $check(super::lru_store);
             }
 
             #[test]

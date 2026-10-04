@@ -28,23 +28,24 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use crate::clock::{self, Clock};
-use crate::entry::{earliest, Entry, Loaded};
-use crate::flight::{Flights, Lead, Outcome, Role};
-use crate::loader::Loader;
-use crate::shards;
-use crate::store::{Lookup, Store};
+use super::clock::{self, Clock};
+use super::entry::{earliest, Entry, Loaded};
+use super::flight::{Flights, Lead, Outcome, Role};
+use super::loader::ValueLoader;
+use super::lru_store::LruStore;
+use super::store::{Lookup, Store};
+use crate::config::default_concurrency;
 
 /// A cache that loads a missing value once, however many callers ask for it
 /// at the same time.
 ///
 /// The first caller for a key that is not in the [`Store`] runs the
-/// [`Loader`]. Every caller that asks for the key meanwhile waits for that
+/// [`ValueLoader`]. Every caller that asks for the key meanwhile waits for that
 /// load, and all of them get its value or its error. A failed load is not
 /// stored, so the next caller loads again. If the caller running the load is
 /// dropped, a waiting caller takes over.
 ///
-/// A `LoadingCache` is itself a [`Loader`], so a cache over a small store in
+/// A `LoadingCache` is itself a [`ValueLoader`], so a cache over a small store in
 /// memory can load from a cache over a shared store, which loads from the
 /// source. Each cache has its own lifetimes, and a cache never keeps a copy
 /// longer than the copy it loaded it from.
@@ -53,12 +54,12 @@ use crate::store::{Lookup, Store};
 ///
 /// ```
 /// use std::time::Duration;
-/// use fiftyone_loading_cache::{from_fn, LoadingCache, MemoryStore};
+/// use fiftyone_caching::{from_fn, LoadingCache, LruStore};
 ///
-/// // The shared store would be a platform's key-value store. A memory store
-/// // stands in for it here.
+/// // The shared store would be a platform's key-value store. A store in
+/// // memory stands in for it here.
 /// let shared = LoadingCache::builder(
-///     MemoryStore::builder().capacity(10_000).build(),
+///     LruStore::builder().size(10_000).build(),
 ///     from_fn(|url: String| async move { Ok::<_, String>(format!("page {url}")) }),
 /// )
 /// .time_to_live(Duration::from_secs(24 * 60 * 60))
@@ -66,14 +67,14 @@ use crate::store::{Lookup, Store};
 /// .build();
 ///
 /// // A brief copy in process memory, loading from the shared cache.
-/// let cache = LoadingCache::builder(MemoryStore::builder().capacity(1000).build(), shared)
+/// let cache = LoadingCache::builder(LruStore::builder().size(1000).build(), shared)
 ///     .time_to_live(Duration::from_secs(5))
 ///     .build();
 /// # let _ = &cache;
 /// ```
 pub struct LoadingCache<K, V, S, L>
 where
-    L: Loader<K, V>,
+    L: ValueLoader<K, V>,
 {
     store: S,
     loader: L,
@@ -87,7 +88,7 @@ where
     K: Hash + Eq + Clone,
     V: Clone,
     S: Store<K, V>,
-    L: Loader<K, V>,
+    L: ValueLoader<K, V>,
 {
     /// Starts building a cache that keeps its entries in `store` and loads
     /// missing values with `loader`.
@@ -99,7 +100,7 @@ where
             time_to_idle: None,
             renewal_window: None,
             clock: None,
-            shards: shards::default_count(),
+            concurrency: default_concurrency(),
             types: PhantomData,
         }
     }
@@ -196,17 +197,40 @@ where
     }
 }
 
-impl<K, V, S, L> Loader<K, V> for LoadingCache<K, V, S, L>
+impl<K, V, S, L> ValueLoader<K, V> for LoadingCache<K, V, S, L>
 where
     K: Hash + Eq + Clone,
     V: Clone,
     S: Store<K, V>,
-    L: Loader<K, V>,
+    L: ValueLoader<K, V>,
 {
     type Error = L::Error;
 
     fn load(&self, key: &K) -> impl Future<Output = Result<Loaded<V>, Self::Error>> {
         self.get_loaded(key)
+    }
+}
+
+/// A [`LoadingCache`] over the least recently used cache in process memory,
+/// as `LruLoadingCache` in the .NET and Java pipelines.
+pub type LruLoadingCache<K, V, L> = LoadingCache<K, V, LruStore<K, V>, L>;
+
+impl<K, V, L> LoadingCache<K, V, LruStore<K, V>, L>
+where
+    K: Hash + Eq + Clone + Send + Sync,
+    V: Clone + Send + Sync,
+    L: ValueLoader<K, V>,
+{
+    /// A cache of up to `size` values in process memory, the least recently
+    /// used evicted first, loading missing values with `loader`. The values
+    /// have no lifetime, and the clock is the system clock. Use
+    /// [`LoadingCache::builder`] with an [`LruStore`] for more settings.
+    ///
+    /// # Panics
+    ///
+    /// On `wasm32-unknown-unknown`, which has no system clock.
+    pub fn new(size: usize, loader: L) -> Self {
+        LoadingCache::builder(LruStore::builder().size(size).build(), loader).build()
     }
 }
 
@@ -218,7 +242,7 @@ pub struct LoadingCacheBuilder<K, V, S, L> {
     time_to_idle: Option<Duration>,
     renewal_window: Option<Duration>,
     clock: Option<Arc<dyn Clock>>,
-    shards: usize,
+    concurrency: usize,
     types: PhantomData<fn(K) -> V>,
 }
 
@@ -227,7 +251,7 @@ where
     K: Hash + Eq + Clone,
     V: Clone,
     S: Store<K, V>,
-    L: Loader<K, V>,
+    L: ValueLoader<K, V>,
 {
     /// How long a copy is used, from when this cache writes it. Without one
     /// a copy lasts as long as the value it was loaded with allows, which
@@ -262,11 +286,11 @@ where
         self
     }
 
-    /// How many parts the record of loads in progress is split into, so
+    /// How many shards the record of loads in progress is split into, so
     /// callers loading different keys rarely wait for the same lock.
     /// Defaults to the number of processors.
-    pub fn shards(mut self, shards: usize) -> Self {
-        self.shards = shards;
+    pub fn concurrency(mut self, concurrency: usize) -> Self {
+        self.concurrency = concurrency;
         self
     }
 
@@ -297,7 +321,7 @@ where
                 renewal_window,
             },
             clock: clock::given_or_system(self.clock),
-            flights: Flights::new(self.shards),
+            flights: Flights::new(self.concurrency),
         }
     }
 }

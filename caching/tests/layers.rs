@@ -30,9 +30,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use common::*;
-use fiftyone_loading_cache::{Entry, LoadingCache, Lookup, MemoryStore, Store};
+use fiftyone_caching::{Entry, LoadingCache, Lookup, LruStore, Store};
 
-type Memory = Arc<MemoryStore<u32, String>>;
+type Memory = Arc<LruStore<u32, String>>;
 type Shared = LoadingCache<u32, String, Memory, Source>;
 
 /// A cache over the shared store, loading from the source.
@@ -56,9 +56,9 @@ fn entry_in(store: &Memory, key: u32) -> Option<Entry<String>> {
 fn memory_over_store_over_source_loads_once_for_concurrent_misses() {
     let clock = TestClock::new();
     let source = Source::gated();
-    let shared_store = Arc::new(memory(&clock, 1000));
+    let shared_store = Arc::new(lru(&clock, 1000));
     let (below, calls_below) = Counted::new(shared(&clock, &shared_store, &source));
-    let memory_store = Arc::new(memory(&clock, 100));
+    let memory_store = Arc::new(lru(&clock, 100));
     let cache = LoadingCache::builder(Arc::clone(&memory_store), below)
         .time_to_live(secs(5))
         .clock(clock.shared())
@@ -84,15 +84,15 @@ fn memory_over_store_over_source_loads_once_for_concurrent_misses() {
 fn memory_over_memory_over_store_loads_once_and_fills_every_layer() {
     let clock = TestClock::new();
     let source = Source::gated();
-    let shared_store = Arc::new(memory(&clock, 1000));
+    let shared_store = Arc::new(lru(&clock, 1000));
     let (to_shared, calls_to_shared) = Counted::new(shared(&clock, &shared_store, &source));
-    let middle_store = Arc::new(memory(&clock, 500));
+    let middle_store = Arc::new(lru(&clock, 500));
     let middle = LoadingCache::builder(Arc::clone(&middle_store), to_shared)
         .time_to_live(secs(60))
         .clock(clock.shared())
         .build();
     let (to_middle, calls_to_middle) = Counted::new(middle);
-    let top_store = Arc::new(memory(&clock, 100));
+    let top_store = Arc::new(lru(&clock, 100));
     let top = LoadingCache::builder(Arc::clone(&top_store), to_middle)
         .time_to_live(secs(5))
         .clock(clock.shared())
@@ -126,13 +126,13 @@ fn memory_over_memory_over_store_loads_once_and_fills_every_layer() {
 fn a_hit_below_fills_the_layer_above_with_the_original_write_time() {
     let clock = TestClock::new();
     let source = Source::new();
-    let shared_store = Arc::new(memory(&clock, 1000));
+    let shared_store = Arc::new(lru(&clock, 1000));
     let below = Arc::new(shared(&clock, &shared_store, &source));
     let written = clock.now();
     block_on(below.get(&1)).unwrap();
 
     clock.advance_secs(100);
-    let memory_store = Arc::new(memory(&clock, 100));
+    let memory_store = Arc::new(lru(&clock, 100));
     let cache = LoadingCache::builder(Arc::clone(&memory_store), Arc::clone(&below))
         .time_to_live(secs(5))
         .clock(clock.shared())
@@ -150,11 +150,11 @@ fn a_hit_below_fills_the_layer_above_with_the_original_write_time() {
 fn a_copy_never_outlives_the_copy_below() {
     let clock = TestClock::new();
     let source = Source::new();
-    let below = LoadingCache::builder(memory(&clock, 1000), source.clone())
+    let below = LoadingCache::builder(lru(&clock, 1000), source.clone())
         .time_to_live(secs(10))
         .clock(clock.shared())
         .build();
-    let memory_store = Arc::new(memory(&clock, 100));
+    let memory_store = Arc::new(lru(&clock, 100));
     let cache = LoadingCache::builder(Arc::clone(&memory_store), below)
         .time_to_live(secs(60))
         .clock(clock.shared())
@@ -172,12 +172,12 @@ fn a_copy_never_outlives_the_copy_below() {
 fn a_copy_comes_back_below_before_the_copy_below_needs_renewing() {
     let clock = TestClock::new();
     let source = Source::new();
-    let below = LoadingCache::builder(memory(&clock, 1000), source.clone())
+    let below = LoadingCache::builder(lru(&clock, 1000), source.clone())
         .time_to_idle(secs(60))
         .renewal_window(secs(15))
         .clock(clock.shared())
         .build();
-    let memory_store = Arc::new(memory(&clock, 100));
+    let memory_store = Arc::new(lru(&clock, 100));
     // No lifetime of its own, so only the copy below limits it.
     let cache = LoadingCache::builder(Arc::clone(&memory_store), below)
         .clock(clock.shared())
@@ -200,8 +200,8 @@ fn a_copy_comes_back_below_before_the_copy_below_needs_renewing() {
 fn a_busy_key_keeps_its_shared_copy_and_an_idle_one_loses_it() {
     let clock = TestClock::new();
     let source = Source::new();
-    let shared_store = Arc::new(memory(&clock, 1000));
-    let cache = LoadingCache::builder(memory(&clock, 100), shared(&clock, &shared_store, &source))
+    let shared_store = Arc::new(lru(&clock, 1000));
+    let cache = LoadingCache::builder(lru(&clock, 100), shared(&clock, &shared_store, &source))
         .time_to_live(secs(5))
         .clock(clock.shared())
         .build();
@@ -224,8 +224,8 @@ fn a_busy_key_keeps_its_shared_copy_and_an_idle_one_loses_it() {
 fn a_changed_store_value_shows_once_the_memory_copy_expires() {
     let clock = TestClock::new();
     let source = Source::new();
-    let shared_store = Arc::new(memory(&clock, 1000));
-    let cache = LoadingCache::builder(memory(&clock, 100), shared(&clock, &shared_store, &source))
+    let shared_store = Arc::new(lru(&clock, 1000));
+    let cache = LoadingCache::builder(lru(&clock, 100), shared(&clock, &shared_store, &source))
         .time_to_live(secs(5))
         .clock(clock.shared())
         .build();
@@ -251,8 +251,8 @@ fn a_changed_store_value_shows_once_the_memory_copy_expires() {
 fn a_removed_store_value_is_reloaded_once_the_memory_copy_expires() {
     let clock = TestClock::new();
     let source = Source::new();
-    let shared_store = Arc::new(memory(&clock, 1000));
-    let cache = LoadingCache::builder(memory(&clock, 100), shared(&clock, &shared_store, &source))
+    let shared_store = Arc::new(lru(&clock, 1000));
+    let cache = LoadingCache::builder(lru(&clock, 100), shared(&clock, &shared_store, &source))
         .time_to_live(secs(5))
         .clock(clock.shared())
         .build();
@@ -271,8 +271,8 @@ fn a_failure_below_reaches_every_caller_above_and_is_not_kept() {
     let clock = TestClock::new();
     let source = Source::gated();
     source.fail(true);
-    let shared_store = Arc::new(memory(&clock, 1000));
-    let memory_store = Arc::new(memory(&clock, 100));
+    let shared_store = Arc::new(lru(&clock, 1000));
+    let memory_store = Arc::new(lru(&clock, 100));
     let cache = LoadingCache::builder(
         Arc::clone(&memory_store),
         shared(&clock, &shared_store, &source),

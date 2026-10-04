@@ -42,18 +42,10 @@ impl<T> Shards<T> {
         }
     }
 
-    pub(crate) fn count(&self) -> usize {
-        self.shards.len()
-    }
-
     /// The shard that holds `key`.
     pub(crate) fn for_key<K: Hash + ?Sized>(&self, key: &K) -> &Mutex<T> {
         let index = self.hasher.hash_one(key) as usize % self.shards.len();
         &self.shards[index]
-    }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &Mutex<T>> {
-        self.shards.iter()
     }
 }
 
@@ -61,12 +53,4 @@ impl<T> Shards<T> {
 /// here is left consistent between statements, so its state is safe to use.
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// One shard per available processor, or one where the count cannot be
-/// read, as on WebAssembly.
-pub(crate) fn default_count() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
 }

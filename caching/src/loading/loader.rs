@@ -25,13 +25,13 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::entry::Loaded;
+use super::entry::Loaded;
 
 /// Produces the value for a key that a cache does not hold.
 ///
 /// The source of the values is a loader, and so is every
 /// [`crate::LoadingCache`], which is how caches stack.
-pub trait Loader<K, V> {
+pub trait ValueLoader<K, V> {
     /// The error a failed load returns. It is cloned to every caller waiting
     /// on the load, so wrap an error that cannot be cloned in an
     /// [`Arc`].
@@ -42,7 +42,7 @@ pub trait Loader<K, V> {
 }
 
 /// A shared loader, so several caches can load through one cache.
-impl<K, V, L: Loader<K, V>> Loader<K, V> for Arc<L> {
+impl<K, V, L: ValueLoader<K, V>> ValueLoader<K, V> for Arc<L> {
     type Error = L::Error;
 
     fn load(&self, key: &K) -> impl Future<Output = Result<Loaded<V>, Self::Error>> {
@@ -50,15 +50,15 @@ impl<K, V, L: Loader<K, V>> Loader<K, V> for Arc<L> {
     }
 }
 
-/// A [`Loader`] made from a function, see [`from_fn`].
+/// A [`ValueLoader`] made from a function, see [`from_fn`].
 #[derive(Debug, Clone, Copy)]
 pub struct FnLoader<F>(F);
 
-/// Makes a [`Loader`] from a function that takes the key and returns a
+/// Makes a [`ValueLoader`] from a function that takes the key and returns a
 /// future of the value, or of a [`Loaded`] when it knows the value's expiry.
 ///
 /// ```
-/// use fiftyone_loading_cache::from_fn;
+/// use fiftyone_caching::from_fn;
 ///
 /// let loader = from_fn(|key: String| async move {
 ///     Ok::<_, String>(format!("value for {key}"))
@@ -69,7 +69,7 @@ pub fn from_fn<F>(load: F) -> FnLoader<F> {
     FnLoader(load)
 }
 
-impl<K, V, E, T, F, Fut> Loader<K, V> for FnLoader<F>
+impl<K, V, E, T, F, Fut> ValueLoader<K, V> for FnLoader<F>
 where
     K: Clone,
     E: Clone,

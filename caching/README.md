@@ -4,6 +4,21 @@
 
 Sharded-Least Recently Used (LRU) cache trait and default implementation for the 51Degrees pipeline.
 
+It also holds the loading cache, which loads a missing value once however
+many callers ask for it at the same time. The first caller for a key runs the
+load, every caller that arrives meanwhile waits for the same result, and a
+failed load reaches every waiting caller without being stored. The loading
+cache keeps its entries in a pluggable store, from the least recently used
+cache in process memory to a platform's key-value store, and caches stack by
+using one as the loader of another. The names follow the caching packages of
+the other languages, being `LoadingCache`, `LruLoadingCache`,
+`LoadingCacheBuilder` and `ValueLoader`.
+
+The crate builds for native targets and `wasm32-wasip1`, and for
+`wasm32-unknown-unknown` with default features off. The `pipeline` feature,
+on by default, brings `DataKeyedCache` and the dependency on
+`fiftyone-pipeline-core` it needs.
+
 This crate is part of the [51Degrees](https://51degrees.com/?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fiftyone-caching-readme.md&utm_term=introduction) Rust solution for high-performance
 device detection and IP intelligence, available both on-premise from a local
 data file and from the 51Degrees cloud.

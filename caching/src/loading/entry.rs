@@ -38,7 +38,7 @@ pub struct Entry<V> {
     pub renewed: SystemTime,
 }
 
-/// A value as a [`crate::Loader`] returns it.
+/// A value as a [`crate::ValueLoader`] returns it.
 ///
 /// A source usually returns just the value, through `From<V>`. A cache
 /// acting as the loader of another cache returns the value with the time it

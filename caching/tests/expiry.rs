@@ -29,13 +29,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use common::*;
-use fiftyone_loading_cache::{from_fn, Entry, Loaded, LoadingCache, Lookup, Store};
+use fiftyone_caching::{from_fn, Entry, Loaded, LoadingCache, Lookup, Store};
 
 #[test]
 fn time_to_live_reloads_once_it_passes() {
     let clock = TestClock::new();
     let source = Source::new();
-    let cache = LoadingCache::builder(memory(&clock, 100), source.clone())
+    let cache = LoadingCache::builder(lru(&clock, 100), source.clone())
         .time_to_live(secs(60))
         .clock(clock.shared())
         .build();
@@ -51,7 +51,7 @@ fn time_to_live_reloads_once_it_passes() {
 fn time_to_idle_keeps_a_used_entry_and_drops_an_unused_one() {
     let clock = TestClock::new();
     let source = Source::new();
-    let cache = LoadingCache::builder(memory(&clock, 100), source.clone())
+    let cache = LoadingCache::builder(lru(&clock, 100), source.clone())
         .time_to_idle(secs(60))
         .renewal_window(secs(15))
         .clock(clock.shared())
@@ -71,7 +71,7 @@ fn time_to_idle_keeps_a_used_entry_and_drops_an_unused_one() {
 #[test]
 fn a_used_entry_is_renewed_at_most_once_per_window() {
     let clock = TestClock::new();
-    let store = Arc::new(Recorded::new(memory(&clock, 100)));
+    let store = Arc::new(Recorded::new(lru(&clock, 100)));
     let cache = LoadingCache::builder(Arc::clone(&store), Source::new())
         .time_to_idle(secs(60))
         .renewal_window(secs(15))
@@ -97,7 +97,7 @@ fn a_used_entry_is_renewed_at_most_once_per_window() {
 fn renewal_never_takes_an_entry_past_its_time_to_live() {
     let clock = TestClock::new();
     let source = Source::new();
-    let store = Arc::new(Recorded::new(memory(&clock, 100)));
+    let store = Arc::new(Recorded::new(lru(&clock, 100)));
     let cache = LoadingCache::builder(Arc::clone(&store), source.clone())
         .time_to_live(secs(100))
         .time_to_idle(secs(60))
@@ -128,7 +128,7 @@ fn renewal_never_takes_an_entry_past_its_time_to_live() {
 #[test]
 fn an_unused_entry_leaves_the_store_by_itself() {
     let clock = TestClock::new();
-    let store = Arc::new(memory(&clock, 100));
+    let store = Arc::new(lru(&clock, 100));
     let cache = LoadingCache::builder(Arc::clone(&store), Source::new())
         .time_to_idle(secs(60))
         .clock(clock.shared())
@@ -145,9 +145,9 @@ fn an_unused_entry_leaves_the_store_by_itself() {
 }
 
 #[test]
-fn the_memory_store_evicts_the_least_recently_used_entry() {
+fn the_lru_store_evicts_the_least_recently_used_entry() {
     let clock = TestClock::new();
-    let store = memory(&clock, 2);
+    let store = lru(&clock, 2);
     let entry = |value: &str| Entry {
         value: value.to_owned(),
         written: clock.now(),
@@ -171,7 +171,7 @@ fn the_memory_store_evicts_the_least_recently_used_entry() {
 fn a_full_cache_reloads_the_least_recently_used_key() {
     let clock = TestClock::new();
     let source = Source::new();
-    let cache = LoadingCache::builder(memory(&clock, 2), source.clone())
+    let cache = LoadingCache::builder(lru(&clock, 2), source.clone())
         .clock(clock.shared())
         .build();
 
@@ -198,7 +198,7 @@ fn a_loaded_expiry_shortens_the_copy() {
             }
         })
     };
-    let cache = LoadingCache::builder(memory(&clock, 100), source)
+    let cache = LoadingCache::builder(lru(&clock, 100), source)
         .time_to_live(secs(60))
         .clock(clock.shared())
         .build();
@@ -223,7 +223,7 @@ fn a_value_already_past_its_end_is_returned_but_not_stored() {
             async move { Ok::<_, String>(Loaded::new(key.to_string()).expires_at(expired)) }
         })
     };
-    let store = Arc::new(memory(&clock, 100));
+    let store = Arc::new(lru(&clock, 100));
     let cache = LoadingCache::builder(Arc::clone(&store), source)
         .clock(clock.shared())
         .build();
@@ -252,7 +252,7 @@ fn a_store_that_never_drops_entries_still_serves_nothing_stale() {
 fn remove_takes_a_key_out_of_the_store() {
     let clock = TestClock::new();
     let source = Source::new();
-    let cache = LoadingCache::builder(memory(&clock, 100), source.clone())
+    let cache = LoadingCache::builder(lru(&clock, 100), source.clone())
         .clock(clock.shared())
         .build();
 
@@ -265,7 +265,7 @@ fn remove_takes_a_key_out_of_the_store() {
 #[should_panic(expected = "renewal window")]
 fn a_renewal_window_over_half_the_idle_time_is_refused() {
     let clock = TestClock::new();
-    let _ = LoadingCache::builder(memory(&clock, 100), Source::new())
+    let _ = LoadingCache::builder(lru(&clock, 100), Source::new())
         .time_to_idle(secs(60))
         .renewal_window(secs(31))
         .clock(clock.shared())

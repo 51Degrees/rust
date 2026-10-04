@@ -37,7 +37,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
-use crate::shards::{lock, Shards};
+use super::shards::{lock, Shards};
 
 type Slots<K, T> = HashMap<K, Arc<Slot<T>>>;
 

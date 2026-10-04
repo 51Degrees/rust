@@ -24,11 +24,17 @@
 //!
 //! # 51Degrees caching
 //!
-//! A sharded least-recently-used cache for the 51Degrees pipeline. It
-//! implements the custom cache described in the
-//! [caching specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/features/caching.md)
-//! and exists chiefly to speed up the cloud request engine when many requests
-//! share the same evidence.
+//! The caches of the 51Degrees pipeline and of services built with it, as in
+//! the caching packages of the other languages.
+//!
+//! - A sharded least-recently-used cache. It implements the custom cache
+//!   described in the
+//!   [caching specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/features/caching.md)
+//!   and exists chiefly to speed up the cloud request engine when many
+//!   requests share the same evidence.
+//! - A [loading cache](#loading-cache) that loads a missing value once,
+//!   however many callers ask for it at the same time, over a store in
+//!   memory or a platform's key-value store.
 //!
 //! ## Why sharded
 //!
@@ -57,6 +63,107 @@
 //!   case-insensitive key from the relevant evidence, so equivalent requests
 //!   share an entry. It comes with the `pipeline` feature, on by default.
 //!
+//! ## Loading cache
+//!
+//! [`LoadingCache`] loads a missing value once, however many callers ask for
+//! it at the same time. The first caller for a key runs the load, every caller
+//! that arrives while it runs waits for the same result, and all of them
+//! continue when it completes. A failed load reaches every waiting caller and
+//! is not stored, so the next caller loads again. It needs no async runtime,
+//! spawns nothing and starts no threads.
+//!
+//! - [`LoadingCache`] does all the work. It is generic over a [`Store`] and a
+//!   [`ValueLoader`]. [`LruLoadingCache`] is the form over [`LruStore`], the
+//!   least recently used cache in process memory, as `LruLoadingCache` in the
+//!   .NET and Java pipelines.
+//! - A [`Store`] keeps entries. [`LruStore`] keeps them in process memory. A
+//!   store over a platform's key-value store or cache is written against the
+//!   same trait.
+//! - A [`ValueLoader`] produces a value the store does not hold. The source is
+//!   a loader, [`from_fn`] makes one from a function, and every
+//!   [`LoadingCache`] is one.
+//! - A [`Clock`] gives the time. The system clock is the default, except on
+//!   `wasm32-unknown-unknown`, which has none, so a host there supplies one.
+//!
+//! ### Layers
+//!
+//! Caches stack by using one as the loader of another. A brief copy in
+//! process memory, over a shared key-value store, over the source:
+//!
+//! ```text
+//! LoadingCache(LruStore, time to live 5 s)
+//!   loads from LoadingCache(key-value store, time to live 1 day, idle 1 hour)
+//!     loads from the source
+//! ```
+//!
+//! A read looks in memory first. On a miss it asks the cache below, which
+//! looks in the key-value store, and only a miss there reaches the source.
+//! Each cache collapses its own concurrent misses, so many callers missing
+//! in memory make one call to the cache below, and many processes missing
+//! in a store that can make callers wait make one call to the source. A
+//! value changed or removed in the shared store is seen once the memory
+//! copy's short life ends.
+//!
+//! A value carries the time it was written and the time it stops being
+//! usable, and a cache never keeps a copy longer than the copy it loaded
+//! from, so no copy in a stack outlives the copy below it.
+//!
+//! ### What a store does and what the cache does
+//!
+//! A store keeps each entry for the time the cache tells it when writing,
+//! and may drop entries sooner to make room. A store may also make callers
+//! in other processes wait for one load, by answering
+//! [`Lookup::Reserved`].
+//!
+//! The cache does the rest.
+//!
+//! - It allows one load per key at a time in its process.
+//! - It decides each copy's lifetime from its time to live, its time to
+//!   idle and the copy it was loaded from.
+//! - It renews a used copy at most once per renewal window, so a copy left
+//!   unused for the idle time leaves the store.
+//! - It checks every entry it reads is still fresh, so a store that drops
+//!   entries late, or never, still gives correct results.
+//!
+//! ### Example
+//!
+//! ```
+//! use std::time::Duration;
+//! use fiftyone_caching::{Loaded, LoadingCache, LruLoadingCache, LruStore, ValueLoader};
+//!
+//! /// Fetches a page from the origin.
+//! struct Origin;
+//!
+//! impl ValueLoader<String, String> for Origin {
+//!     type Error = String;
+//!
+//!     async fn load(&self, url: &String) -> Result<Loaded<String>, String> {
+//!         Ok(Loaded::new(format!("page at {url}")))
+//!     }
+//! }
+//!
+//! /// The shared copies. A store in memory stands in for a platform store.
+//! type Shared = LruLoadingCache<String, String, Origin>;
+//!
+//! /// A brief copy in memory over the shared copies.
+//! type Pages = LruLoadingCache<String, String, Shared>;
+//!
+//! fn pages() -> Pages {
+//!     let shared = LoadingCache::builder(LruStore::builder().build(), Origin)
+//!         .time_to_live(Duration::from_secs(24 * 60 * 60))
+//!         .time_to_idle(Duration::from_secs(60 * 60))
+//!         .build();
+//!     LoadingCache::builder(LruStore::builder().size(100).build(), shared)
+//!         .time_to_live(Duration::from_secs(5))
+//!         .build()
+//! }
+//!
+//! async fn page(pages: &Pages, url: &String) -> Result<String, String> {
+//!     pages.get(url).await
+//! }
+//! # let _ = (pages(), page);
+//! ```
+//!
 //! ## WebAssembly
 //!
 //! The crate builds for `wasm32-wasip1`, and for `wasm32-unknown-unknown` with
@@ -82,10 +189,17 @@ mod cache;
 mod config;
 #[cfg(feature = "pipeline")]
 mod data_keyed;
+mod loading;
 mod lru;
 
 pub use cache::{Cache, PutCache};
 pub use config::{default_concurrency, CacheBuilder, DEFAULT_SIZE};
 #[cfg(feature = "pipeline")]
 pub use data_keyed::DataKeyedCache;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub use loading::SystemClock;
+pub use loading::{
+    from_fn, Clock, Entry, FnLoader, Loaded, LoadingCache, LoadingCacheBuilder, Lookup,
+    LruLoadingCache, LruStore, LruStoreBuilder, Store, ValueLoader,
+};
 pub use lru::LruCache;

@@ -1,7 +1,7 @@
 [package]
 name = "fiftyone-caching"
 version = "4.5.2"
-description = "Sharded-LRU cache trait and default implementation for the 51Degrees pipeline."
+description = "Sharded LRU cache and loading cache for the 51Degrees pipeline and services built with it, for native and WebAssembly hosts."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

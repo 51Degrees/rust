@@ -26,7 +26,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::entry::Entry;
+use super::entry::Entry;
 
 /// What a [`Store`] found for a key.
 #[derive(Debug)]

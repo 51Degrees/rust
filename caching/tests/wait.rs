@@ -29,7 +29,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use fiftyone_loading_cache::{LoadingCache, Store};
+use fiftyone_caching::{LoadingCache, Store};
 
 /// A cache standing for one process, over the store all processes share.
 fn process<S: Store<u32, String>>(
@@ -122,7 +122,7 @@ fn a_cancelled_reserved_load_releases_the_waiting_process() {
 fn a_store_that_cannot_wait_still_works() {
     let clock = TestClock::new();
     let source = Source::gated();
-    let store = Arc::new(memory(&clock, 100));
+    let store = Arc::new(lru(&clock, 100));
     let first = process(&store, &source, &clock);
     let second = process(&store, &source, &clock);
 

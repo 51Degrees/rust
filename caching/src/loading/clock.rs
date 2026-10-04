@@ -25,7 +25,7 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-/// Tells a cache and a [`crate::MemoryStore`] the current time.
+/// Tells a cache and an [`LruStore`](crate::LruStore) the current time.
 ///
 /// Every time the crate uses comes from a clock, so a host whose platform
 /// has no system clock supplies one, and tests move time on without

@@ -13,8 +13,8 @@ workspace of runnable examples.
 - **Library workspace** (repository root): the pipeline core and engines,
   Device Detection and IP Intelligence (cloud and on-premise), the cloud
   request engine, the JSON and JavaScript builders, the axum web integration,
-  the `fodid` 51Did reader, and the general loading cache. Each concern is
-  its own crate so a consumer depends only on what it uses.
+  and the `fodid` 51Did reader. Each concern is its own crate so a consumer
+  depends only on what it uses.
 - **Example workspace** (`examples/`): excluded from the root workspace
   (`exclude = ["examples"]`). It depends on the **published** crates from
   crates.io by default, so a fresh checkout of `examples/` builds the way a
@@ -105,9 +105,10 @@ manifest's `include`, so `cargo publish` packages it.
 - `pull-request.yml` — fmt, build, test, clippy and doc on Windows, Linux
   (two LTS) and macOS (Intel and Apple Silicon), plus a wasm32-wasip1 job for
   the cloud crates. Runs on pushes to `main` and PRs targeting `main`.
-- `loading-cache-wasm.yml` builds, lints and tests the loading cache on
-  wasm32-wasip1 under wasmtime and on wasm32-unknown-unknown under Node,
-  through `ci/run-wasm-unknown.mjs`. Same triggers, and it reads no secrets.
+- `caching-wasm.yml` lints and tests `fiftyone-caching`, the loading cache
+  included, on wasm32-wasip1 under wasmtime and, with default features off,
+  on wasm32-unknown-unknown under Node through `ci/run-wasm-unknown.mjs`.
+  Same triggers, and it reads no secrets.
 - `examples.yml` — builds and tests `examples/` against local source
   (`source.toml`) before a release. Runs on every PR.
 - `publish.yml` — publishes on push to `main`, then a `verify-published` job
@@ -150,11 +151,12 @@ manifest's `include`, so `cargo publish` packages it.
   metadata URLs are allow-listed as untagged.
 - **Code style.** Wrap code and doc comments to about 80 columns (soft limit;
   do not break URLs or string literals to hit it). This keeps diffs reviewable.
-- **Loading cache.** `loading-cache` depends on no other crate in the
-  workspace, so services outside the pipeline can use it, and it must keep
-  building and running on wasm32-unknown-unknown, where the standard library
-  has no clock. Take every time from its `Clock`, never from `Instant` or
-  `SystemTime::now`.
+- **Caching on WebAssembly.** `fiftyone-caching` must keep building and
+  running on wasm32-unknown-unknown with default features off, where the
+  standard library has no clock and no randomness. Only its `pipeline`
+  feature may bring in another crate from this workspace, `ahash` takes a
+  build-time seed on wasm targets, and the loading cache takes every time
+  from its `Clock`, never from `Instant` or `SystemTime::now`.
 - **MSRV.** The workspace pins `rust-version = "1.94"` (the JavaScript builder's
   minifier toolchain needs a recent compiler).
 

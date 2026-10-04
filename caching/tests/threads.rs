@@ -36,7 +36,7 @@ use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 use common::*;
-use fiftyone_loading_cache::{from_fn, LoadingCache, MemoryStore};
+use fiftyone_caching::{from_fn, LoadingCache, LruStore};
 
 /// Wakes a parked thread, and records that it did.
 struct Unpark {
@@ -123,7 +123,7 @@ fn threads_share_one_load() {
         })
     };
     let cache = Arc::new(
-        LoadingCache::builder(memory(&clock, 100), source)
+        LoadingCache::builder(lru(&clock, 100), source)
             .clock(clock.shared())
             .build(),
     );
@@ -155,7 +155,7 @@ fn threads_share_a_failure() {
     let source = Source::gated();
     source.fail(true);
     let cache = Arc::new(
-        LoadingCache::builder(memory(&clock, 100), source.clone())
+        LoadingCache::builder(lru(&clock, 100), source.clone())
             .clock(clock.shared())
             .build(),
     );
@@ -193,7 +193,7 @@ fn the_cache_and_its_futures_can_cross_threads() {
     fn sync<T: Sync>(_: &T) {}
 
     let cache = LoadingCache::builder(
-        MemoryStore::<u32, String>::builder().build(),
+        LruStore::<u32, String>::builder().build(),
         from_fn(|key: u32| async move { Ok::<_, String>(key.to_string()) }),
     )
     .build();
