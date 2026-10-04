@@ -84,9 +84,9 @@
 //!   [`ValueLoader`]. [`LruLoadingCache`] is the form over [`LruStore`], the
 //!   least recently used cache in process memory, as `LruLoadingCache` in the
 //!   .NET and Java pipelines.
-//! - A [`Store`] keeps entries. [`LruStore`] keeps them in process memory. A
-//!   store over a platform's key-value store or cache is written against the
-//!   same trait.
+//! - A [`Store`] keeps entries. [`LruStore`] keeps them in process memory.
+//!   [`EncodedStore`] keeps them in a platform's key-value store or cache,
+//!   through a [`ByteStore`].
 //! - A [`ValueLoader`] produces a value the store does not hold. The source is
 //!   a loader, [`from_fn`] makes one from a function, and every
 //!   [`LoadingCache`] is one.
@@ -145,6 +145,26 @@
 //! - It checks every entry it reads is still fresh, so a store that drops
 //!   entries late, or never, still gives correct results.
 //!
+//! ### Platform stores
+//!
+//! A platform's key-value store or cache keeps bytes under string keys. It
+//! is a [`ByteStore`], and [`EncodedStore`] makes it a [`Store`] by writing
+//! each entry in one versioned format, described at [`encode_entry`], with
+//! the value turned into bytes by a [`Codec`]. The format holds the time the
+//! store must drop the entry, and [`EncodedStore`] checks it on every read,
+//! so a platform that deletes late, rounds lifetimes up or keeps none never
+//! returns an entry past its time.
+//!
+//! Each of these features adds a platform's stores, off by default, and
+//! pulls in that platform's SDK only on the target the platform runs.
+//!
+//! | Feature | Target | Adds |
+//! |---|---|---|
+//! | `fastly` | `wasm32-wasip1` | The `fastly` module, with stores over the KV store and the core cache |
+//! | `cloudflare` | `wasm32-unknown-unknown` | The `cloudflare` module, with stores over Workers KV and the Cache API, a spawner that keeps loads running with `wait_until`, and a clock |
+//! | `spin` | `wasm32-wasip2` | The `spin` module, with a store over Spin's key-value store |
+//! | `tokio` | Native | The `tokio` module, with a spawner over a tokio-util local pool |
+//!
 //! ### Example
 //!
 //! ```
@@ -186,9 +206,9 @@
 //!
 //! ## WebAssembly
 //!
-//! The crate builds for `wasm32-wasip1`, and for `wasm32-unknown-unknown` with
-//! default features off. The `pipeline` feature is the only part that needs
-//! `fiftyone-pipeline-core`. On WebAssembly `ahash` is seeded when the crate is
+//! The crate builds for `wasm32-wasip1` and `wasm32-wasip2`, and for
+//! `wasm32-unknown-unknown` with default features off. The `pipeline`
+//! feature is the only part that needs `fiftyone-pipeline-core`. On WebAssembly `ahash` is seeded when the crate is
 //! compiled rather than at run time, because `wasm32-unknown-unknown` has no
 //! source of randomness.
 //!
