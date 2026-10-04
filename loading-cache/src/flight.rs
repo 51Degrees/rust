@@ -135,12 +135,13 @@ impl<K: Hash + Eq, T> Drop for Lead<'_, K, T> {
             }
         }
         let mut state = lock(&self.slot.state);
-        if matches!(*state, State::Working(_)) {
-            if let State::Working(wakers) = mem::replace(&mut *state, State::Abandoned) {
-                drop(state);
-                wakers.into_iter().flatten().for_each(Waker::wake);
-            }
-        }
+        let State::Working(wakers) = &mut *state else {
+            return;
+        };
+        let wakers = mem::take(wakers);
+        *state = State::Abandoned;
+        drop(state);
+        wakers.into_iter().flatten().for_each(Waker::wake);
     }
 }
 

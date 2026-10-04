@@ -142,8 +142,10 @@ where
         key: &K,
         lead: Lead<'_, K, Result<Loaded<V>, L::Error>>,
     ) -> Result<Loaded<V>, L::Error> {
+        let found = self.store.get(key).await;
+        // Read after the lookup, which may have waited for another process.
         let now = self.clock.now();
-        let reservation = match self.store.get(key).await {
+        let reservation = match found {
             Lookup::Hit(entry) if self.lifetimes.is_fresh(&entry, now) => {
                 let renewed = self.lifetimes.renewal(&entry, now);
                 let served = self.lifetimes.served(renewed.as_ref().unwrap_or(&entry));
@@ -228,7 +230,8 @@ where
     L: Loader<K, V>,
 {
     /// How long a copy is used, from when this cache writes it. Without one
-    /// a copy lasts as long as the copy it was loaded from.
+    /// a copy lasts as long as the value it was loaded with allows, which
+    /// for a source that sets no expiry is until it is evicted.
     pub fn time_to_live(mut self, time_to_live: Duration) -> Self {
         self.time_to_live = Some(time_to_live);
         self
