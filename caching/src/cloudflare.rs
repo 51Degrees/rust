@@ -34,15 +34,22 @@
 //! [`EncodedStore`](crate::EncodedStore). The target has no system clock, so
 //! give every builder a [`DateClock`].
 //!
-//! # Keeping loads running
+//! # Sharing a cache between requests
 //!
 //! A Worker isolate serves many requests at once, and a cache shared by them
-//! makes each one that misses wait for the first one's load. The runtime may
-//! stop that load once the first request has its response, and then the
-//! others wait for nothing. A cache built with the [`WaitUntil`] spawner
-//! runs each load as a task of its own and keeps it running with the
-//! `wait_until` of the request that started it. Wrap the handling of each
-//! request in [`with_context`] so the spawner can find that request.
+//! makes each one that misses wait for the first one's load. The runtime has
+//! three rules that bear on this. It may stop a load once the request that
+//! started it has its response. It stops a request that has nothing of its
+//! own pending as hung. And it refuses I/O a request makes in another
+//! request's turn, such as building its response after being woken by that
+//! request's load.
+//!
+//! Wrap the handling of each request in [`with_context`], and build the
+//! cache with the [`WaitUntil`] spawner. The spawner keeps each load running
+//! with the `wait_until` of the request that started it, and the wrapper
+//! keeps a waiting request alive with a short timer and lets it go on only
+//! in its own turns. Without the wrapper, a request that waits on another
+//! request's load fails.
 //!
 //! ```ignore
 //! use std::sync::Arc;
@@ -70,11 +77,12 @@
 //! A real Worker keeps the cache in a `thread_local!` or a `OnceCell` so the
 //! requests an isolate serves share it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
 use crate::LoadTask;
@@ -113,25 +121,70 @@ pub(crate) fn cache_url(base: &str, key: &str) -> String {
     format!("{}/{key}", base.trim_end_matches('/'))
 }
 
-/// Keeps a started load running for a request.
-type Keeper = Rc<dyn Fn(LoadTask)>;
+/// A short wait. A request keeps one pending while it waits, see
+/// [`Scoped`].
+pub(crate) type Tick = Pin<Box<dyn Future<Output = ()>>>;
 
-thread_local! {
-    /// The keeper of the request being polled, if any.
-    static KEEPER: RefCell<Option<Keeper>> = const { RefCell::new(None) };
+/// One request's handling, with how it keeps a started load running and
+/// how it waits a tick.
+pub(crate) struct Request {
+    id: u64,
+    keep: Box<dyn Fn(LoadTask)>,
+    tick: Box<dyn Fn() -> Tick>,
 }
 
-/// A request's future, polled with the request's keeper installed so a load
-/// started while polling it is kept running for that request.
+impl Request {
+    pub(crate) fn new(
+        keep: impl Fn(LoadTask) + 'static,
+        tick: impl Fn() -> Tick + 'static,
+    ) -> Rc<Self> {
+        let id = NEXT_ID.with(|next| {
+            let id = next.get();
+            next.set(id.wrapping_add(1));
+            id
+        });
+        Rc::new(Request {
+            id,
+            keep: Box::new(keep),
+            tick: Box::new(tick),
+        })
+    }
+}
+
+thread_local! {
+    static NEXT_ID: Cell<u64> = const { Cell::new(0) };
+    /// The request being polled, if any.
+    static CURRENT: RefCell<Option<Rc<Request>>> = const { RefCell::new(None) };
+}
+
+/// A future polled as part of one request.
+///
+/// The runtime stops a request that has nothing of its own pending, and
+/// refuses I/O a request makes outside its own turns. A request waiting on
+/// another request's load has nothing of its own pending, and when that
+/// load wakes it, the wake comes in the other request's turn. So the
+/// future is polled with a waker of its own, which ignores a wake made
+/// while another request is being polled, and keeps a tick pending while
+/// the future waits. The tick tells the runtime the request is still
+/// working, and when it ends the future is polled in this request's own
+/// turn. Every other wake goes straight through.
 pub(crate) struct Scoped<F> {
-    keeper: Keeper,
+    request: Rc<Request>,
+    waker: Arc<ScopedWaker>,
+    tick: Option<Tick>,
     future: Pin<Box<F>>,
 }
 
 impl<F: Future> Scoped<F> {
-    pub(crate) fn new(keeper: Keeper, future: F) -> Self {
+    pub(crate) fn new(request: Rc<Request>, future: F) -> Self {
+        let waker = Arc::new(ScopedWaker {
+            request: request.id,
+            real: Mutex::new(Waker::noop().clone()),
+        });
         Scoped {
-            keeper,
+            request,
+            waker,
+            tick: None,
             future: Box::pin(future),
         }
     }
@@ -142,35 +195,92 @@ impl<F: Future> Future for Scoped<F> {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
         let this = &mut *self;
-        let _installed = Installed::new(Rc::clone(&this.keeper));
-        this.future.as_mut().poll(cx)
+        if let Some(tick) = &mut this.tick {
+            if tick.as_mut().poll(cx).is_ready() {
+                this.tick = None;
+            }
+        }
+        this.waker.set(cx.waker());
+        let waker = Waker::from(Arc::clone(&this.waker));
+        let polled = {
+            let _current = Current::enter(Rc::clone(&this.request));
+            this.future.as_mut().poll(&mut Context::from_waker(&waker))
+        };
+        if polled.is_pending() && this.tick.is_none() {
+            let mut tick = (this.request.tick)();
+            if tick.as_mut().poll(cx).is_ready() {
+                cx.waker().wake_by_ref();
+            } else {
+                this.tick = Some(tick);
+            }
+        }
+        polled
     }
 }
 
-/// Puts back the keeper that was installed before, when dropped, so polls
-/// can nest and a panic leaves no keeper behind.
-struct Installed(Option<Keeper>);
+/// The waker a [`Scoped`] future is polled with.
+struct ScopedWaker {
+    request: u64,
+    real: Mutex<Waker>,
+}
 
-impl Installed {
-    fn new(keeper: Keeper) -> Self {
-        Installed(KEEPER.with(|current| current.replace(Some(keeper))))
+impl ScopedWaker {
+    fn set(&self, waker: &Waker) {
+        let mut real = self.real.lock().unwrap_or_else(PoisonError::into_inner);
+        if !real.will_wake(waker) {
+            *real = waker.clone();
+        }
     }
 }
 
-impl Drop for Installed {
+impl Wake for ScopedWaker {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let in_other_turn = CURRENT.with(|current| {
+            current
+                .borrow()
+                .as_ref()
+                .is_some_and(|request| request.id != self.request)
+        });
+        if !in_other_turn {
+            self.real
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .wake_by_ref();
+        }
+    }
+}
+
+/// Makes a request the one being polled, and puts back the one before when
+/// dropped, so polls can nest and a panic leaves nothing behind.
+struct Current(Option<Rc<Request>>);
+
+impl Current {
+    fn enter(request: Rc<Request>) -> Self {
+        Current(CURRENT.with(|current| current.replace(Some(request))))
+    }
+}
+
+impl Drop for Current {
     fn drop(&mut self) {
         let previous = self.0.take();
-        KEEPER.with(|current| *current.borrow_mut() = previous);
+        CURRENT.with(|current| *current.borrow_mut() = previous);
     }
 }
 
-/// Hands `task` to the keeper of the request being polled, or to
-/// `fallback` when no request is being polled.
+/// Hands `task` to the request being polled, to keep running as part of
+/// that request, or to `fallback` when no request is being polled.
 pub(crate) fn keep_running(task: LoadTask, fallback: impl FnOnce(LoadTask)) {
-    // The keeper is cloned out first, so it may itself poll a request.
-    let keeper = KEEPER.with(|current| current.borrow().clone());
-    match keeper {
-        Some(keep) => keep(task),
+    // The request is cloned out first, so keeping the task may poll it.
+    let request = CURRENT.with(|current| current.borrow().clone());
+    match request {
+        Some(request) => {
+            let task: LoadTask = Box::pin(Scoped::new(Rc::clone(&request), task));
+            (request.keep)(task);
+        }
         None => fallback(task),
     }
 }
@@ -182,12 +292,11 @@ pub use binding::{with_context, CacheApi, DateClock, KvStore, WaitUntil};
 mod binding {
     use std::convert::Infallible;
     use std::future::Future;
-    use std::rc::Rc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use ::worker::wasm_bindgen::{JsCast, JsValue};
 
-    use super::{cache_control, cache_url, keep_running, kv_expiration_ttl, Scoped};
+    use super::{cache_control, cache_url, keep_running, kv_expiration_ttl, Request, Scoped};
     use crate::{ByteLookup, ByteStore, Clock, LoadTask, SpawnLocal};
 
     /// A store over a Workers KV namespace, global and durable.
@@ -309,6 +418,9 @@ mod binding {
         }
     }
 
+    /// How often a request waiting on another request's load is polled.
+    const TICK: Duration = Duration::from_millis(10);
+
     /// Runs each load as a task of its own, kept running with the
     /// `wait_until` of the request whose call started it, so it finishes
     /// even after that request has its response. Give it to
@@ -326,9 +438,14 @@ mod binding {
         }
     }
 
-    /// Runs `future`, the handling of one request, so that a load a cache
-    /// with the [`WaitUntil`] spawner starts while it runs is kept running
-    /// with `ctx.wait_until`.
+    /// Runs `future`, the handling of one request, so it can share a cache
+    /// with the other requests the isolate serves.
+    ///
+    /// A load that a cache with the [`WaitUntil`] spawner starts while the
+    /// future runs is kept running with `ctx.wait_until`. While the future
+    /// waits, it keeps a 10 millisecond timer pending, so the runtime does
+    /// not stop it as hung when it waits on another request's load, and it
+    /// goes on in its own turns rather than in that request's.
     pub fn with_context<F: Future>(
         ctx: &::worker::Context,
         future: F,
@@ -337,16 +454,22 @@ mod binding {
         let value: &JsValue = inner.as_ref();
         // A second handle on the same JavaScript context object.
         let ctx = ::worker::Context::new(value.clone().unchecked_into());
-        Scoped::new(Rc::new(move |task: LoadTask| ctx.wait_until(task)), future)
+        let request = Request::new(
+            move |task: LoadTask| ctx.wait_until(task),
+            || Box::pin(::worker::Delay::from(TICK)),
+        );
+        Scoped::new(request, future)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::future::Future;
+    use std::cell::{Cell, RefCell};
+    use std::future::{pending, poll_fn, Future};
     use std::rc::Rc;
-    use std::task::{Context, Poll, Waker};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
 
     use super::*;
 
@@ -383,18 +506,54 @@ mod tests {
         );
     }
 
-    /// Records the tasks a keeper is given.
-    fn recorder() -> (Keeper, Rc<RefCell<Vec<LoadTask>>>) {
-        let tasks = Rc::new(RefCell::new(Vec::new()));
-        let keeper_tasks = Rc::clone(&tasks);
-        let keeper: Keeper = Rc::new(move |task| keeper_tasks.borrow_mut().push(task));
-        (keeper, tasks)
+    /// A request whose kept loads and ticks a test can see. Its ticks never
+    /// end by themselves.
+    struct Seen {
+        request: Rc<Request>,
+        kept: Rc<RefCell<Vec<LoadTask>>>,
+        ticks: Rc<Cell<usize>>,
     }
 
-    fn poll_once<F: Future>(future: &mut Pin<Box<F>>) -> Poll<F::Output> {
-        future
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop()))
+    fn request() -> Seen {
+        let kept = Rc::new(RefCell::new(Vec::new()));
+        let ticks = Rc::new(Cell::new(0));
+        let (keep, tick) = (Rc::clone(&kept), Rc::clone(&ticks));
+        let request = Request::new(
+            move |task| keep.borrow_mut().push(task),
+            move || {
+                tick.set(tick.get() + 1);
+                Box::pin(pending())
+            },
+        );
+        Seen {
+            request,
+            kept,
+            ticks,
+        }
+    }
+
+    /// Counts the times it is woken.
+    #[derive(Default)]
+    struct Count(AtomicUsize);
+
+    impl Wake for Count {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl Count {
+        fn woken(&self) -> usize {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+
+    fn poll_with<F: Future + ?Sized>(future: &mut Pin<Box<F>>, waker: &Waker) -> Poll<F::Output> {
+        future.as_mut().poll(&mut Context::from_waker(waker))
+    }
+
+    fn poll_once<F: Future + ?Sized>(future: &mut Pin<Box<F>>) -> Poll<F::Output> {
+        poll_with(future, Waker::noop())
     }
 
     fn task() -> LoadTask {
@@ -403,47 +562,46 @@ mod tests {
 
     #[test]
     fn falls_back_outside_any_request() {
-        let fell_back = Rc::new(RefCell::new(0));
+        let fell_back = Rc::new(Cell::new(0));
         let count = Rc::clone(&fell_back);
-        keep_running(task(), move |_| *count.borrow_mut() += 1);
-        assert_eq!(*fell_back.borrow(), 1);
+        keep_running(task(), move |_| count.set(count.get() + 1));
+        assert_eq!(fell_back.get(), 1);
     }
 
     #[test]
     fn gives_a_load_to_the_request_being_polled() {
-        let (keeper, kept) = recorder();
-        let mut request = Box::pin(Scoped::new(keeper, async {
+        let seen = request();
+        let mut handling = Box::pin(Scoped::new(Rc::clone(&seen.request), async {
             keep_running(task(), |_| panic!("no fallback inside a request"));
         }));
-        assert!(poll_once(&mut request).is_ready());
-        assert_eq!(kept.borrow().len(), 1);
+        assert!(poll_once(&mut handling).is_ready());
+        assert_eq!(seen.kept.borrow().len(), 1);
     }
 
     #[test]
-    fn leaves_no_keeper_installed_between_polls() {
-        let (keeper, kept) = recorder();
-        let mut request = Box::pin(Scoped::new(keeper, std::future::pending::<()>()));
-        assert!(poll_once(&mut request).is_pending());
-        let fell_back = Rc::new(RefCell::new(false));
+    fn leaves_no_request_current_between_polls() {
+        let seen = request();
+        let mut handling = Box::pin(Scoped::new(Rc::clone(&seen.request), pending::<()>()));
+        assert!(poll_once(&mut handling).is_pending());
+        let fell_back = Rc::new(Cell::new(false));
         let flag = Rc::clone(&fell_back);
-        keep_running(task(), move |_| *flag.borrow_mut() = true);
-        assert!(*fell_back.borrow());
-        assert!(kept.borrow().is_empty());
+        keep_running(task(), move |_| flag.set(true));
+        assert!(fell_back.get());
+        assert!(seen.kept.borrow().is_empty());
     }
 
     #[test]
     fn gives_each_load_to_the_request_whose_poll_started_it() {
-        let (first_keeper, first) = recorder();
-        let (second_keeper, second) = recorder();
-        let turn = Rc::new(RefCell::new(0));
+        let (first, second) = (request(), request());
+        let turn = Rc::new(Cell::new(0));
         // Each request starts a load on its second poll, so their polls
         // interleave as requests in one isolate do.
-        let request = |keeper: Keeper| {
+        let handling = |seen: &Seen| {
             let turn = Rc::clone(&turn);
-            Box::pin(Scoped::new(keeper, async move {
-                std::future::poll_fn(|_| {
-                    *turn.borrow_mut() += 1;
-                    if *turn.borrow() <= 2 {
+            Box::pin(Scoped::new(Rc::clone(&seen.request), async move {
+                poll_fn(|_| {
+                    turn.set(turn.get() + 1);
+                    if turn.get() <= 2 {
                         Poll::Pending
                     } else {
                         Poll::Ready(())
@@ -453,19 +611,76 @@ mod tests {
                 keep_running(task(), |_| panic!("no fallback inside a request"));
             }))
         };
-        let mut a = request(first_keeper);
-        let mut b = request(second_keeper);
+        let mut a = handling(&first);
+        let mut b = handling(&second);
         assert!(poll_once(&mut a).is_pending());
         assert!(poll_once(&mut b).is_pending());
         assert!(poll_once(&mut b).is_ready());
         assert!(poll_once(&mut a).is_ready());
-        assert_eq!((first.borrow().len(), second.borrow().len()), (1, 1));
+        assert_eq!(
+            (first.kept.borrow().len(), second.kept.borrow().len()),
+            (1, 1)
+        );
     }
 
     #[test]
-    fn a_cache_keeps_its_load_running_with_the_leading_request() {
-        use std::cell::Cell;
-        use std::sync::Arc;
+    fn restores_the_outer_request_after_a_nested_one() {
+        let (outer, inner) = (request(), request());
+        let inner_request = Rc::clone(&inner.request);
+        let mut handling = Box::pin(Scoped::new(Rc::clone(&outer.request), async move {
+            Scoped::new(inner_request, async {
+                keep_running(task(), |_| panic!("inside the inner request"));
+            })
+            .await;
+            keep_running(task(), |_| panic!("inside the outer request"));
+        }));
+        assert!(poll_once(&mut handling).is_ready());
+        assert_eq!(
+            (outer.kept.borrow().len(), inner.kept.borrow().len()),
+            (1, 1)
+        );
+    }
+
+    #[test]
+    fn keeps_one_tick_pending_while_the_request_waits() {
+        let seen = request();
+        let mut waiting = Box::pin(Scoped::new(Rc::clone(&seen.request), pending::<()>()));
+        assert!(poll_once(&mut waiting).is_pending());
+        assert!(poll_once(&mut waiting).is_pending());
+        assert_eq!(seen.ticks.get(), 1);
+        let mut finished = Box::pin(Scoped::new(Rc::clone(&seen.request), async {}));
+        assert!(poll_once(&mut finished).is_ready());
+        assert_eq!(seen.ticks.get(), 1, "a finished request keeps no tick");
+    }
+
+    #[test]
+    fn ignores_a_wake_made_in_another_requests_turn() {
+        let (a, b) = (request(), request());
+        let waker_of_b = Rc::new(RefCell::new(None::<Waker>));
+        let saved = Rc::clone(&waker_of_b);
+        let mut waiting = Box::pin(Scoped::new(
+            Rc::clone(&b.request),
+            poll_fn(move |cx| {
+                *saved.borrow_mut() = Some(cx.waker().clone());
+                Poll::<()>::Pending
+            }),
+        ));
+        let count = Arc::new(Count::default());
+        assert!(poll_with(&mut waiting, &Waker::from(Arc::clone(&count))).is_pending());
+
+        let wake = Rc::clone(&waker_of_b);
+        let mut other = Box::pin(Scoped::new(Rc::clone(&a.request), async move {
+            wake.borrow().as_ref().unwrap().wake_by_ref();
+        }));
+        assert!(poll_once(&mut other).is_ready());
+        assert_eq!(count.woken(), 0, "left for the waiting request's tick");
+
+        waker_of_b.borrow().as_ref().unwrap().wake_by_ref();
+        assert_eq!(count.woken(), 1, "a wake outside any request goes through");
+    }
+
+    #[test]
+    fn a_cache_shared_by_two_requests_loads_once_and_wakes_by_tick() {
         use std::time::UNIX_EPOCH;
 
         use crate::{from_fn, Clock, LoadingCache, LruStore};
@@ -478,7 +693,7 @@ mod tests {
             load_count.set(load_count.get() + 1);
             let gate = Rc::clone(&gate);
             async move {
-                std::future::poll_fn(|_| {
+                poll_fn(|_| {
                     if gate.get() {
                         Poll::Ready(())
                     } else {
@@ -496,49 +711,41 @@ mod tests {
             })
             .build();
 
-        let (leading_keeper, leading_kept) = recorder();
-        let (following_keeper, following_kept) = recorder();
-        let mut leading = Box::pin(Scoped::new(leading_keeper, cache.get(&1)));
-        let mut following = Box::pin(Scoped::new(following_keeper, cache.get(&1)));
-        assert!(poll_once(&mut leading).is_pending());
-        assert!(poll_once(&mut following).is_pending());
+        let (leading, following) = (request(), request());
+        let mut lead = Box::pin(Scoped::new(Rc::clone(&leading.request), cache.get(&1)));
+        let mut follow = Box::pin(Scoped::new(Rc::clone(&following.request), cache.get(&1)));
+        let follower_woken = Arc::new(Count::default());
+        let follower_waker = Waker::from(Arc::clone(&follower_woken));
+        assert!(poll_once(&mut lead).is_pending());
+        assert!(poll_with(&mut follow, &follower_waker).is_pending());
         assert_eq!(
-            leading_kept.borrow().len(),
+            leading.kept.borrow().len(),
             1,
             "the leading request keeps the load"
         );
-        assert!(following_kept.borrow().is_empty());
-
-        // The leading request's wait_until runs the load to its end.
-        open.set(true);
-        let mut load = leading_kept.borrow_mut().pop().unwrap();
-        assert!(load
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop()))
-            .is_ready());
+        assert!(following.kept.borrow().is_empty());
         assert_eq!(
-            poll_once(&mut following),
+            following.ticks.get(),
+            1,
+            "the following request keeps a tick"
+        );
+
+        // The leading request's wait_until runs the load to its end, in the
+        // leading request's turn, so the following request is not woken.
+        open.set(true);
+        let mut load = leading.kept.borrow_mut().pop().unwrap();
+        assert!(poll_once(&mut load).is_ready());
+        assert_eq!(follower_woken.woken(), 0);
+
+        // Its tick ends, and it is polled in its own turn.
+        assert_eq!(
+            poll_with(&mut follow, &follower_waker),
             Poll::Ready(Ok("1 loaded".to_string()))
         );
         assert_eq!(
-            poll_once(&mut leading),
+            poll_once(&mut lead),
             Poll::Ready(Ok("1 loaded".to_string()))
         );
         assert_eq!(loads.get(), 1);
-    }
-
-    #[test]
-    fn restores_the_outer_request_after_a_nested_one() {
-        let (outer_keeper, outer) = recorder();
-        let (inner_keeper, inner) = recorder();
-        let mut request = Box::pin(Scoped::new(outer_keeper, async move {
-            Scoped::new(inner_keeper, async {
-                keep_running(task(), |_| panic!("inside the inner request"));
-            })
-            .await;
-            keep_running(task(), |_| panic!("inside the outer request"));
-        }));
-        assert!(poll_once(&mut request).is_ready());
-        assert_eq!((outer.borrow().len(), inner.borrow().len()), (1, 1));
     }
 }

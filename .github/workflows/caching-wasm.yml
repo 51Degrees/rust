@@ -19,8 +19,10 @@ name: Caching on WebAssembly
 # Each host feature has a job of its own on the target its platform runs.
 # The fastly feature's tests run on Viceroy, Fastly's local Compute runtime,
 # which provides the KV store and core cache the Fastly stores use. The
-# cloudflare feature is linted and documented here, and the logic its stores
-# and spawner share with no SDK is tested in the jobs above.
+# cloudflare feature's stores and spawner run on workerd, the Workers
+# runtime, through Miniflare. caching/host-tests/cloudflare holds a Worker
+# built with worker-build, and its test.mjs drives it with concurrent
+# requests.
 #
 # The crate needs neither the C/C++ sources nor the submodules, and this
 # workflow reads no secrets.
@@ -145,8 +147,11 @@ jobs:
         run: cargo test -p fiftyone-caching --target wasm32-wasip1 --features fastly
 
   cloudflare:
-    name: caching cloudflare (wasm32-unknown-unknown)
+    name: caching cloudflare (wasm32-unknown-unknown, on workerd)
     runs-on: ubuntu-24.04
+    env:
+      WORKER_BUILD_VERSION: 0.8.7
+      MINIFLARE_VERSION: 4.20260730.0
     steps:
       - name: Checkout workspace
         uses: actions/checkout@v4
@@ -161,9 +166,31 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: caching-cloudflare
+          workspaces: |
+            . -> target
+            caching/host-tests/cloudflare -> target
+
+      - name: Install Node (Miniflare runs workerd from it)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: cargo clippy (wasm32-unknown-unknown, cloudflare)
         run: cargo clippy -p fiftyone-caching --no-default-features --features cloudflare --all-targets --target wasm32-unknown-unknown -- -D warnings
 
       - name: cargo doc (wasm32-unknown-unknown, cloudflare)
         run: cargo doc -p fiftyone-caching --no-deps --no-default-features --features cloudflare --target wasm32-unknown-unknown
+
+      - name: Install worker-build and Miniflare
+        working-directory: caching/host-tests/cloudflare
+        run: |
+          cargo install worker-build --version "$WORKER_BUILD_VERSION" --locked
+          npm install --no-save --no-audit --no-fund "miniflare@$MINIFLARE_VERSION"
+
+      - name: Build the test Worker
+        working-directory: caching/host-tests/cloudflare
+        run: worker-build --release
+
+      - name: Run the test Worker's checks on workerd
+        working-directory: caching/host-tests/cloudflare
+        run: node test.mjs
