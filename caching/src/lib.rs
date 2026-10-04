@@ -204,6 +204,15 @@ mod data_keyed;
 mod loading;
 mod lru;
 
+#[cfg(all(feature = "fastly", target_os = "wasi", target_env = "p1"))]
+pub mod fastly;
+// The Fastly store's own logic is tested on every target, without the SDK.
+#[cfg(all(
+    test,
+    not(all(feature = "fastly", target_os = "wasi", target_env = "p1"))
+))]
+mod fastly;
+
 pub use cache::{Cache, PutCache};
 pub use config::{default_concurrency, CacheBuilder, DEFAULT_SIZE};
 #[cfg(feature = "pipeline")]

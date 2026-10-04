@@ -16,6 +16,10 @@ name: Caching on WebAssembly
 # alone. Doctests are left out on that target because they use the system
 # clock, which it lacks.
 #
+# Each host feature has a job of its own on the target its platform runs.
+# The fastly feature's tests run on Viceroy, Fastly's local Compute runtime,
+# which provides the KV store and core cache the Fastly stores use.
+#
 # The crate needs neither the C/C++ sources nor the submodules, and this
 # workflow reads no secrets.
 
@@ -100,3 +104,40 @@ jobs:
         env:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: node ${{ github.workspace }}/ci/run-wasm-unknown.mjs
         run: cargo test -p fiftyone-caching --no-default-features --target wasm32-unknown-unknown --tests
+
+  fastly:
+    name: caching fastly (wasm32-wasip1, on Viceroy)
+    runs-on: ubuntu-24.04
+    env:
+      VICEROY_VERSION: 0.21.1
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with wasm target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: caching-fastly
+
+      - name: Install Viceroy (the Fastly Compute runtime the tests run on)
+        run: |
+          mkdir -p "$RUNNER_TEMP/viceroy"
+          curl -fsSL "https://github.com/fastly/Viceroy/releases/download/v${VICEROY_VERSION}/viceroy_v${VICEROY_VERSION}_linux-amd64.tar.gz"             | tar -xz -C "$RUNNER_TEMP/viceroy"
+          echo "$RUNNER_TEMP/viceroy" >> "$GITHUB_PATH"
+
+      - name: cargo clippy (wasm32-wasip1, fastly)
+        run: cargo clippy -p fiftyone-caching --all-targets --target wasm32-wasip1 --features fastly -- -D warnings
+
+      - name: cargo doc (wasm32-wasip1, fastly)
+        run: cargo doc -p fiftyone-caching --no-deps --target wasm32-wasip1 --features fastly
+
+      - name: cargo test (wasm32-wasip1, fastly, executed under Viceroy)
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: viceroy run -C ${{ github.workspace }}/caching/tests/fastly.toml
+        run: cargo test -p fiftyone-caching --target wasm32-wasip1 --features fastly
