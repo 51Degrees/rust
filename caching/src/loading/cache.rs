@@ -22,17 +22,19 @@
 
 //! The loading cache.
 
-use std::future::Future;
+use std::future::{poll_fn, Future};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::{Duration, SystemTime};
 
 use super::clock::{self, Clock};
 use super::entry::{earliest, Entry, Loaded};
-use super::flight::{Flights, Lead, Outcome, Role};
+use super::flight::{Flights, Lead, Outcome, Role, Wait};
 use super::loader::ValueLoader;
 use super::lru_store::LruStore;
+use super::spawn::{Inline, LoadRunner, Spawned, SpawnedLocal};
 use super::store::{Lookup, Store};
 use crate::config::default_concurrency;
 
@@ -72,7 +74,19 @@ use crate::config::default_concurrency;
 ///     .build();
 /// # let _ = &cache;
 /// ```
-pub struct LoadingCache<K, V, S, L>
+pub struct LoadingCache<K, V, S, L, R = Inline>
+where
+    L: ValueLoader<K, V>,
+{
+    inner: Arc<Inner<K, V, S, L>>,
+    runner: R,
+}
+
+/// The loads in progress for one cache, keyed by what they load.
+type InFlight<K, V, E> = Arc<Flights<K, Result<Loaded<V>, E>>>;
+
+/// The parts of a cache a load uses, shared with loads running as tasks.
+struct Inner<K, V, S, L>
 where
     L: ValueLoader<K, V>,
 {
@@ -80,7 +94,7 @@ where
     loader: L,
     lifetimes: Lifetimes,
     clock: Arc<dyn Clock>,
-    flights: Flights<K, Result<Loaded<V>, L::Error>>,
+    flights: InFlight<K, V, L::Error>,
 }
 
 impl<K, V, S, L> LoadingCache<K, V, S, L>
@@ -101,10 +115,20 @@ where
             renewal_window: None,
             clock: None,
             concurrency: default_concurrency(),
+            runner: Inline,
             types: PhantomData,
         }
     }
+}
 
+impl<K, V, S, L, R> LoadingCache<K, V, S, L, R>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: Store<K, V>,
+    L: ValueLoader<K, V>,
+    R: LoadRunner<K, V, S, L>,
+{
     /// The value for `key`, from the store or loaded.
     pub async fn get(&self, key: &K) -> Result<V, L::Error> {
         self.get_loaded(key).await.map(|loaded| loaded.value)
@@ -115,38 +139,115 @@ where
     /// keep its own copy no longer.
     pub async fn get_loaded(&self, key: &K) -> Result<Loaded<V>, L::Error> {
         loop {
-            match self.flights.join_or_lead(key) {
-                Role::Wait(wait) => match wait.await {
-                    Outcome::Done(result) => return result,
-                    Outcome::Abandoned => continue,
+            let outcome = match self.inner.flights.join_or_lead(key) {
+                Role::Wait(wait) => wait.await,
+                // The caller looks in the store itself, so a hit never
+                // waits for a task. Only a load goes to the runner.
+                Role::Lead(lead) => match self.inner.look(key, &lead).await {
+                    Found::Fresh(served) => Outcome::Done(Ok(served)),
+                    Found::Missing(reservation) => {
+                        let job = Job {
+                            inner: Arc::clone(&self.inner),
+                            key: key.clone(),
+                            lead,
+                            reservation,
+                        };
+                        self.runner.run(job).await
+                    }
                 },
-                Role::Lead(lead) => return self.lead(key, lead).await,
+            };
+            match outcome {
+                Outcome::Done(result) => return result,
+                // The load was dropped before it finished. Other work runs
+                // before asking again, so a spawner that drops tasks unrun,
+                // as a runtime shutting down does, cannot hold the thread.
+                Outcome::Abandoned => yield_now().await,
             }
         }
     }
 
     /// Removes `key` from this cache's store. Caches below keep their copies.
     pub async fn remove(&self, key: &K) {
-        self.store.remove(key).await;
+        self.inner.store.remove(key).await;
     }
 
     /// The store this cache keeps its entries in.
     pub fn store(&self) -> &S {
-        &self.store
+        &self.inner.store
+    }
+}
+
+/// What the store held for a key a caller is leading.
+enum Found<V, R> {
+    /// A fresh entry, already given to the waiting callers.
+    Fresh(Loaded<V>),
+    /// Nothing usable, so the value must be loaded, filling the reservation
+    /// when the store gave one.
+    Missing(Option<R>),
+}
+
+/// One load, owning what it uses so it can run in a task of its own.
+pub struct Job<K, V, S, L>
+where
+    K: Hash + Eq,
+    S: Store<K, V>,
+    L: ValueLoader<K, V>,
+{
+    inner: Arc<Inner<K, V, S, L>>,
+    key: K,
+    lead: Lead<K, Result<Loaded<V>, L::Error>>,
+    reservation: Option<S::Reservation>,
+}
+
+impl<K, V, S, L> Job<K, V, S, L>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: Store<K, V>,
+    L: ValueLoader<K, V>,
+{
+    /// A wait on this load's result.
+    pub(crate) fn wait(&self) -> Wait<Result<Loaded<V>, L::Error>> {
+        self.lead.wait()
     }
 
-    /// The work of the one caller leading the load of `key`. It publishes
-    /// the result to the waiting callers as soon as it has one, then writes
-    /// to the store.
-    async fn lead(
+    /// Does the load. Waiting callers get its result as soon as there is
+    /// one.
+    pub(crate) async fn run(self) -> Result<Loaded<V>, L::Error> {
+        let Job {
+            inner,
+            key,
+            lead,
+            reservation,
+        } = self;
+        inner.load(&key, lead, reservation).await
+    }
+
+    /// Does the load, for a task with no caller to return the result to.
+    pub(crate) async fn finish(self) {
+        let _ = self.run().await;
+    }
+}
+
+impl<K, V, S, L> Inner<K, V, S, L>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: Store<K, V>,
+    L: ValueLoader<K, V>,
+{
+    /// Looks for `key` in the store, for the caller leading it. A fresh
+    /// entry is given to the waiting callers, renewed if the use is due to
+    /// renew it, and returned.
+    async fn look(
         &self,
         key: &K,
-        lead: Lead<'_, K, Result<Loaded<V>, L::Error>>,
-    ) -> Result<Loaded<V>, L::Error> {
+        lead: &Lead<K, Result<Loaded<V>, L::Error>>,
+    ) -> Found<V, S::Reservation> {
         let found = self.store.get(key).await;
         // Read after the lookup, which may have waited for another process.
         let now = self.clock.now();
-        let reservation = match found {
+        match found {
             Lookup::Hit(entry) if self.lifetimes.is_fresh(&entry, now) => {
                 let renewed = self.lifetimes.renewal(&entry, now);
                 let served = self.lifetimes.served(renewed.as_ref().unwrap_or(&entry));
@@ -154,11 +255,21 @@ where
                 if let Some(renewed) = renewed {
                     self.write(key, None, &renewed, now).await;
                 }
-                return Ok(served);
+                Found::Fresh(served)
             }
-            Lookup::Hit(_) | Lookup::Miss => None,
-            Lookup::Reserved(reservation) => Some(reservation),
-        };
+            Lookup::Hit(_) | Lookup::Miss => Found::Missing(None),
+            Lookup::Reserved(reservation) => Found::Missing(Some(reservation)),
+        }
+    }
+
+    /// Loads the value for `key`. It is given to the waiting callers as soon
+    /// as there is one, then written to the store.
+    async fn load(
+        &self,
+        key: &K,
+        lead: Lead<K, Result<Loaded<V>, L::Error>>,
+        reservation: Option<S::Reservation>,
+    ) -> Result<Loaded<V>, L::Error> {
         match self.loader.load(key).await {
             Ok(loaded) => {
                 let now = self.clock.now();
@@ -197,12 +308,28 @@ where
     }
 }
 
-impl<K, V, S, L> ValueLoader<K, V> for LoadingCache<K, V, S, L>
+/// Lets other work run once, by asking to be polled again.
+async fn yield_now() {
+    let mut yielded = false;
+    poll_fn(|cx| {
+        if yielded {
+            Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await
+}
+
+impl<K, V, S, L, R> ValueLoader<K, V> for LoadingCache<K, V, S, L, R>
 where
     K: Hash + Eq + Clone,
     V: Clone,
     S: Store<K, V>,
     L: ValueLoader<K, V>,
+    R: LoadRunner<K, V, S, L>,
 {
     type Error = L::Error;
 
@@ -213,7 +340,7 @@ where
 
 /// A [`LoadingCache`] over the least recently used cache in process memory,
 /// as `LruLoadingCache` in the .NET and Java pipelines.
-pub type LruLoadingCache<K, V, L> = LoadingCache<K, V, LruStore<K, V>, L>;
+pub type LruLoadingCache<K, V, L, R = Inline> = LoadingCache<K, V, LruStore<K, V>, L, R>;
 
 impl<K, V, L> LoadingCache<K, V, LruStore<K, V>, L>
 where
@@ -235,7 +362,7 @@ where
 }
 
 /// Builds a [`LoadingCache`].
-pub struct LoadingCacheBuilder<K, V, S, L> {
+pub struct LoadingCacheBuilder<K, V, S, L, R = Inline> {
     store: S,
     loader: L,
     time_to_live: Option<Duration>,
@@ -243,10 +370,11 @@ pub struct LoadingCacheBuilder<K, V, S, L> {
     renewal_window: Option<Duration>,
     clock: Option<Arc<dyn Clock>>,
     concurrency: usize,
+    runner: R,
     types: PhantomData<fn(K) -> V>,
 }
 
-impl<K, V, S, L> LoadingCacheBuilder<K, V, S, L>
+impl<K, V, S, L, R> LoadingCacheBuilder<K, V, S, L, R>
 where
     K: Hash + Eq + Clone,
     V: Clone,
@@ -294,13 +422,55 @@ where
         self
     }
 
+    /// Runs each load as a task of its own, started by `spawner` on any
+    /// thread, so a dropped caller neither stops a load nor starts another,
+    /// as a .NET `Lazy<Task>` does. Every caller, the first included, waits
+    /// for the load's result.
+    ///
+    /// A load can move to another thread, so the cache's key, value, error,
+    /// store and loader must be `Send`, `Sync` and `'static`. The load's own
+    /// future need not be `Send`, because the spawner makes it on the thread
+    /// that runs it. Without a spawner, nothing is asked of these types.
+    pub fn spawner<P>(self, spawner: P) -> LoadingCacheBuilder<K, V, S, L, Spawned<P>>
+    where
+        Spawned<P>: LoadRunner<K, V, S, L>,
+    {
+        self.runner(Spawned(spawner))
+    }
+
+    /// Runs each load as a task of its own on the current thread, started by
+    /// `spawner`, so a dropped caller neither stops a load nor starts
+    /// another. Every caller, the first included, waits for the load's
+    /// result. The cache's key, value, error, store and loader must be
+    /// `'static`, since the task owns them.
+    pub fn local_spawner<P>(self, spawner: P) -> LoadingCacheBuilder<K, V, S, L, SpawnedLocal<P>>
+    where
+        SpawnedLocal<P>: LoadRunner<K, V, S, L>,
+    {
+        self.runner(SpawnedLocal(spawner))
+    }
+
+    fn runner<R2>(self, runner: R2) -> LoadingCacheBuilder<K, V, S, L, R2> {
+        LoadingCacheBuilder {
+            store: self.store,
+            loader: self.loader,
+            time_to_live: self.time_to_live,
+            time_to_idle: self.time_to_idle,
+            renewal_window: self.renewal_window,
+            clock: self.clock,
+            concurrency: self.concurrency,
+            runner,
+            types: PhantomData,
+        }
+    }
+
     /// Builds the cache.
     ///
     /// # Panics
     ///
     /// If the renewal window is more than half the idle time, or on
     /// `wasm32-unknown-unknown` when no [clock](Self::clock) was given.
-    pub fn build(self) -> LoadingCache<K, V, S, L> {
+    pub fn build(self) -> LoadingCache<K, V, S, L, R> {
         let renewal_window = match (self.time_to_idle, self.renewal_window) {
             (Some(idle), Some(window)) => {
                 assert!(
@@ -313,15 +483,18 @@ where
             (None, window) => window.unwrap_or_default(),
         };
         LoadingCache {
-            store: self.store,
-            loader: self.loader,
-            lifetimes: Lifetimes {
-                time_to_live: self.time_to_live,
-                time_to_idle: self.time_to_idle,
-                renewal_window,
-            },
-            clock: clock::given_or_system(self.clock),
-            flights: Flights::new(self.concurrency),
+            inner: Arc::new(Inner {
+                store: self.store,
+                loader: self.loader,
+                lifetimes: Lifetimes {
+                    time_to_live: self.time_to_live,
+                    time_to_idle: self.time_to_idle,
+                    renewal_window,
+                },
+                clock: clock::given_or_system(self.clock),
+                flights: Arc::new(Flights::new(self.concurrency)),
+            }),
+            runner: self.runner,
         }
     }
 }

@@ -69,8 +69,8 @@
 //! it at the same time. The first caller for a key runs the load, every caller
 //! that arrives while it runs waits for the same result, and all of them
 //! continue when it completes. A failed load reaches every waiting caller and
-//! is not stored, so the next caller loads again. It needs no async runtime,
-//! spawns nothing and starts no threads.
+//! is not stored, so the next caller loads again. It needs no async runtime
+//! and starts no threads of its own.
 //!
 //! - [`LoadingCache`] does all the work. It is generic over a [`Store`] and a
 //!   [`ValueLoader`]. [`LruLoadingCache`] is the form over [`LruStore`], the
@@ -107,6 +107,18 @@
 //! A value carries the time it was written and the time it stops being
 //! usable, and a cache never keeps a copy longer than the copy it loaded
 //! from, so no copy in a stack outlives the copy below it.
+//!
+//! ### Loads that outlive their caller
+//!
+//! By default the first caller for a key does the load, and if it is dropped
+//! a waiting caller starts the load again. A host that can run work on its
+//! own can give the cache a spawner instead, a [`Spawn`] for any thread or a
+//! [`SpawnLocal`] for the current one. The cache then runs each load as a
+//! task of its own and every caller, the first included, waits for its
+//! result, so a dropped caller neither stops a load nor starts another, as
+//! a .NET `Lazy<Task>` does. A hit is still served by the caller, with no
+//! task. With a spawner the cache's types must be `'static`, and `Send` and
+//! `Sync` too for a spawner on any thread.
 //!
 //! ### What a store does and what the cache does
 //!
@@ -199,7 +211,8 @@ pub use data_keyed::DataKeyedCache;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use loading::SystemClock;
 pub use loading::{
-    from_fn, Clock, Entry, FnLoader, Loaded, LoadingCache, LoadingCacheBuilder, Lookup,
-    LruLoadingCache, LruStore, LruStoreBuilder, Store, ValueLoader,
+    from_fn, Clock, Entry, FnLoader, Inline, LoadRunner, LoadTask, Loaded, LoadingCache,
+    LoadingCacheBuilder, Lookup, LruLoadingCache, LruStore, LruStoreBuilder, Spawn, SpawnLocal,
+    Spawned, SpawnedLocal, StartLoad, Store, ValueLoader,
 };
 pub use lru::LruCache;

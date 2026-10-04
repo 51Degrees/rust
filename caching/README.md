@@ -10,9 +10,11 @@ load, every caller that arrives meanwhile waits for the same result, and a
 failed load reaches every waiting caller without being stored. The loading
 cache keeps its entries in a pluggable store, from the least recently used
 cache in process memory to a platform's key-value store, and caches stack by
-using one as the loader of another. The names follow the caching packages of
-the other languages, being `LoadingCache`, `LruLoadingCache`,
-`LoadingCacheBuilder` and `ValueLoader`.
+using one as the loader of another. A host that can run work on its own can
+give the cache a spawner, so each load runs as a task of its own and a
+dropped caller neither stops a load nor starts another. The names follow the
+caching packages of the other languages, being `LoadingCache`,
+`LruLoadingCache`, `LoadingCacheBuilder` and `ValueLoader`.
 
 The crate builds for native targets and `wasm32-wasip1`, and for
 `wasm32-unknown-unknown` with default features off. The `pipeline` feature,

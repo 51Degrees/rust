@@ -22,12 +22,12 @@
 
 //! One load per key at a time.
 //!
-//! The first caller for a key becomes the leader and does the work in its
-//! own task. Callers that arrive while it works wait on the key's slot and
-//! are woken with the leader's result. The work never moves into the cache,
-//! so it needs no runtime, no spawning and no `Send` bound of its own. If
-//! the leader is dropped before it publishes, the waiters are woken to try
-//! again, and one of them becomes the new leader.
+//! The first caller for a key becomes the leader. It owns the key's slot
+//! until the work ends, either doing the work itself or handing its hold to
+//! a task that does. Callers that arrive meanwhile wait on the slot and are
+//! woken with the result. If the hold is dropped before a result is
+//! published, the waiters are woken to try again, and one of them becomes
+//! the new leader.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -60,15 +60,15 @@ enum State<T> {
 }
 
 /// What a caller does for a key.
-pub(crate) enum Role<'a, K: Hash + Eq, T> {
+pub(crate) enum Role<K: Hash + Eq, T> {
     /// Do the work, then publish the result.
-    Lead(Lead<'a, K, T>),
+    Lead(Lead<K, T>),
     /// Wait for the leader.
     Wait(Wait<T>),
 }
 
 /// How a wait ended.
-pub(crate) enum Outcome<T> {
+pub enum Outcome<T> {
     /// The leader's result.
     Done(T),
     /// The leader was dropped, so ask again.
@@ -83,9 +83,8 @@ impl<K: Hash + Eq + Clone, T: Clone> Flights<K, T> {
     }
 
     /// Joins the work in progress for `key`, or starts it.
-    pub(crate) fn join_or_lead<'a>(&'a self, key: &'a K) -> Role<'a, K, T> {
-        let shard = self.slots.for_key(key);
-        let mut slots = lock(shard);
+    pub(crate) fn join_or_lead(self: &Arc<Self>, key: &K) -> Role<K, T> {
+        let mut slots = lock(self.slots.for_key(key));
         if let Some(slot) = slots.get(key) {
             return Role::Wait(Wait {
                 slot: Arc::clone(slot),
@@ -96,19 +95,32 @@ impl<K: Hash + Eq + Clone, T: Clone> Flights<K, T> {
             state: Mutex::new(State::Working(Vec::new())),
         });
         slots.insert(key.clone(), Arc::clone(&slot));
-        Role::Lead(Lead { shard, key, slot })
+        Role::Lead(Lead {
+            flights: Arc::clone(self),
+            key: key.clone(),
+            slot,
+        })
     }
 }
 
-/// The leader's hold on a key. Dropping it ends the work, and wakes the
-/// waiters to try again if no result was published.
-pub(crate) struct Lead<'a, K: Hash + Eq, T> {
-    shard: &'a Mutex<Slots<K, T>>,
-    key: &'a K,
+/// The leader's hold on a key. It owns what it needs, so it can move into a
+/// task of its own. Dropping it ends the work, and wakes the waiters to try
+/// again if no result was published.
+pub(crate) struct Lead<K: Hash + Eq, T> {
+    flights: Arc<Flights<K, T>>,
+    key: K,
     slot: Arc<Slot<T>>,
 }
 
-impl<K: Hash + Eq, T> Lead<'_, K, T> {
+impl<K: Hash + Eq, T> Lead<K, T> {
+    /// A wait on this load, for the caller that handed the load to a task.
+    pub(crate) fn wait(&self) -> Wait<T> {
+        Wait {
+            slot: Arc::clone(&self.slot),
+            index: None,
+        }
+    }
+
     /// Gives `result` to every waiter now. Callers that arrive before the
     /// leader is dropped also receive it, so a leader can finish slow writes
     /// after publishing without anyone repeating the work.
@@ -121,17 +133,17 @@ impl<K: Hash + Eq, T> Lead<'_, K, T> {
     }
 }
 
-impl<K: Hash + Eq, T> Drop for Lead<'_, K, T> {
+impl<K: Hash + Eq, T> Drop for Lead<K, T> {
     fn drop(&mut self) {
         // Leave the map first, so a woken waiter that asks again starts new
         // work rather than joining this slot.
         {
-            let mut slots = lock(self.shard);
+            let mut slots = lock(self.flights.slots.for_key(&self.key));
             if slots
-                .get(self.key)
+                .get(&self.key)
                 .is_some_and(|slot| Arc::ptr_eq(slot, &self.slot))
             {
-                slots.remove(self.key);
+                slots.remove(&self.key);
             }
         }
         let mut state = lock(&self.slot.state);

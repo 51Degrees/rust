@@ -32,6 +32,11 @@ ahash.workspace = true
 [target.'cfg(target_family = "wasm")'.dependencies]
 ahash = { version = "0.8", default-features = false, features = ["std", "compile-time-rng"] }
 
+# The multi-threaded spawner test runs loads on a tokio runtime, which needs
+# threads, so it is a native-only test dependency.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the
 # cloud, on-premise and optional paths are all documented.

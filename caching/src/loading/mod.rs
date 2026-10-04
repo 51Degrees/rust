@@ -30,6 +30,7 @@ mod flight;
 mod loader;
 mod lru_store;
 mod shards;
+mod spawn;
 mod store;
 
 pub use cache::{LoadingCache, LoadingCacheBuilder, LruLoadingCache};
@@ -39,4 +40,7 @@ pub use clock::SystemClock;
 pub use entry::{Entry, Loaded};
 pub use loader::{from_fn, FnLoader, ValueLoader};
 pub use lru_store::{LruStore, LruStoreBuilder};
+pub use spawn::{
+    Inline, LoadRunner, LoadTask, Spawn, SpawnLocal, Spawned, SpawnedLocal, StartLoad,
+};
 pub use store::{Lookup, Store};
