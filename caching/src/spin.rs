@@ -28,14 +28,19 @@
 //! [`LoadingCache`](crate::LoadingCache) by
 //! [`EncodedStore`](crate::EncodedStore).
 //!
-//! ```ignore
+//! ```no_run
+//! # async fn run() -> Result<(), spin_sdk::key_value::Error> {
 //! use std::time::Duration;
-//! use fiftyone_caching::{spin::KvStore, EncodedStore, LoadingCache, Utf8};
+//! use fiftyone_caching::{from_fn, spin::KvStore, EncodedStore, LoadingCache, Utf8};
 //!
 //! let store = EncodedStore::new(KvStore::open_default().await?, Utf8);
+//! let loader = from_fn(|key: String| async move { Ok::<_, String>(format!("value of {key}")) });
 //! let cache = LoadingCache::builder(store, loader)
 //!     .time_to_live(Duration::from_secs(3600))
 //!     .build();
+//! # drop(cache);
+//! # Ok(())
+//! # }
 //! ```
 
 use std::convert::Infallible;

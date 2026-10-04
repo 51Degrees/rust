@@ -31,14 +31,19 @@
 //! [`LoadingCache`](crate::LoadingCache) by
 //! [`EncodedStore`](crate::EncodedStore).
 //!
-//! ```ignore
+//! ```no_run
 //! use std::time::Duration;
-//! use fiftyone_caching::{fastly, EncodedStore, LoadingCache, Utf8};
+//! use fiftyone_caching::{fastly, from_fn, EncodedStore, LoadingCache, Utf8};
 //!
-//! let kv = fastly::KvStore::open("cache")?.expect("the cache store is linked");
+//! let kv = fastly::KvStore::open("cache")
+//!     .ok()
+//!     .flatten()
+//!     .expect("the service links a KV store named cache");
+//! let loader = from_fn(|key: String| async move { Ok::<_, String>(format!("value of {key}")) });
 //! let cache = LoadingCache::builder(EncodedStore::new(kv, Utf8), loader)
 //!     .time_to_live(Duration::from_secs(3600))
 //!     .build();
+//! # drop(cache);
 //! ```
 
 use std::time::Duration;

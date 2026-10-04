@@ -51,31 +51,58 @@
 //! in its own turns. Without the wrapper, a request that waits on another
 //! request's load fails.
 //!
-//! ```ignore
+//! ```no_run
+//! use std::cell::OnceCell;
+//! use std::rc::Rc;
 //! use std::sync::Arc;
 //! use std::time::Duration;
+//!
 //! use fiftyone_caching::cloudflare::{self, DateClock, KvStore, WaitUntil};
-//! use fiftyone_caching::{EncodedStore, LoadingCache, Utf8};
+//! use fiftyone_caching::{EncodedStore, Loaded, LoadingCache, SpawnedLocal, Utf8, ValueLoader};
+//! use worker::{Context, Env, Request, Response, Result};
 //!
-//! #[event(fetch)]
-//! async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
-//!     cloudflare::with_context(&ctx, async {
-//!         let store = EncodedStore::builder(KvStore::from(env.kv("CACHE")?), Utf8)
-//!             .clock(Arc::new(DateClock))
-//!             .build();
-//!         let cache = LoadingCache::builder(store, loader)
-//!             .time_to_live(Duration::from_secs(3600))
-//!             .clock(Arc::new(DateClock))
-//!             .local_spawner(WaitUntil)
-//!             .build();
-//!         Response::ok(cache.get(&key).await?)
-//!     })
-//!     .await
+//! /// Where a value comes from when no store holds it.
+//! struct Origin;
+//!
+//! impl ValueLoader<String, String> for Origin {
+//!     type Error = String;
+//!
+//!     async fn load(&self, key: &String) -> std::result::Result<Loaded<String>, String> {
+//!         Ok(Loaded::new(format!("value of {key}")))
+//!     }
 //! }
-//! ```
 //!
-//! A real Worker keeps the cache in a `thread_local!` or a `OnceCell` so the
-//! requests an isolate serves share it.
+//! type Cache =
+//!     LoadingCache<String, String, EncodedStore<KvStore, Utf8>, Origin, SpawnedLocal<WaitUntil>>;
+//!
+//! thread_local! {
+//!     // One cache for every request the isolate serves.
+//!     static CACHE: OnceCell<Rc<Cache>> = const { OnceCell::new() };
+//! }
+//!
+//! fn cache(env: &Env) -> Result<Rc<Cache>> {
+//!     if let Some(cache) = CACHE.with(|cache| cache.get().cloned()) {
+//!         return Ok(cache);
+//!     }
+//!     let store = EncodedStore::builder(KvStore::from(env.kv("CACHE")?), Utf8)
+//!         .clock(Arc::new(DateClock))
+//!         .build();
+//!     let cache = LoadingCache::builder(store, Origin)
+//!         .time_to_live(Duration::from_secs(3600))
+//!         .clock(Arc::new(DateClock))
+//!         .local_spawner(WaitUntil)
+//!         .build();
+//!     Ok(CACHE.with(|shared| Rc::clone(shared.get_or_init(|| Rc::new(cache)))))
+//! }
+//!
+//! /// The Worker's fetch handler, which a Worker marks `#[event(fetch)]`.
+//! async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
+//!     let cache = cache(&env)?;
+//!     let value = cloudflare::with_context(&ctx, cache.get(&req.path())).await;
+//!     Response::ok(value.unwrap_or_else(|error| error))
+//! }
+//! # drop(fetch);
+//! ```
 
 use std::cell::{Cell, RefCell};
 use std::future::Future;

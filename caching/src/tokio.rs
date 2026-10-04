@@ -22,12 +22,15 @@
 
 //! A spawner for native hosts on tokio, turned on by the `tokio` feature.
 //!
-//! ```ignore
-//! use fiftyone_caching::{tokio::LocalPool, LoadingCache};
+//! ```
+//! use fiftyone_caching::{from_fn, tokio::LocalPool, LoadingCache, LruStore};
 //!
+//! let store: LruStore<u32, String> = LruStore::builder().build();
+//! let loader = from_fn(|key: u32| async move { Ok::<_, String>(format!("value of {key}")) });
 //! let cache = LoadingCache::builder(store, loader)
 //!     .spawner(LocalPool::new(4))
 //!     .build();
+//! # drop(cache);
 //! ```
 
 use ::tokio_util::task::LocalPoolHandle;
