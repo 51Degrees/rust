@@ -26,6 +26,9 @@ cloudflare = ["dep:worker"]
 # A store over Spin's key-value store, in the spin module, for wasm32-wasip2
 # on Spin 4. The SDK is only a dependency there.
 spin = ["dep:spin-sdk"]
+# A spawner that runs loads on a tokio-util local pool, in the tokio module,
+# for native hosts.
+tokio = ["dep:tokio-util"]
 
 [dependencies]
 fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core", optional = true }
@@ -33,9 +36,11 @@ fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core", optiona
 # and popping from the front gives least-recently-used eviction per shard.
 hashlink = "0.10"
 
-# Native builds seed ahash at run time from the operating system.
+# Native builds seed ahash at run time from the operating system. The tokio
+# feature's local pool needs threads, so it is native only.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 ahash.workspace = true
+tokio-util = { version = "0.7", optional = true, features = ["rt"] }
 
 # WebAssembly builds seed ahash when the crate is compiled, so getrandom, which
 # does not build for wasm32-unknown-unknown without a JavaScript backend, never
@@ -57,9 +62,12 @@ worker = { version = "0.8", optional = true }
 spin-sdk = { version = "7", optional = true, default-features = false, features = ["key-value"] }
 
 # The multi-threaded spawner test runs loads on a tokio runtime, which needs
-# threads, so it is a native-only test dependency.
+# threads, so it is a native-only test dependency. The crate depends on
+# itself with the tokio feature so its native tests cover the local pool
+# spawner. Default features stay as the command line sets them.
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread"] }
+fiftyone-caching = { path = ".", default-features = false, features = ["tokio"] }
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the

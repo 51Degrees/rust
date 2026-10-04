@@ -224,6 +224,8 @@ mod cloudflare;
 pub mod fastly;
 #[cfg(all(feature = "spin", target_os = "wasi", target_env = "p2"))]
 pub mod spin;
+#[cfg(all(feature = "tokio", not(target_family = "wasm")))]
+pub mod tokio;
 // The Fastly store's own logic is tested on every target, without the SDK.
 #[cfg(all(
     test,
