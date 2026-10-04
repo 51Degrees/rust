@@ -55,7 +55,15 @@
 //!   [`fiftyone_pipeline_core::DataKey`]. An engine hands it a flow data and an
 //!   [`fiftyone_pipeline_core::EvidenceKeyFilter`]; it derives a deterministic,
 //!   case-insensitive key from the relevant evidence, so equivalent requests
-//!   share an entry.
+//!   share an entry. It comes with the `pipeline` feature, on by default.
+//!
+//! ## WebAssembly
+//!
+//! The crate builds for `wasm32-wasip1`, and for `wasm32-unknown-unknown` with
+//! default features off. The `pipeline` feature is the only part that needs
+//! `fiftyone-pipeline-core`. On WebAssembly `ahash` is seeded when the crate is
+//! compiled rather than at run time, because `wasm32-unknown-unknown` has no
+//! source of randomness.
 //!
 //! ## A minimal cache
 //!
@@ -72,10 +80,12 @@
 
 mod cache;
 mod config;
+#[cfg(feature = "pipeline")]
 mod data_keyed;
 mod lru;
 
 pub use cache::{Cache, PutCache};
 pub use config::{default_concurrency, CacheBuilder, DEFAULT_SIZE};
+#[cfg(feature = "pipeline")]
 pub use data_keyed::DataKeyedCache;
 pub use lru::LruCache;
