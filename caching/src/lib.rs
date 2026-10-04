@@ -57,11 +57,19 @@
 //! - [`CacheBuilder`] applies the two tunables from the specification: the
 //!   total `size` (default 1000) and the `concurrency`, the number of shards
 //!   (default the CPU count).
-//! - [`DataKeyedCache`] wraps an [`LruCache`] keyed by
-//!   [`fiftyone_pipeline_core::DataKey`]. An engine hands it a flow data and an
-//!   [`fiftyone_pipeline_core::EvidenceKeyFilter`]; it derives a deterministic,
-//!   case-insensitive key from the relevant evidence, so equivalent requests
-//!   share an entry. It comes with the `pipeline` feature, on by default.
+#![cfg_attr(
+    feature = "pipeline",
+    doc = "- [`DataKeyedCache`] wraps an [`LruCache`] keyed by
+  [`fiftyone_pipeline_core::DataKey`]. An engine hands it a flow data and an
+  [`fiftyone_pipeline_core::EvidenceKeyFilter`]; it derives a deterministic,
+  case-insensitive key from the relevant evidence, so equivalent requests
+  share an entry. It comes with the `pipeline` feature, on by default."
+)]
+#![cfg_attr(
+    not(feature = "pipeline"),
+    doc = "- `DataKeyedCache` keys an [`LruCache`] by a flow data's evidence. It
+  comes with the `pipeline` feature, which this build leaves out."
+)]
 //!
 //! ## Loading cache
 //!
@@ -204,6 +212,14 @@ mod data_keyed;
 mod loading;
 mod lru;
 
+#[cfg(all(feature = "cloudflare", target_arch = "wasm32", target_os = "unknown"))]
+pub mod cloudflare;
+// The Cloudflare store's own logic is tested on every target, without the SDK.
+#[cfg(all(
+    test,
+    not(all(feature = "cloudflare", target_arch = "wasm32", target_os = "unknown"))
+))]
+mod cloudflare;
 #[cfg(all(feature = "fastly", target_os = "wasi", target_env = "p1"))]
 pub mod fastly;
 // The Fastly store's own logic is tested on every target, without the SDK.

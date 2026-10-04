@@ -18,7 +18,9 @@ name: Caching on WebAssembly
 #
 # Each host feature has a job of its own on the target its platform runs.
 # The fastly feature's tests run on Viceroy, Fastly's local Compute runtime,
-# which provides the KV store and core cache the Fastly stores use.
+# which provides the KV store and core cache the Fastly stores use. The
+# cloudflare feature is linted and documented here, and the logic its stores
+# and spawner share with no SDK is tested in the jobs above.
 #
 # The crate needs neither the C/C++ sources nor the submodules, and this
 # workflow reads no secrets.
@@ -141,3 +143,27 @@ jobs:
         env:
           CARGO_TARGET_WASM32_WASIP1_RUNNER: viceroy run -C ${{ github.workspace }}/caching/tests/fastly.toml
         run: cargo test -p fiftyone-caching --target wasm32-wasip1 --features fastly
+
+  cloudflare:
+    name: caching cloudflare (wasm32-unknown-unknown)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain with wasm target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: caching-cloudflare
+
+      - name: cargo clippy (wasm32-unknown-unknown, cloudflare)
+        run: cargo clippy -p fiftyone-caching --no-default-features --features cloudflare --all-targets --target wasm32-unknown-unknown -- -D warnings
+
+      - name: cargo doc (wasm32-unknown-unknown, cloudflare)
+        run: cargo doc -p fiftyone-caching --no-deps --no-default-features --features cloudflare --target wasm32-unknown-unknown

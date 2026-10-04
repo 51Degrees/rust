@@ -18,6 +18,11 @@ pipeline = ["dep:fiftyone-pipeline-core"]
 # Stores over the Fastly KV store and core cache, in the fastly module, for
 # wasm32-wasip1 on Fastly Compute. The SDK is only a dependency there.
 fastly = ["dep:fastly"]
+# Stores over Workers KV and the Cache API, a spawner that keeps a load
+# running with the request's wait_until, and a clock, in the cloudflare
+# module, for wasm32-unknown-unknown on Cloudflare Workers. Use it with
+# default features off, because the pipeline feature does not build there.
+cloudflare = ["dep:worker"]
 
 [dependencies]
 fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core", optional = true }
@@ -38,6 +43,10 @@ ahash = { version = "0.8", default-features = false, features = ["std", "compile
 # The Fastly Compute SDK, which builds for wasm32-wasip1 only.
 [target.'cfg(all(target_os = "wasi", target_env = "p1"))'.dependencies]
 fastly = { version = "0.13", optional = true }
+
+# The Cloudflare Workers SDK, which builds for wasm32-unknown-unknown only.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+worker = { version = "0.8", optional = true }
 
 # The multi-threaded spawner test runs loads on a tokio runtime, which needs
 # threads, so it is a native-only test dependency.
