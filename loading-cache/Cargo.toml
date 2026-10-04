@@ -1,0 +1,19 @@
+[package]
+name = "fiftyone-loading-cache"
+version = "4.5.2"
+description = "A loading cache that collapses concurrent loads of a key into one, over pluggable stores, for native and WebAssembly hosts."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# An insertion-ordered hash map. Moving an entry to the back on use and
+# popping from the front gives least-recently-used eviction in MemoryStore.
+hashlink = "0.10"
+
+[package.metadata.docs.rs]
+# Build the documentation on docs.rs with every feature enabled.
+all-features = true

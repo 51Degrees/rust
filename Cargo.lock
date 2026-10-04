@@ -676,6 +676,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fiftyone-loading-cache"
+version = "4.5.2"
+dependencies = [
+ "hashlink",
+]
+
+[[package]]
 name = "fiftyone-native"
 version = "4.5.2"
 dependencies = [
