@@ -138,6 +138,13 @@ where
     /// cache's copy stops being usable. A cache above uses these times to
     /// keep its own copy no longer.
     pub async fn get_loaded(&self, key: &K) -> Result<Loaded<V>, L::Error> {
+        // A copy the store gives without waiting is served here, with no
+        // part in the key's load.
+        if let Some(entry) = self.inner.store.try_get(key).await {
+            if let Some(served) = self.inner.usable(entry) {
+                return Ok(served);
+            }
+        }
         loop {
             let outcome = match self.inner.flights.join_or_lead(key) {
                 Role::Wait(wait) => wait.await,
@@ -235,6 +242,21 @@ where
     S: Store<K, V>,
     L: ValueLoader<K, V>,
 {
+    /// `entry` as it is served, when it is fresh. A copy due to be renewed
+    /// is left to the caller leading the key, so one caller writes the
+    /// renewal however many use the copy at once.
+    fn usable(&self, entry: Entry<V>) -> Option<Loaded<V>> {
+        // A copy with no end and no idle time is usable whatever the time,
+        // so the clock is read only for a copy that has one.
+        if entry.expires.is_some() || self.lifetimes.time_to_idle.is_some() {
+            let now = self.clock.now();
+            if !self.lifetimes.is_fresh(&entry, now) || self.lifetimes.renewal_due(&entry, now) {
+                return None;
+            }
+        }
+        Some(self.lifetimes.serve(entry))
+    }
+
     /// Looks for `key` in the store, for the caller leading it. A fresh
     /// entry is renewed if the use is due to renew it, then given to the
     /// waiting callers and returned.
@@ -533,16 +555,23 @@ impl Lifetimes {
         }
     }
 
-    /// The copy of `entry` renewed at `now`, when the use at `now` is due to
-    /// renew it and doing so lets it last longer.
-    fn renewal<V: Clone>(&self, entry: &Entry<V>, now: SystemTime) -> Option<Entry<V>> {
-        let idle_end = self.idle_end(entry)?;
+    /// Whether the use of `entry` at `now` is due to renew it, and renewing
+    /// it lets it last longer.
+    fn renewal_due<V>(&self, entry: &Entry<V>, now: SystemTime) -> bool {
+        let Some(idle_end) = self.idle_end(entry) else {
+            return false;
+        };
         let due = entry
             .renewed
             .checked_add(self.renewal_window)
             .is_some_and(|due| now >= due);
-        let extends = entry.expires.is_none_or(|end| end > idle_end);
-        (due && extends).then(|| Entry {
+        due && entry.expires.is_none_or(|end| end > idle_end)
+    }
+
+    /// The copy of `entry` renewed at `now`, when the use at `now` is due to
+    /// renew it.
+    fn renewal<V: Clone>(&self, entry: &Entry<V>, now: SystemTime) -> Option<Entry<V>> {
+        self.renewal_due(entry, now).then(|| Entry {
             renewed: now,
             ..entry.clone()
         })
@@ -551,17 +580,22 @@ impl Lifetimes {
     /// How `entry` is given to callers, including a cache above. Its end is
     /// brought forward to one renewal window before its idle end, so a cache
     /// above comes back for the value while this cache can still renew it.
-    fn served<V: Clone>(&self, entry: &Entry<V>) -> Loaded<V> {
+    fn serve<V>(&self, entry: Entry<V>) -> Loaded<V> {
         let renew_by = self.time_to_idle.and_then(|idle| {
             entry
                 .renewed
                 .checked_add(idle.saturating_sub(self.renewal_window))
         });
         Loaded {
-            value: entry.value.clone(),
+            value: entry.value,
             written: Some(entry.written),
             expires: earliest(entry.expires, renew_by),
         }
+    }
+
+    /// As [`serve`](Self::serve), for an entry the caller still needs.
+    fn served<V: Clone>(&self, entry: &Entry<V>) -> Loaded<V> {
+        self.serve(entry.clone())
     }
 
     /// How long the store should keep `entry`, written at `now`. `None`

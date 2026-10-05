@@ -96,16 +96,24 @@ where
     type Reservation = Infallible;
 
     async fn get(&self, key: &K) -> Lookup<V, Infallible> {
-        let now = self.clock.now();
-        // Reading marks the entry most recently used.
+        // Reading marks the entry most recently used. The clock is read
+        // only for an entry with a time to be dropped at.
         match self.cache.get(key) {
-            Some(kept) if kept.until.is_none_or(|until| now < until) => Lookup::Hit(kept.entry),
+            Some(kept) if kept.until.is_none_or(|until| self.clock.now() < until) => {
+                Lookup::Hit(kept.entry)
+            }
             Some(_) => {
                 self.cache.remove(key);
                 Lookup::Miss
             }
             None => Lookup::Miss,
         }
+    }
+
+    async fn try_get(&self, key: &K) -> Option<Entry<V>> {
+        // The cache checks the entry is still fresh, so the time it would
+        // be dropped at is left to `get`, and the clock is not read here.
+        self.cache.get(key).map(|kept| kept.entry)
     }
 
     async fn put(&self, key: &K, entry: &Entry<V>, keep_for: Option<Duration>) {

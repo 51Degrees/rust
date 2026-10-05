@@ -125,7 +125,9 @@
 //! A store keeps each entry for the time the cache tells it when writing,
 //! and may drop entries sooner to make room. A store may also make callers
 //! in other processes wait for one load, by answering
-//! [`Lookup::Reserved`].
+//! [`Lookup::Reserved`]. A store whose lookup costs little, as one in
+//! process memory does, also answers [`Store::try_get`], and a hit there is
+//! served by that lookup alone, with no part in the key's load.
 //!
 //! The cache does the rest.
 //!
