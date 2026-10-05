@@ -28,6 +28,10 @@
 //! woken with the result. If the hold is dropped before a result is
 //! published, the waiters are woken to try again, and one of them becomes
 //! the new leader.
+//!
+//! A slot leaves the map before it is given a result, so no caller ever
+//! joins a finished slot. A caller that comes later, a woken waiter asking
+//! again among them, starts new work rather than receiving an old result.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -121,31 +125,35 @@ impl<K: Hash + Eq, T> Lead<K, T> {
         }
     }
 
-    /// Gives `result` to every waiter now. Callers that arrive before the
-    /// leader is dropped also receive it, so a leader can finish slow writes
-    /// after publishing without anyone repeating the work.
+    /// Gives `result` to every caller waiting on the slot, as the last step
+    /// of the work. A caller that arrives from now on starts new work, so a
+    /// failure reaches only the callers that were waiting for it.
     pub(crate) fn publish(&self, result: T) {
+        self.leave();
         let mut state = lock(&self.slot.state);
         if let State::Working(wakers) = mem::replace(&mut *state, State::Done(result)) {
             drop(state);
             wakers.into_iter().flatten().for_each(Waker::wake);
         }
     }
+
+    /// Takes the slot out of the map, unless a new leader's slot has
+    /// replaced it. Done before waking anyone, so a woken waiter that asks
+    /// again starts new work rather than joining this slot.
+    fn leave(&self) {
+        let mut slots = lock(self.flights.slots.for_key(&self.key));
+        if slots
+            .get(&self.key)
+            .is_some_and(|slot| Arc::ptr_eq(slot, &self.slot))
+        {
+            slots.remove(&self.key);
+        }
+    }
 }
 
 impl<K: Hash + Eq, T> Drop for Lead<K, T> {
     fn drop(&mut self) {
-        // Leave the map first, so a woken waiter that asks again starts new
-        // work rather than joining this slot.
-        {
-            let mut slots = lock(self.flights.slots.for_key(&self.key));
-            if slots
-                .get(&self.key)
-                .is_some_and(|slot| Arc::ptr_eq(slot, &self.slot))
-            {
-                slots.remove(&self.key);
-            }
-        }
+        self.leave();
         let mut state = lock(&self.slot.state);
         let State::Working(wakers) = &mut *state else {
             return;

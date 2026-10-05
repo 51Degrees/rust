@@ -30,7 +30,7 @@ mod common;
 use std::future::{poll_fn, Future};
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
@@ -201,4 +201,65 @@ fn the_cache_and_its_futures_can_cross_threads() {
     sync(&cache);
     send(&cache.get(&1));
     send(&cache.get_loaded(&1));
+}
+
+/// A caller on another thread that asks just as a failure lands starts a
+/// new load rather than receiving the failure. The waker keeps the leader
+/// inside its publication until that caller has its answer, so the timing a
+/// busy runtime only sometimes hits is hit every time.
+#[test]
+fn a_thread_asking_as_a_failure_lands_loads_again() {
+    type Cache = LoadingCache<u32, String, LruStore<u32, String>, Source>;
+
+    struct AskFromAnotherThread {
+        cache: Arc<Cache>,
+        answer: Mutex<Option<Result<String, String>>>,
+    }
+
+    impl Wake for AskFromAnotherThread {
+        fn wake(self: Arc<Self>) {
+            let answer = thread::scope(|scope| {
+                scope
+                    .spawn(|| block_on_parking(self.cache.get(&1)))
+                    .join()
+                    .unwrap()
+            });
+            *self.answer.lock().unwrap() = Some(answer);
+        }
+    }
+
+    let clock = TestClock::new();
+    let source = Source::gated();
+    source.fail_first(1);
+    let cache: Arc<Cache> = Arc::new(
+        LoadingCache::builder(lru(&clock, 100), source.clone())
+            .clock(clock.shared())
+            .build(),
+    );
+    let ask = Arc::new(AskFromAnotherThread {
+        cache: Arc::clone(&cache),
+        answer: Mutex::new(None),
+    });
+    let asking = Waker::from(Arc::clone(&ask));
+    let mut quiet = Context::from_waker(Waker::noop());
+    let mut leader = pin!(cache.get(&1));
+    let mut waiter = pin!(cache.get(&1));
+    assert!(leader.as_mut().poll(&mut quiet).is_pending());
+    assert!(waiter
+        .as_mut()
+        .poll(&mut Context::from_waker(&asking))
+        .is_pending());
+
+    source.gate.open();
+    let failed = Err("load 1 of 1 failed".to_owned());
+    assert_eq!(
+        leader.as_mut().poll(&mut quiet),
+        Poll::Ready(failed.clone())
+    );
+    assert_eq!(
+        ask.answer.lock().unwrap().take(),
+        Some(Ok("1 from load 2".to_owned()))
+    );
+    assert_eq!(waiter.as_mut().poll(&mut quiet), Poll::Ready(failed));
+    assert_eq!(source.loads(), 2);
 }

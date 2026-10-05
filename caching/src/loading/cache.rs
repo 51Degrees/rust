@@ -211,8 +211,7 @@ where
         self.lead.wait()
     }
 
-    /// Does the load. Waiting callers get its result as soon as there is
-    /// one.
+    /// Does the load and gives its result to the waiting callers.
     pub(crate) async fn run(self) -> Result<Loaded<V>, L::Error> {
         let Job {
             inner,
@@ -237,8 +236,8 @@ where
     L: ValueLoader<K, V>,
 {
     /// Looks for `key` in the store, for the caller leading it. A fresh
-    /// entry is given to the waiting callers, renewed if the use is due to
-    /// renew it, and returned.
+    /// entry is renewed if the use is due to renew it, then given to the
+    /// waiting callers and returned.
     async fn look(
         &self,
         key: &K,
@@ -251,10 +250,10 @@ where
             Lookup::Hit(entry) if self.lifetimes.is_fresh(&entry, now) => {
                 let renewed = self.lifetimes.renewal(&entry, now);
                 let served = self.lifetimes.served(renewed.as_ref().unwrap_or(&entry));
-                lead.publish(Ok(served.clone()));
                 if let Some(renewed) = renewed {
                     self.write(key, None, &renewed, now).await;
                 }
+                lead.publish(Ok(served.clone()));
                 Found::Fresh(served)
             }
             Lookup::Hit(_) | Lookup::Miss => Found::Missing(None),
@@ -262,8 +261,9 @@ where
         }
     }
 
-    /// Loads the value for `key`. It is given to the waiting callers as soon
-    /// as there is one, then written to the store.
+    /// Loads the value for `key`, writes it to the store, then gives it to
+    /// the waiting callers, so a caller that arrives after them finds it in
+    /// the store rather than loading it again.
     async fn load(
         &self,
         key: &K,
@@ -275,8 +275,8 @@ where
                 let now = self.clock.now();
                 let entry = self.lifetimes.copy(loaded, now);
                 let served = self.lifetimes.served(&entry);
-                lead.publish(Ok(served.clone()));
                 self.write(key, reservation, &entry, now).await;
+                lead.publish(Ok(served.clone()));
                 Ok(served)
             }
             Err(error) => {
