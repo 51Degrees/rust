@@ -118,7 +118,10 @@
 //! result, so a dropped caller neither stops a load nor starts another, as
 //! a .NET `Lazy<Task>` does. A hit is still served by the caller, with no
 //! task. With a spawner the cache's types must be `'static`, and `Send` and
-//! `Sync` too for a spawner on any thread.
+//! `Sync` too for a spawner on any thread. A load lost with its task, by a
+//! panic in the load or by a spawner that drops the task, is asked for once
+//! more by each caller waiting on it, and a caller that loses a second load
+//! panics rather than ask without end.
 //!
 //! ### What a store does and what the cache does
 //!

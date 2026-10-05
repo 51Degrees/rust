@@ -53,8 +53,10 @@ pub type StartLoad = Box<dyn FnOnce() -> LoadTask + Send>;
 /// with `tokio::task::spawn_blocking` and `Handle::block_on`, or with
 /// `tokio_util::task::LocalPoolHandle::spawn_pinned`.
 ///
-/// Run every task to its end. A task dropped before it ends counts as a
-/// cancelled load, and a waiting caller asks again.
+/// Run every task to its end. A task dropped before it ends, by a panic in
+/// the load or by the spawner, is a lost load. Each caller waiting on it
+/// asks for the load once more, and a caller that loses a second load
+/// panics rather than ask without end.
 ///
 /// Any `Fn(StartLoad)` closure is a spawner.
 pub trait Spawn {
@@ -75,7 +77,7 @@ impl<F: Fn(StartLoad)> Spawn for F {
 ///
 /// A load started this way runs to its end even if every caller waiting on
 /// it is dropped. Run every task to its end. A task dropped before it ends
-/// counts as a cancelled load, and a waiting caller asks again.
+/// is a lost load, as for a [`Spawn`].
 ///
 /// Any `Fn(LoadTask)` closure is a local spawner.
 pub trait SpawnLocal {
@@ -159,6 +161,7 @@ where
         // Waiting before the task starts means a quick task cannot finish
         // unseen.
         let wait = job.wait();
+        let job = job.for_task();
         self.0
             .spawn(Box::new(move || -> LoadTask { Box::pin(job.finish()) }));
         wait
@@ -180,7 +183,7 @@ where
         job: Job<K, V, S, L>,
     ) -> impl Future<Output = Outcome<Result<Loaded<V>, L::Error>>> {
         let wait = job.wait();
-        self.0.spawn_local(Box::pin(job.finish()));
+        self.0.spawn_local(Box::pin(job.for_task().finish()));
         wait
     }
 }

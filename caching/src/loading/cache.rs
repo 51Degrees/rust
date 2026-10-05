@@ -22,11 +22,10 @@
 
 //! The loading cache.
 
-use std::future::{poll_fn, Future};
+use std::future::Future;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::task::Poll;
 use std::time::{Duration, SystemTime};
 
 use super::clock::{self, Clock};
@@ -130,6 +129,11 @@ where
     R: LoadRunner<K, V, S, L>,
 {
     /// The value for `key`, from the store or loaded.
+    ///
+    /// # Panics
+    ///
+    /// With a spawner, if two loads this caller waits on are lost with their
+    /// tasks, as [`get_loaded`](Self::get_loaded) describes.
     pub async fn get(&self, key: &K) -> Result<V, L::Error> {
         self.get_loaded(key).await.map(|loaded| loaded.value)
     }
@@ -137,6 +141,14 @@ where
     /// The value for `key` with the time it was written and the time this
     /// cache's copy stops being usable. A cache above uses these times to
     /// keep its own copy no longer.
+    ///
+    /// # Panics
+    ///
+    /// With a spawner, if two loads this caller waits on are lost with their
+    /// tasks, each by a panic in the load or by the spawner dropping the
+    /// task. A load lost once is asked for once more. A second loss is taken
+    /// to mean every load would be lost, so the caller panics rather than
+    /// ask without end.
     pub async fn get_loaded(&self, key: &K) -> Result<Loaded<V>, L::Error> {
         // A copy the store gives without waiting is served here, with no
         // part in the key's load.
@@ -145,6 +157,7 @@ where
                 return Ok(served);
             }
         }
+        let mut lost = false;
         loop {
             let outcome = match self.inner.flights.join_or_lead(key) {
                 Role::Wait(wait) => wait.await,
@@ -165,10 +178,19 @@ where
             };
             match outcome {
                 Outcome::Done(result) => return result,
-                // The load was dropped before it finished. Other work runs
-                // before asking again, so a spawner that drops tasks unrun,
-                // as a runtime shutting down does, cannot hold the thread.
-                Outcome::Abandoned => yield_now().await,
+                // The caller leading the key was dropped, so this one asks
+                // again and may lead. Each time is one caller fewer, so the
+                // asking ends.
+                Outcome::Abandoned => {}
+                // The task doing the load was dropped. A task can be dropped
+                // by chance, as when its thread is stopping, so the load is
+                // asked for once more. A second loss is more likely a load
+                // that panics or a spawner that runs nothing, which would
+                // be lost every time.
+                Outcome::Lost => {
+                    assert!(!lost, "{LOST_TWICE}");
+                    lost = true;
+                }
             }
         }
     }
@@ -183,6 +205,10 @@ where
         &self.inner.store
     }
 }
+
+/// What a caller panics with when it has lost two loads.
+const LOST_TWICE: &str =
+    "a load was lost twice, by a panic in it or by a spawner dropping its task";
 
 /// What the store held for a key a caller is leading.
 enum Found<V, R> {
@@ -216,6 +242,13 @@ where
     /// A wait on this load's result.
     pub(crate) fn wait(&self) -> Wait<Result<Loaded<V>, L::Error>> {
         self.lead.wait()
+    }
+
+    /// This load as a task's, ready to be given to a spawner. Dropped from
+    /// here on without a result, it counts as lost.
+    pub(crate) fn for_task(mut self) -> Self {
+        self.lead.hand_to_task();
+        self
     }
 
     /// Does the load and gives its result to the waiting callers.
@@ -328,21 +361,6 @@ where
             None => self.store.put(key, entry, keep_for).await,
         }
     }
-}
-
-/// Lets other work run once, by asking to be polled again.
-async fn yield_now() {
-    let mut yielded = false;
-    poll_fn(|cx| {
-        if yielded {
-            Poll::Ready(())
-        } else {
-            yielded = true;
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        }
-    })
-    .await
 }
 
 impl<K, V, S, L, R> ValueLoader<K, V> for LoadingCache<K, V, S, L, R>
