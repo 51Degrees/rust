@@ -28,7 +28,7 @@ creator = []
 [dependencies]
 # These are the dependencies of the OWID library, which is compiled into this
 # crate as the private module `owid` from the owid-rust submodule
-# (https://github.com/51Degrees/owid-rust, see ci/copy-owid-source.ps1), so
+# (https://github.com/SWAN-community/owid-rust, see ci/copy-owid-source.ps1), so
 # that no OWID crate has to exist on any registry. The library's `fetch`
 # (ureq) and `endpoints` (serde) features are not compiled in, so nothing
 # here reaches the network and the crate still builds for wasm32-wasip1.

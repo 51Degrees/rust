@@ -297,7 +297,6 @@
 //! This crate does not depend on an `owid` crate from crates.io or from git.
 //! The OWID library is compiled into `fodid` as a private module from the
 //! `owid-rust` submodule of the repository,
-//! <https://github.com/51Degrees/owid-rust>, a fork that follows
 //! <https://github.com/SWAN-community/owid-rust>. The script
 //! `ci/copy-owid-source.ps1` copies the source into `fodid/src/owid` before
 //! every build, together with a `NOTICE` naming the exact commit the copy
@@ -322,12 +321,12 @@ pub use error::{Error, Result};
 pub use fodid::{FodId, IdType, Usage};
 
 // The OWID library, compiled into this crate as a private module. The source
-// is copied from the owid-rust submodule (https://github.com/51Degrees/owid-rust)
-// into src/owid by ci/copy-owid-source.ps1 before a build, so that no OWID
-// crate has to exist on any registry for this crate to build or be
-// published. The copy is ignored by git, so a checkout that has not run the
-// script fails here with "file not found for module `owid`", and the fix is
-// to run the script.
+// is copied into src/owid from the owid-rust submodule
+// (https://github.com/SWAN-community/owid-rust) by ci/copy-owid-source.ps1
+// before a build, so that no OWID crate has to exist on any registry for
+// this crate to build or be published. The copy is ignored by git, so a
+// checkout that has not run the script fails here with "file not found for
+// module `owid`", and the fix is to run the script.
 //
 // The module is compiled exactly as the library is written, so it carries
 // items this crate never calls, a file named owid.rs that becomes the module

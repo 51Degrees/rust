@@ -314,8 +314,7 @@ creator.sign_bytes(payload)?             creator.create(payload)?
 This crate does not depend on an `owid` crate from crates.io or from git. The
 OWID library is compiled into `fodid` as a private module from the
 `owid-rust` submodule of this repository,
-[51Degrees/owid-rust](https://github.com/51Degrees/owid-rust), a fork that
-follows [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust).
+[SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust).
 The script `ci/copy-owid-source.ps1` copies the source into `fodid/src/owid`
 before every build, together with a `NOTICE` naming the exact commit the copy
 came from and the library's own Apache 2.0 `LICENSE`, and the published crate
@@ -334,9 +333,8 @@ directory is ignored by git, and the script can be run again at any time.
 
 ## See also
 
-- [51Degrees/owid-rust](https://github.com/51Degrees/owid-rust) - the OWID
-  envelope library compiled into this crate, following
-  [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust).
+- [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust) -
+  the OWID envelope library compiled into this crate.
 - The [51Did inspector](https://51degrees.com/developers/51did-inspector?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=51did-inspector) for a
   visual breakdown of the same byte layout.
 
