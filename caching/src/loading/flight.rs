@@ -27,7 +27,9 @@
 //! a task that does. Callers that arrive meanwhile wait on the slot and are
 //! woken with the result. If the hold is dropped before a result is
 //! published, the waiters are woken to try again, and one of them becomes
-//! the new leader.
+//! the new leader. They are told whether a caller or a task was holding it,
+//! because a caller dropped is one fewer to take over, while a task dropped
+//! may be dropped every time it is started.
 //!
 //! A slot leaves the map before it is given a result, so no caller ever
 //! joins a finished slot. A caller that comes later, a woken waiter asking
@@ -59,8 +61,10 @@ enum State<T> {
     Working(Vec<Option<Waker>>),
     /// The leader's result, given to every waiter.
     Done(T),
-    /// The leader was dropped before it had a result.
+    /// The caller leading was dropped before it had a result.
     Abandoned,
+    /// The task doing the work was dropped before it had a result.
+    Lost,
 }
 
 /// What a caller does for a key.
@@ -75,8 +79,11 @@ pub(crate) enum Role<K: Hash + Eq, T> {
 pub enum Outcome<T> {
     /// The leader's result.
     Done(T),
-    /// The leader was dropped, so ask again.
+    /// The caller leading was dropped, so ask again.
     Abandoned,
+    /// The task doing the work was dropped, by a panic in it or by the
+    /// spawner that started it.
+    Lost,
 }
 
 impl<K: Hash + Eq + Clone, T: Clone> Flights<K, T> {
@@ -103,6 +110,7 @@ impl<K: Hash + Eq + Clone, T: Clone> Flights<K, T> {
             flights: Arc::clone(self),
             key: key.clone(),
             slot,
+            in_task: false,
         })
     }
 }
@@ -114,6 +122,8 @@ pub(crate) struct Lead<K: Hash + Eq, T> {
     flights: Arc<Flights<K, T>>,
     key: K,
     slot: Arc<Slot<T>>,
+    /// Whether a task holds this rather than a caller.
+    in_task: bool,
 }
 
 impl<K: Hash + Eq, T> Lead<K, T> {
@@ -123,6 +133,13 @@ impl<K: Hash + Eq, T> Lead<K, T> {
             slot: Arc::clone(&self.slot),
             index: None,
         }
+    }
+
+    /// Marks the hold as a task's, before it is given to a spawner. Dropped
+    /// from here on without a result, it tells the waiters the work was
+    /// lost, even if the spawner never starts the task.
+    pub(crate) fn hand_to_task(&mut self) {
+        self.in_task = true;
     }
 
     /// Gives `result` to every caller waiting on the slot, as the last step
@@ -159,7 +176,11 @@ impl<K: Hash + Eq, T> Drop for Lead<K, T> {
             return;
         };
         let wakers = mem::take(wakers);
-        *state = State::Abandoned;
+        *state = if self.in_task {
+            State::Lost
+        } else {
+            State::Abandoned
+        };
         drop(state);
         wakers.into_iter().flatten().for_each(Waker::wake);
     }
@@ -180,6 +201,7 @@ impl<T: Clone> Future for Wait<T> {
         match &mut *state {
             State::Done(result) => Poll::Ready(Outcome::Done(result.clone())),
             State::Abandoned => Poll::Ready(Outcome::Abandoned),
+            State::Lost => Poll::Ready(Outcome::Lost),
             State::Working(wakers) => {
                 match this.index {
                     Some(index) => match &mut wakers[index] {

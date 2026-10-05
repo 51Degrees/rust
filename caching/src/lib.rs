@@ -126,14 +126,19 @@
 //! result, so a dropped caller neither stops a load nor starts another, as
 //! a .NET `Lazy<Task>` does. A hit is still served by the caller, with no
 //! task. With a spawner the cache's types must be `'static`, and `Send` and
-//! `Sync` too for a spawner on any thread.
+//! `Sync` too for a spawner on any thread. A load lost with its task, by a
+//! panic in the load or by a spawner that drops the task, is asked for once
+//! more by each caller waiting on it, and a caller that loses a second load
+//! panics rather than ask without end.
 //!
 //! ### What a store does and what the cache does
 //!
 //! A store keeps each entry for the time the cache tells it when writing,
 //! and may drop entries sooner to make room. A store may also make callers
 //! in other processes wait for one load, by answering
-//! [`Lookup::Reserved`].
+//! [`Lookup::Reserved`]. A store whose lookup costs little, as one in
+//! process memory does, also answers [`Store::try_get`], and a hit there is
+//! served by that lookup alone, with no part in the key's load.
 //!
 //! The cache does the rest.
 //!

@@ -22,11 +22,10 @@
 
 //! The loading cache.
 
-use std::future::{poll_fn, Future};
+use std::future::Future;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::task::Poll;
 use std::time::{Duration, SystemTime};
 
 use super::clock::{self, Clock};
@@ -130,6 +129,11 @@ where
     R: LoadRunner<K, V, S, L>,
 {
     /// The value for `key`, from the store or loaded.
+    ///
+    /// # Panics
+    ///
+    /// With a spawner, if two loads this caller waits on are lost with their
+    /// tasks, as [`get_loaded`](Self::get_loaded) describes.
     pub async fn get(&self, key: &K) -> Result<V, L::Error> {
         self.get_loaded(key).await.map(|loaded| loaded.value)
     }
@@ -137,7 +141,23 @@ where
     /// The value for `key` with the time it was written and the time this
     /// cache's copy stops being usable. A cache above uses these times to
     /// keep its own copy no longer.
+    ///
+    /// # Panics
+    ///
+    /// With a spawner, if two loads this caller waits on are lost with their
+    /// tasks, each by a panic in the load or by the spawner dropping the
+    /// task. A load lost once is asked for once more. A second loss is taken
+    /// to mean every load would be lost, so the caller panics rather than
+    /// ask without end.
     pub async fn get_loaded(&self, key: &K) -> Result<Loaded<V>, L::Error> {
+        // A copy the store gives without waiting is served here, with no
+        // part in the key's load.
+        if let Some(entry) = self.inner.store.try_get(key).await {
+            if let Some(served) = self.inner.usable(entry) {
+                return Ok(served);
+            }
+        }
+        let mut lost = false;
         loop {
             let outcome = match self.inner.flights.join_or_lead(key) {
                 Role::Wait(wait) => wait.await,
@@ -158,10 +178,19 @@ where
             };
             match outcome {
                 Outcome::Done(result) => return result,
-                // The load was dropped before it finished. Other work runs
-                // before asking again, so a spawner that drops tasks unrun,
-                // as a runtime shutting down does, cannot hold the thread.
-                Outcome::Abandoned => yield_now().await,
+                // The caller leading the key was dropped, so this one asks
+                // again and may lead. Each time is one caller fewer, so the
+                // asking ends.
+                Outcome::Abandoned => {}
+                // The task doing the load was dropped. A task can be dropped
+                // by chance, as when its thread is stopping, so the load is
+                // asked for once more. A second loss is more likely a load
+                // that panics or a spawner that runs nothing, which would
+                // be lost every time.
+                Outcome::Lost => {
+                    assert!(!lost, "{LOST_TWICE}");
+                    lost = true;
+                }
             }
         }
     }
@@ -176,6 +205,10 @@ where
         &self.inner.store
     }
 }
+
+/// What a caller panics with when it has lost two loads.
+const LOST_TWICE: &str =
+    "a load was lost twice, by a panic in it or by a spawner dropping its task";
 
 /// What the store held for a key a caller is leading.
 enum Found<V, R> {
@@ -211,6 +244,13 @@ where
         self.lead.wait()
     }
 
+    /// This load as a task's, ready to be given to a spawner. Dropped from
+    /// here on without a result, it counts as lost.
+    pub(crate) fn for_task(mut self) -> Self {
+        self.lead.hand_to_task();
+        self
+    }
+
     /// Does the load and gives its result to the waiting callers.
     pub(crate) async fn run(self) -> Result<Loaded<V>, L::Error> {
         let Job {
@@ -235,6 +275,21 @@ where
     S: Store<K, V>,
     L: ValueLoader<K, V>,
 {
+    /// `entry` as it is served, when it is fresh. A copy due to be renewed
+    /// is left to the caller leading the key, so one caller writes the
+    /// renewal however many use the copy at once.
+    fn usable(&self, entry: Entry<V>) -> Option<Loaded<V>> {
+        // A copy with no end and no idle time is usable whatever the time,
+        // so the clock is read only for a copy that has one.
+        if entry.expires.is_some() || self.lifetimes.time_to_idle.is_some() {
+            let now = self.clock.now();
+            if !self.lifetimes.is_fresh(&entry, now) || self.lifetimes.renewal_due(&entry, now) {
+                return None;
+            }
+        }
+        Some(self.lifetimes.serve(entry))
+    }
+
     /// Looks for `key` in the store, for the caller leading it. A fresh
     /// entry is renewed if the use is due to renew it, then given to the
     /// waiting callers and returned.
@@ -306,21 +361,6 @@ where
             None => self.store.put(key, entry, keep_for).await,
         }
     }
-}
-
-/// Lets other work run once, by asking to be polled again.
-async fn yield_now() {
-    let mut yielded = false;
-    poll_fn(|cx| {
-        if yielded {
-            Poll::Ready(())
-        } else {
-            yielded = true;
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        }
-    })
-    .await
 }
 
 impl<K, V, S, L, R> ValueLoader<K, V> for LoadingCache<K, V, S, L, R>
@@ -533,16 +573,23 @@ impl Lifetimes {
         }
     }
 
-    /// The copy of `entry` renewed at `now`, when the use at `now` is due to
-    /// renew it and doing so lets it last longer.
-    fn renewal<V: Clone>(&self, entry: &Entry<V>, now: SystemTime) -> Option<Entry<V>> {
-        let idle_end = self.idle_end(entry)?;
+    /// Whether the use of `entry` at `now` is due to renew it, and renewing
+    /// it lets it last longer.
+    fn renewal_due<V>(&self, entry: &Entry<V>, now: SystemTime) -> bool {
+        let Some(idle_end) = self.idle_end(entry) else {
+            return false;
+        };
         let due = entry
             .renewed
             .checked_add(self.renewal_window)
             .is_some_and(|due| now >= due);
-        let extends = entry.expires.is_none_or(|end| end > idle_end);
-        (due && extends).then(|| Entry {
+        due && entry.expires.is_none_or(|end| end > idle_end)
+    }
+
+    /// The copy of `entry` renewed at `now`, when the use at `now` is due to
+    /// renew it.
+    fn renewal<V: Clone>(&self, entry: &Entry<V>, now: SystemTime) -> Option<Entry<V>> {
+        self.renewal_due(entry, now).then(|| Entry {
             renewed: now,
             ..entry.clone()
         })
@@ -551,17 +598,22 @@ impl Lifetimes {
     /// How `entry` is given to callers, including a cache above. Its end is
     /// brought forward to one renewal window before its idle end, so a cache
     /// above comes back for the value while this cache can still renew it.
-    fn served<V: Clone>(&self, entry: &Entry<V>) -> Loaded<V> {
+    fn serve<V>(&self, entry: Entry<V>) -> Loaded<V> {
         let renew_by = self.time_to_idle.and_then(|idle| {
             entry
                 .renewed
                 .checked_add(idle.saturating_sub(self.renewal_window))
         });
         Loaded {
-            value: entry.value.clone(),
+            value: entry.value,
             written: Some(entry.written),
             expires: earliest(entry.expires, renew_by),
         }
+    }
+
+    /// As [`serve`](Self::serve), for an entry the caller still needs.
+    fn served<V: Clone>(&self, entry: &Entry<V>) -> Loaded<V> {
+        self.serve(entry.clone())
     }
 
     /// How long the store should keep `entry`, written at `now`. `None`

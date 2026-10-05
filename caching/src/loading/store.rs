@@ -70,6 +70,22 @@ pub trait Store<K, V> {
     /// Looks up the entry for `key`.
     fn get(&self, key: &K) -> impl Future<Output = Lookup<V, Self::Reservation>>;
 
+    /// The entry for `key` if the store can give it without waiting and
+    /// without reserving the key's load. `None` when it holds no entry, or
+    /// cannot tell without waiting.
+    ///
+    /// The cache asks this before a caller joins the key's load, and serves
+    /// a fresh entry from it alone. It checks the entry is still fresh
+    /// itself, so the store may answer with one it was due to drop. Answer
+    /// it when a lookup costs little next to joining a load, as one in
+    /// process memory does. The default answers `None`, so the callers for
+    /// one key share one [`get`](Store::get), which suits a store whose
+    /// lookup crosses a network or may wait.
+    fn try_get(&self, key: &K) -> impl Future<Output = Option<Entry<V>>> {
+        let _ = key;
+        async { None }
+    }
+
     /// Writes `entry`, keeping it for `keep_for`, or until evicted when
     /// `None`.
     fn put(
@@ -102,6 +118,10 @@ impl<K, V, S: Store<K, V>> Store<K, V> for Arc<S> {
 
     fn get(&self, key: &K) -> impl Future<Output = Lookup<V, Self::Reservation>> {
         (**self).get(key)
+    }
+
+    fn try_get(&self, key: &K) -> impl Future<Output = Option<Entry<V>>> {
+        (**self).try_get(key)
     }
 
     fn put(

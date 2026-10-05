@@ -29,6 +29,8 @@ mod common;
 
 use std::future::Future;
 use std::pin::pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
@@ -36,7 +38,7 @@ use std::time::{Duration, Instant};
 
 use common::*;
 use fiftyone_caching::tokio::LocalPool;
-use fiftyone_caching::{LoadingCache, StartLoad};
+use fiftyone_caching::{Loaded, LoadingCache, Spawn, StartLoad, ValueLoader};
 use tokio::runtime::{Builder, Handle};
 
 /// Starts each load on one of the runtime's blocking threads and runs it
@@ -138,4 +140,57 @@ fn park_on<F: Future>(future: F) -> F::Output {
         // return before it is woken.
         thread::park_timeout(Duration::from_millis(50));
     }
+}
+
+/// A source whose every load panics, counting the loads.
+#[derive(Clone, Default)]
+struct Panics(Arc<AtomicUsize>);
+
+impl ValueLoader<u32, String> for Panics {
+    type Error = String;
+
+    async fn load(&self, key: &u32) -> Result<Loaded<String>, String> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        panic!("the load of {key} panicked")
+    }
+}
+
+#[test]
+fn a_load_that_panics_runs_twice_then_its_caller_panics() {
+    panicking_load_ends_its_caller(tokio_spawner);
+}
+
+#[test]
+fn the_local_pool_ends_a_caller_whose_load_panics() {
+    panicking_load_ends_its_caller(LocalPool::new(2));
+}
+
+/// Runs a load that panics on the spawner, and checks the caller ends by
+/// panicking once the load has been asked for twice.
+fn panicking_load_ends_its_caller(spawner: impl Spawn + Send + Sync + 'static) {
+    let runtime = Builder::new_multi_thread()
+        .worker_threads(2)
+        .build()
+        .unwrap();
+    let clock = TestClock::new();
+    let source = Panics::default();
+    let cache = Arc::new(
+        LoadingCache::builder(lru(&clock, 100), source.clone())
+            .clock(clock.shared())
+            .spawner(spawner)
+            .build(),
+    );
+
+    let (ended, end) = mpsc::channel();
+    runtime.spawn(async move {
+        let caller = tokio::spawn(async move { cache.get(&1).await });
+        let _ = ended.send(caller.await);
+    });
+
+    // The caller ends, where asking again each time would never end.
+    let caller = end
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the caller should end");
+    assert!(caller.unwrap_err().is_panic());
+    assert_eq!(source.0.load(Ordering::SeqCst), 2);
 }
