@@ -382,7 +382,7 @@ fn longer_self_hosted_creator_domain_is_accepted() {
     assert_eq!(fod_id.domain(), domain);
     assert_eq!(&canonical_hash(), fod_id.match_key());
     assert_eq!(
-        fod_id.verify_status_with_public_key(&fixture.public_pem, &[]),
+        fod_id.verify_status_with_public_key(&fixture.public_pem),
         SignatureStatus::Valid
     );
 }
@@ -748,11 +748,9 @@ fn fod_id_is_cryptographically_verifiable() {
     let fixture = Fixture::new();
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload())).unwrap();
 
-    assert!(fod_id
-        .verify_with_public_key(&fixture.public_pem, &[])
-        .unwrap());
+    assert!(fod_id.verify_with_public_key(&fixture.public_pem).unwrap());
     assert_eq!(
-        fod_id.verify_status_with_public_key(&fixture.public_pem, &[]),
+        fod_id.verify_status_with_public_key(&fixture.public_pem),
         SignatureStatus::Valid
     );
 }
@@ -776,12 +774,10 @@ fn a_cryptographically_invalid_51did_parses_and_then_verifies_as_invalid() {
     assert_ne!(fod_id.match_key(), &canonical_hash());
 
     assert_eq!(
-        fod_id.verify_status_with_public_key(&fixture.public_pem, &[]),
+        fod_id.verify_status_with_public_key(&fixture.public_pem),
         SignatureStatus::Invalid
     );
-    assert!(!fod_id
-        .verify_with_public_key(&fixture.public_pem, &[])
-        .unwrap());
+    assert!(!fod_id.verify_with_public_key(&fixture.public_pem).unwrap());
 }
 
 #[test]
@@ -791,7 +787,7 @@ fn a_51did_signed_by_another_key_verifies_as_invalid() {
     let fod_id = FodId::from_base64(&issuer.signed_owid_base64(canonical_payload())).unwrap();
 
     assert_eq!(
-        fod_id.verify_status_with_public_key(&someone_else.public_pem, &[]),
+        fod_id.verify_status_with_public_key(&someone_else.public_pem),
         SignatureStatus::Invalid
     );
 }
@@ -808,13 +804,13 @@ fn a_key_that_cannot_be_read_is_not_signature_invalid() {
     let fixture = Fixture::new();
     let fod_id = FodId::from_base64(&fixture.signed_owid_base64(canonical_payload())).unwrap();
 
-    let status = fod_id.verify_status_with_public_key("not a PEM", &[]);
+    let status = fod_id.verify_status_with_public_key("not a PEM");
     assert_eq!(status, SignatureStatus::InvalidKey);
     assert_ne!(status, SignatureStatus::Invalid);
     assert_ne!(SignatureStatus::KeyUnavailable, SignatureStatus::Invalid);
 
     // The Result form of the same check is an error, never Ok(false).
-    let result = fod_id.verify_with_public_key("not a PEM", &[]);
+    let result = fod_id.verify_with_public_key("not a PEM");
     assert!(result.is_err());
     // And that error, taken into this crate's error type through `?`, is
     // the exceptional variant rather than a read failure.

@@ -858,7 +858,7 @@ fn check_signature(fod_id: &FodId, keys: &[DidPublicKey], date: DateTime<Utc>) -
     }
     let mut unusable = false;
     for candidate in candidates {
-        match fod_id.verify_with_public_key(candidate.public_key_pem(), &[]) {
+        match fod_id.verify_with_public_key(candidate.public_key_pem()) {
             Ok(true) => return SignatureCheck::Verified,
             Ok(false) => {}
             Err(_) => unusable = true,

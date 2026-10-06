@@ -193,7 +193,7 @@ fn unpacks_global_identifier_raw_and_parsed() {
     // The created envelope verifies against its own public key, proving the
     // parsed value carries the full OWID envelope intact.
     assert!(fod_id
-        .verify_with_public_key(&public_pem, &[])
+        .verify_with_public_key(&public_pem)
         .expect("verification runs"));
 }
 
