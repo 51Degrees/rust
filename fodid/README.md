@@ -164,7 +164,7 @@ fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::
     let round_trip = fod_id.as_base64()?;
 
     // The second question, asked separately.
-    let genuine = fod_id.verify_status_with_public_key(public_pem, &[])
+    let genuine = fod_id.verify_status_with_public_key(public_pem)
         == SignatureStatus::Valid;
 
     let _ = (usage, indirect, id_type, license_id, match_key);
@@ -249,7 +249,7 @@ The OWID implementation this crate builds on was hardened so that an OWID
 reaches a caller only from a successful read or from a creator that signs it,
 and at the same time this crate stopped depending on an `owid` crate (see
 "Where the OWID code comes from" below). Callers who reached the envelope
-through this crate will find four changes.
+through this crate will find five changes.
 
 OWID types are named through `fodid` rather than through an `owid` crate,
 because there is no `owid` dependency to add any more. A test that signs an
@@ -297,6 +297,16 @@ and there is no unsigned state.
 ```text
 // Before                                // After
 creator.sign_bytes(payload)?             creator.create(payload)?
+```
+
+The functions that check a signature take the key alone, because a signature
+covers its own OWID and nothing else. They used to take a list of other OWIDs
+as well, and for a 51Did that list was always empty. A creator signs the same
+way, so `Creator::create_with_others` is gone.
+
+```text
+// Before                                // After
+fod_id.verify_with_public_key(pem, &[])  fod_id.verify_with_public_key(pem)
 ```
 
 ## Non goals

@@ -200,7 +200,7 @@
 //! let round_trip = fod_id.as_base64()?;
 //!
 //! // Verifying is the second question, asked of the parsed value.
-//! let status = fod_id.verify_status_with_public_key(public_pem, &[]);
+//! let status = fod_id.verify_status_with_public_key(public_pem);
 //! let genuine = status == SignatureStatus::Valid;
 //! # let _ = (usage, indirect, id_type, license_id, match_key);
 //! # let _ = (domain, round_trip, genuine);
@@ -226,7 +226,7 @@
 //!
 //! ## Migrating from the `owid` 1.0 crate surface
 //!
-//! Callers who reached the OWID envelope through this crate will find four
+//! Callers who reached the OWID envelope through this crate will find five
 //! changes after the hardening of the OWID implementation, the first being
 //! that this crate no longer depends on an `owid` crate at all (see "Where
 //! the OWID code comes from" below).
@@ -280,6 +280,16 @@
 //! creator.sign_bytes(payload)?             creator.create(payload)?
 //! ```
 //!
+//! The functions that check a signature take the key alone, because a
+//! signature covers its own OWID and nothing else. They used to take a list
+//! of other OWIDs as well, and for a 51Did that list was always empty. A
+//! creator signs the same way, so `Creator::create_with_others` is gone.
+//!
+//! ```text
+//! // Before                                // After
+//! fod_id.verify_with_public_key(pem, &[])  fod_id.verify_with_public_key(pem)
+//! ```
+//!
 //! ## Non goals
 //!
 //! - **Signature verification on construction.** Reading a [`FodId`] does not
@@ -330,16 +340,22 @@ pub use fodid::{FodId, IdType, Usage};
 //
 // The module is compiled exactly as the library is written, so it carries
 // items this crate never calls, a file named owid.rs that becomes the module
-// owid::owid, the `fetch` and `endpoints` feature gates this crate does not
-// declare (both stay off, so nothing in the module reaches the network, and
-// Cargo.toml names them as expected cfgs), and documentation links between
-// its own items, none of which are faults in this crate.
+// owid::owid, the `fetch`, `reqwest-fetch` and `endpoints` feature gates this
+// crate does not declare (all three stay off, so nothing in the module
+// reaches the network, and Cargo.toml names them as expected cfgs), and
+// documentation links between its own items, none of which are faults in
+// this crate.
+//
+// rustfmt skips the module. The copy lengthens every crate:: path to
+// crate::owid::, so rustfmt would break some lines differently from the
+// library's own formatting, and the copied files are not edited here.
 #[allow(
     dead_code,
     unused_imports,
     clippy::module_inception,
     rustdoc::private_intra_doc_links
 )]
+#[rustfmt::skip]
 mod owid;
 
 // Re-exported so callers can name every OWID type this crate's public

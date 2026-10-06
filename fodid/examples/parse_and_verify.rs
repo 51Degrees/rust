@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // SignatureStatus::Invalid would mean the identifier should be
     // distrusted; a key that cannot be read is reported as a key fault.
     let public_pem = crypto.public_key_pem()?;
-    let status = fod_id.verify_status_with_public_key(&public_pem, &[]);
+    let status = fod_id.verify_status_with_public_key(&public_pem);
     println!("signature : {status}");
     assert_eq!(status, SignatureStatus::Valid);
 
