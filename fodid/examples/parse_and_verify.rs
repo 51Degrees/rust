@@ -27,6 +27,28 @@
 
 use fodid::{Creator, Crypto, FodId, SignatureStatus};
 
+/// Where to go next, printed after the results.
+const FIND_OUT_MORE: &[(&str, &str)] = &[
+    (
+        "What a 51Did is and how it is used",
+        "https://51degrees.com/documentation/_identifiers_51_did.html?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=fodid-examples-parse_and_verify.rs&utm_term=find-out-more-51did",
+    ),
+    (
+        "The 51Did inspector, a visual breakdown of an identifier",
+        "https://51degrees.com/developers/51did-inspector?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=fodid-examples-parse_and_verify.rs&utm_term=find-out-more-51did-inspector",
+    ),
+    (
+        "The layout of a 51Did",
+        "https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md",
+    ),
+    (
+        "The OWID envelope a 51Did travels in",
+        "https://github.com/SWAN-community/owid/blob/main/explainer.md",
+    ),
+    ("51Degrees for Rust", "https://github.com/51Degrees/rust"),
+    ("OWID for Rust", "https://github.com/SWAN-community/owid-rust"),
+];
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The cloud holds an ECDSA P-256 key and signs every 51Did it issues.
     // Here we stand in for it with a freshly generated key pair.
@@ -75,6 +97,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let status = fod_id.verify_status_with_public_key(&public_pem, &[]);
     println!("signature : {status}");
     assert_eq!(status, SignatureStatus::Valid);
+
+    println!();
+    println!("Find out more");
+    println!("-------------");
+    for (label, url) in FIND_OUT_MORE {
+        println!("{label}");
+        println!("  {url}");
+    }
 
     Ok(())
 }
