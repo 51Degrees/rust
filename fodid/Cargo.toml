@@ -48,6 +48,13 @@ fodid = { path = ".", features = ["creator"] }
 ureq = "2"
 serde_json = "1"
 
+# An example is built by `cargo test` and not run. Marking this one as tested
+# makes `cargo test` run the test at the end of its file, which runs the
+# example.
+[[example]]
+name = "parse_and_verify"
+test = true
+
 [lints.rust]
 # The OWID module keeps the library's own feature gates, which this crate does
 # not declare and never turns on. Naming them here tells the compiler they are
