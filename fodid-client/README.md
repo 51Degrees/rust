@@ -282,7 +282,7 @@ The other 51Did clients this crate is a port of, and the engine repositories:
 - https://github.com/51Degrees/pipeline-node
 - https://github.com/51Degrees/pipeline-python
 - https://github.com/51Degrees/pipeline-php-did
-- https://github.com/51Degrees/owid-rust
+- https://github.com/SWAN-community/owid-rust
 
 On 51degrees.com:
 

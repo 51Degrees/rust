@@ -315,7 +315,7 @@ dotnet test --filter TestCategory=Contract
 
 The `fodid` crate compiles the OWID envelope library (the library a 51Did is
 built on) into itself from the `owid-rust` submodule
-(https://github.com/51Degrees/owid-rust), so no OWID crate has to exist on
+(https://github.com/SWAN-community/owid-rust), so no OWID crate has to exist on
 any registry. After cloning, run `git submodule update --init` and then
 `pwsh ./ci/copy-owid-source.ps1` (PowerShell 7, on any platform) to place the
 source under `fodid/src/owid`, which git ignores. Run the script again after
