@@ -22,12 +22,12 @@
 
 //! Helpers shared by the tests. A clock the test moves, executors that need
 //! no runtime, a gate a load waits on, a counting source, and stores that
-//! stand in for platform stores.
+//! stand in for platform stores, of entries and of bytes.
 
 // Each test file uses its own subset of these helpers.
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -36,7 +36,9 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, SystemTime};
 
-use fiftyone_caching::{Clock, Entry, Loaded, Lookup, LruStore, Store, ValueLoader};
+use fiftyone_caching::{
+    ByteLookup, ByteStore, Clock, Entry, ListKeys, Loaded, Lookup, LruStore, Store, ValueLoader,
+};
 
 /// A clock that moves only when the test moves it.
 #[derive(Clone)]
@@ -450,5 +452,155 @@ impl Store<u32, String> for WaitingStore {
 
     async fn remove(&self, key: &u32) {
         self.inner.remove(key).await
+    }
+}
+
+/// Stands in for a platform store of bytes. `DROPS` is what the store
+/// claims about dropping entries past their lifetime, which this stand-in
+/// never does itself, so a test sees what the adapter removes.
+#[derive(Default)]
+pub struct MemoryBytes<const DROPS: bool = true> {
+    items: Mutex<BTreeMap<String, Vec<u8>>>,
+    puts: Mutex<Vec<(String, Option<Duration>)>>,
+    removed: Mutex<Vec<String>>,
+}
+
+impl<const DROPS: bool> MemoryBytes<DROPS> {
+    pub fn new() -> Self {
+        MemoryBytes {
+            items: Mutex::default(),
+            puts: Mutex::default(),
+            removed: Mutex::default(),
+        }
+    }
+
+    /// The bytes held for `key`.
+    pub fn raw(&self, key: &str) -> Option<Vec<u8>> {
+        self.items.lock().unwrap().get(key).cloned()
+    }
+
+    /// Holds `bytes` for `key` without going through the store.
+    pub fn insert_raw(&self, key: &str, bytes: Vec<u8>) {
+        self.items.lock().unwrap().insert(key.to_string(), bytes);
+    }
+
+    /// The keys held, in order.
+    pub fn held(&self) -> Vec<String> {
+        self.items.lock().unwrap().keys().cloned().collect()
+    }
+
+    /// The writes made through the store since the last call, with the
+    /// lifetime each was given.
+    pub fn take_puts(&self) -> Vec<(String, Option<Duration>)> {
+        std::mem::take(&mut *self.puts.lock().unwrap())
+    }
+
+    /// The keys removed through the store.
+    pub fn removed(&self) -> Vec<String> {
+        self.removed.lock().unwrap().clone()
+    }
+}
+
+impl<const DROPS: bool> ByteStore for MemoryBytes<DROPS> {
+    type Reservation = Infallible;
+    const DROPS_EXPIRED: bool = DROPS;
+
+    async fn get(&self, key: &str) -> ByteLookup<Infallible> {
+        match self.raw(key) {
+            Some(bytes) => ByteLookup::Hit(bytes),
+            None => ByteLookup::Miss,
+        }
+    }
+
+    async fn put(&self, key: &str, bytes: Vec<u8>, keep_for: Option<Duration>) {
+        self.insert_raw(key, bytes);
+        self.puts.lock().unwrap().push((key.to_string(), keep_for));
+    }
+
+    async fn remove(&self, key: &str) {
+        self.items.lock().unwrap().remove(key);
+        self.removed.lock().unwrap().push(key.to_string());
+    }
+}
+
+impl<const DROPS: bool> ListKeys for MemoryBytes<DROPS> {
+    async fn keys(&self, prefix: &str) -> Option<Vec<String>> {
+        Some(
+            self.held()
+                .into_iter()
+                .filter(|key| key.starts_with(prefix))
+                .collect(),
+        )
+    }
+}
+
+/// Stands in for a platform store of bytes that reserves a missing key for
+/// the caller that should fill it, as a cache with request collapsing does.
+#[derive(Default)]
+pub struct ReservingBytes {
+    pub bytes: MemoryBytes,
+    released: Arc<AtomicUsize>,
+    fills: Mutex<Vec<(String, Option<Duration>)>>,
+}
+
+/// A reservation in a [`ReservingBytes`], which counts its release.
+pub struct BytesReservation {
+    key: String,
+    released: Arc<AtomicUsize>,
+}
+
+impl Drop for BytesReservation {
+    fn drop(&mut self) {
+        self.released.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl ReservingBytes {
+    /// How many reservations have been released, filled or not.
+    pub fn released(&self) -> usize {
+        self.released.load(Ordering::SeqCst)
+    }
+
+    /// The keys filled through a reservation, with the lifetime each was
+    /// given.
+    pub fn fills(&self) -> Vec<(String, Option<Duration>)> {
+        self.fills.lock().unwrap().clone()
+    }
+}
+
+impl ByteStore for ReservingBytes {
+    type Reservation = BytesReservation;
+
+    async fn get(&self, key: &str) -> ByteLookup<BytesReservation> {
+        match self.bytes.raw(key) {
+            Some(bytes) => ByteLookup::Hit(bytes),
+            None => ByteLookup::Reserved(BytesReservation {
+                key: key.to_string(),
+                released: Arc::clone(&self.released),
+            }),
+        }
+    }
+
+    async fn put(&self, key: &str, bytes: Vec<u8>, keep_for: Option<Duration>) {
+        self.bytes.put(key, bytes, keep_for).await
+    }
+
+    async fn fill(
+        &self,
+        key: &str,
+        reservation: BytesReservation,
+        bytes: Vec<u8>,
+        keep_for: Option<Duration>,
+    ) {
+        assert_eq!(
+            reservation.key, key,
+            "filled under the key it was reserved for"
+        );
+        self.fills.lock().unwrap().push((key.to_string(), keep_for));
+        self.bytes.put(key, bytes, keep_for).await;
+    }
+
+    async fn remove(&self, key: &str) {
+        self.bytes.remove(key).await
     }
 }

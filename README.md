@@ -28,7 +28,7 @@ pure-Rust core up to the runnable examples.
 | Crate | Responsibility |
 |-------|----------------|
 | [`fiftyone-pipeline-core`](pipeline-core) | FlowData, the FlowElement/Pipeline traits, immutable Evidence, ElementData, TypedKey, WeightedValue, errors and constants. |
-| [`fiftyone-caching`](caching) | Sharded-LRU cache trait and the default implementation used to wrap an engine, and the loading cache that loads a missing value once over pluggable stores, for native and WebAssembly hosts. |
+| [`fiftyone-caching`](caching) | Sharded-LRU cache trait and the default implementation used to wrap an engine, and the loading cache that loads a missing value once over pluggable stores, for native and WebAssembly hosts, with optional stores for Fastly, Cloudflare and Spin and a tokio spawner. |
 
 ### Engines and builders
 

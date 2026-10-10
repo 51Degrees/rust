@@ -20,18 +20,24 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! Loads run as tasks of their own on a multi-threaded tokio runtime. The
-//! runtime needs threads, so these are compiled only off WebAssembly.
+//! Loads run as tasks of their own on a multi-threaded tokio runtime, and
+//! on the tokio feature's local pool. Both need threads, so these are
+//! compiled only off WebAssembly.
 #![cfg(not(target_family = "wasm"))]
 
 mod common;
 
+use std::future::Future;
+use std::pin::pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::task::{Context, Poll, Wake, Waker};
+use std::thread::{self, Thread};
+use std::time::{Duration, Instant};
 
 use common::*;
+use fiftyone_caching::tokio::LocalPool;
 use fiftyone_caching::{Loaded, LoadingCache, Spawn, StartLoad, ValueLoader};
 use tokio::runtime::{Builder, Handle};
 
@@ -43,6 +49,17 @@ fn tokio_spawner(start: StartLoad) {
 
 #[test]
 fn a_dropped_loading_caller_neither_stops_the_load_nor_starts_another() {
+    dropped_caller_keeps_one_load(tokio_spawner);
+}
+
+#[test]
+fn the_local_pool_keeps_one_load_when_its_caller_is_dropped() {
+    dropped_caller_keeps_one_load(LocalPool::new(2));
+}
+
+/// Runs a load on the spawner, drops the caller that started it while it
+/// runs, and checks the callers that came after get its value.
+fn dropped_caller_keeps_one_load(spawner: impl fiftyone_caching::Spawn + Send + Sync + 'static) {
     let runtime = Builder::new_multi_thread()
         .worker_threads(4)
         .build()
@@ -53,7 +70,7 @@ fn a_dropped_loading_caller_neither_stops_the_load_nor_starts_another() {
         let cache = Arc::new(
             LoadingCache::builder(lru(&clock, 100), source.clone())
                 .clock(clock.shared())
-                .spawner(tokio_spawner)
+                .spawner(spawner)
                 .build(),
         );
 
@@ -83,6 +100,48 @@ fn a_dropped_loading_caller_neither_stops_the_load_nor_starts_another() {
     });
 }
 
+#[test]
+fn the_local_pool_needs_no_runtime_where_loads_start() {
+    let clock = TestClock::new();
+    let source = Source::new();
+    let cache = LoadingCache::builder(lru(&clock, 100), source.clone())
+        .clock(clock.shared())
+        .spawner(LocalPool::new(1))
+        .build();
+    assert!(Handle::try_current().is_err(), "no runtime on this thread");
+    assert_eq!(park_on(cache.get(&1)), Ok("1 from load 1".to_owned()));
+    assert_eq!(source.loads(), 1);
+}
+
+/// Runs a future on this thread, parking between polls until it is woken.
+///
+/// # Panics
+///
+/// If the future has not finished within ten seconds.
+fn park_on<F: Future>(future: F) -> F::Output {
+    struct Unpark(Thread);
+
+    impl Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let waker = Waker::from(Arc::new(Unpark(thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let mut future = pin!(future);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+            return output;
+        }
+        assert!(Instant::now() < deadline, "the load never finished");
+        // A deadline check rather than one long park, because a park can
+        // return before it is woken.
+        thread::park_timeout(Duration::from_millis(50));
+    }
+}
+
 /// A source whose every load panics, counting the loads.
 #[derive(Clone, Default)]
 struct Panics(Arc<AtomicUsize>);
@@ -99,6 +158,11 @@ impl ValueLoader<u32, String> for Panics {
 #[test]
 fn a_load_that_panics_runs_twice_then_its_caller_panics() {
     panicking_load_ends_its_caller(tokio_spawner);
+}
+
+#[test]
+fn the_local_pool_ends_a_caller_whose_load_panics() {
+    panicking_load_ends_its_caller(LocalPool::new(2));
 }
 
 /// Runs a load that panics on the spawner, and checks the caller ends by

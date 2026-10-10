@@ -16,8 +16,23 @@ dropped caller neither stops a load nor starts another. The names follow the
 caching packages of the other languages, being `LoadingCache`,
 `LruLoadingCache`, `LoadingCacheBuilder` and `ValueLoader`.
 
-The crate builds for native targets and `wasm32-wasip1`, and for
-`wasm32-unknown-unknown` with default features off. The `pipeline` feature,
+`EncodedStore` keeps the entries in a platform's key-value store or cache,
+writing each one in a single versioned format with the time the store must
+drop it, which it checks on every read. These features, all off by default,
+add a platform's stores and pull in its SDK only on the target the platform
+runs.
+
+- `fastly`, for `wasm32-wasip1` on Fastly Compute, adds stores over the KV
+  store and the core cache.
+- `cloudflare`, for `wasm32-unknown-unknown` on Cloudflare Workers, adds
+  stores over Workers KV and the Cache API, a spawner that keeps loads
+  running with `wait_until`, and a clock.
+- `spin`, for `wasm32-wasip2` on Spin 4, adds a store over Spin's key-value
+  store.
+- `tokio`, for native hosts, adds a spawner over a tokio-util local pool.
+
+The crate builds for native targets, `wasm32-wasip1` and `wasm32-wasip2`,
+and for `wasm32-unknown-unknown` with default features off. The `pipeline` feature,
 on by default, brings `DataKeyedCache` and the dependency on
 `fiftyone-pipeline-core` it needs.
 

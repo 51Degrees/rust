@@ -57,11 +57,19 @@
 //! - [`CacheBuilder`] applies the two tunables from the specification: the
 //!   total `size` (default 1000) and the `concurrency`, the number of shards
 //!   (default the CPU count).
-//! - [`DataKeyedCache`] wraps an [`LruCache`] keyed by
-//!   [`fiftyone_pipeline_core::DataKey`]. An engine hands it a flow data and an
-//!   [`fiftyone_pipeline_core::EvidenceKeyFilter`]; it derives a deterministic,
-//!   case-insensitive key from the relevant evidence, so equivalent requests
-//!   share an entry. It comes with the `pipeline` feature, on by default.
+#![cfg_attr(
+    feature = "pipeline",
+    doc = "- [`DataKeyedCache`] wraps an [`LruCache`] keyed by
+  [`fiftyone_pipeline_core::DataKey`]. An engine hands it a flow data and an
+  [`fiftyone_pipeline_core::EvidenceKeyFilter`]; it derives a deterministic,
+  case-insensitive key from the relevant evidence, so equivalent requests
+  share an entry. It comes with the `pipeline` feature, on by default."
+)]
+#![cfg_attr(
+    not(feature = "pipeline"),
+    doc = "- `DataKeyedCache` keys an [`LruCache`] by a flow data's evidence. It
+  comes with the `pipeline` feature, which this build leaves out."
+)]
 //!
 //! ## Loading cache
 //!
@@ -76,9 +84,9 @@
 //!   [`ValueLoader`]. [`LruLoadingCache`] is the form over [`LruStore`], the
 //!   least recently used cache in process memory, as `LruLoadingCache` in the
 //!   .NET and Java pipelines.
-//! - A [`Store`] keeps entries. [`LruStore`] keeps them in process memory. A
-//!   store over a platform's key-value store or cache is written against the
-//!   same trait.
+//! - A [`Store`] keeps entries. [`LruStore`] keeps them in process memory.
+//!   [`EncodedStore`] keeps them in a platform's key-value store or cache,
+//!   through a [`ByteStore`].
 //! - A [`ValueLoader`] produces a value the store does not hold. The source is
 //!   a loader, [`from_fn`] makes one from a function, and every
 //!   [`LoadingCache`] is one.
@@ -142,6 +150,26 @@
 //! - It checks every entry it reads is still fresh, so a store that drops
 //!   entries late, or never, still gives correct results.
 //!
+//! ### Platform stores
+//!
+//! A platform's key-value store or cache keeps bytes under string keys. It
+//! is a [`ByteStore`], and [`EncodedStore`] makes it a [`Store`] by writing
+//! each entry in one versioned format, described at [`encode_entry`], with
+//! the value turned into bytes by a [`Codec`]. The format holds the time the
+//! store must drop the entry, and [`EncodedStore`] checks it on every read,
+//! so a platform that deletes late, rounds lifetimes up or keeps none never
+//! returns an entry past its time.
+//!
+//! Each of these features adds a platform's stores, off by default, and
+//! pulls in that platform's SDK only on the target the platform runs.
+//!
+//! | Feature | Target | Adds |
+//! |---|---|---|
+//! | `fastly` | `wasm32-wasip1` | The `fastly` module, with stores over the KV store and the core cache |
+//! | `cloudflare` | `wasm32-unknown-unknown` | The `cloudflare` module, with stores over Workers KV and the Cache API, a spawner that keeps loads running with `wait_until`, and a clock |
+//! | `spin` | `wasm32-wasip2` | The `spin` module, with a store over Spin's key-value store |
+//! | `tokio` | Native | The `tokio` module, with a spawner over a tokio-util local pool |
+//!
 //! ### Example
 //!
 //! ```
@@ -183,9 +211,9 @@
 //!
 //! ## WebAssembly
 //!
-//! The crate builds for `wasm32-wasip1`, and for `wasm32-unknown-unknown` with
-//! default features off. The `pipeline` feature is the only part that needs
-//! `fiftyone-pipeline-core`. On WebAssembly `ahash` is seeded when the crate is
+//! The crate builds for `wasm32-wasip1` and `wasm32-wasip2`, and for
+//! `wasm32-unknown-unknown` with default features off. The `pipeline`
+//! feature is the only part that needs `fiftyone-pipeline-core`. On WebAssembly `ahash` is seeded when the crate is
 //! compiled rather than at run time, because `wasm32-unknown-unknown` has no
 //! source of randomness.
 //!
@@ -209,6 +237,27 @@ mod data_keyed;
 mod loading;
 mod lru;
 
+#[cfg(all(feature = "cloudflare", target_arch = "wasm32", target_os = "unknown"))]
+pub mod cloudflare;
+// The Cloudflare store's own logic is tested on every target, without the SDK.
+#[cfg(all(
+    test,
+    not(all(feature = "cloudflare", target_arch = "wasm32", target_os = "unknown"))
+))]
+mod cloudflare;
+#[cfg(all(feature = "fastly", target_os = "wasi", target_env = "p1"))]
+pub mod fastly;
+#[cfg(all(feature = "spin", target_os = "wasi", target_env = "p2"))]
+pub mod spin;
+#[cfg(all(feature = "tokio", not(target_family = "wasm")))]
+pub mod tokio;
+// The Fastly store's own logic is tested on every target, without the SDK.
+#[cfg(all(
+    test,
+    not(all(feature = "fastly", target_os = "wasi", target_env = "p1"))
+))]
+mod fastly;
+
 pub use cache::{Cache, PutCache};
 pub use config::{default_concurrency, CacheBuilder, DEFAULT_SIZE};
 #[cfg(feature = "pipeline")]
@@ -216,8 +265,10 @@ pub use data_keyed::DataKeyedCache;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use loading::SystemClock;
 pub use loading::{
-    from_fn, Clock, Entry, FnLoader, Inline, LoadRunner, LoadTask, Loaded, LoadingCache,
-    LoadingCacheBuilder, Lookup, LruLoadingCache, LruStore, LruStoreBuilder, Spawn, SpawnLocal,
-    Spawned, SpawnedLocal, StartLoad, Store, ValueLoader,
+    decode_entry, encode_entry, from_fn, ByteLookup, ByteStore, Clock, Codec, DecodeError,
+    EncodedStore, EncodedStoreBuilder, Entry, FnLoader, Inline, ListKeys, LoadRunner, LoadTask,
+    Loaded, LoadingCache, LoadingCacheBuilder, Lookup, LruLoadingCache, LruStore, LruStoreBuilder,
+    Raw, Spawn, SpawnLocal, Spawned, SpawnedLocal, StartLoad, Store, Stored, Utf8, ValueLoader,
+    ENTRY_FORMAT,
 };
 pub use lru::LruCache;
