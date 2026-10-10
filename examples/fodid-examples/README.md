@@ -97,22 +97,24 @@ from the same environment variables the demo reads, and its essential lines
 are these.
 
 ```rust
-use fodid::client::DidClient;
+use fodid_client::DidClient;
 use fodid::FodId;
 
 // At start-up. The endpoint defaults to the public cloud or the
 // 51DEGREES_CLOUD_ENDPOINT environment variable.
 let client = DidClient::builder(resource_key)
     .licence_key(licence_key)
-    .build();
+    .build()?;
 
 // Per request. The page sends the URL-safe alphabet, which is accepted.
 let fod_id = FodId::from_base64(&query.fodid)?;
 // Offline, against the cloud's public key for the identifier's date. The
 // keys are fetched once and cached.
-let server_signature = client.verify_signature(&fod_id)?;
+let server_signature = client.verify_signature(&fod_id).await?;
 // With the licence key, one use against the resource key.
-let redeemed = client.redeem(&fod_id, &query.result, &query.challenge)?;
+let redeemed = client
+    .redeem(&fod_id, &query.result, Some(&query.challenge))
+    .await?;
 ```
 
 `redeemed` is a typed `RedeemResult` with the signature outcome, the

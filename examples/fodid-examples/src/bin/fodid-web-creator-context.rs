@@ -80,8 +80,8 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use examples_web_shared::serve_css;
-use fodid_client::{DidClient, Error as ClientError, RedeemResult, SignatureOutcome};
 use fodid::FodId;
+use fodid_client::{DidClient, Error as ClientError, RedeemResult, SignatureOutcome};
 use serde::Deserialize;
 
 /// The demo page, embedded so the binary is self-contained. It is byte for byte
@@ -282,9 +282,7 @@ fn client_error(error: ClientError) -> Response {
             .into_response(),
         // Something the caller sent was not usable, which is the page's
         // fault rather than the cloud's, so it reads as a bad request.
-        ClientError::InvalidArgument(message) => {
-            errors_response(StatusCode::BAD_REQUEST, &message)
-        }
+        ClientError::InvalidArgument(message) => errors_response(StatusCode::BAD_REQUEST, &message),
         // Any other status the cloud sent, relayed with its own body.
         ClientError::UnexpectedStatus { status, body, .. } => {
             let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -389,7 +387,7 @@ mod tests {
     use super::*;
     use axum::body::{to_bytes, Body};
     use axum::http::{HeaderValue, Request};
-    use fodid::client::{Request as CloudRequest, Response as CloudResponse, Transport, TransportError};
+    use fodid_client::{DidHttpClient, DidHttpRequest, DidHttpResponse, LocalBoxFuture};
     use owid::{Creator, Crypto};
     use tower::ServiceExt;
 
@@ -404,39 +402,45 @@ mod tests {
         redeem_body: &'static str,
     }
 
-    impl Transport for FakeCloud {
-        fn send(&self, request: &CloudRequest) -> Result<CloudResponse, TransportError> {
-            if request.url.contains("/id/key/") {
-                let body = serde_json::json!([{
-                    "startsAt": "2020-01-01T00:00:00Z",
-                    "publicKey": self.public_key_pem,
-                }]);
-                return Ok(CloudResponse {
-                    status: 200,
-                    body: body.to_string(),
-                });
-            }
-            if request.url.contains("/id/redeem") {
-                return Ok(CloudResponse {
-                    status: self.redeem_status,
-                    body: self.redeem_body.to_owned(),
-                });
-            }
-            Err(TransportError(format!("unexpected request to {}", request.url)))
+    impl DidHttpClient for FakeCloud {
+        fn send<'a>(
+            &'a self,
+            request: &'a DidHttpRequest,
+        ) -> LocalBoxFuture<'a, Result<DidHttpResponse, String>> {
+            Box::pin(async move {
+                if request.url.contains("/id/key/") {
+                    let body = serde_json::json!([{
+                        "startsAt": "2020-01-01T00:00:00Z",
+                        "publicKey": self.public_key_pem,
+                    }]);
+                    return Ok(DidHttpResponse {
+                        status: 200,
+                        body: body.to_string(),
+                    });
+                }
+                if request.url.contains("/id/redeem") {
+                    return Ok(DidHttpResponse {
+                        status: self.redeem_status,
+                        body: self.redeem_body.to_owned(),
+                    });
+                }
+                Err(format!("unexpected request to {}", request.url))
+            })
         }
     }
 
     /// A signed 51Did, as the cloud would issue one, with the key that
-    /// signed it.
+    /// signed it. The payload is the five byte header and the 32 byte match
+    /// key, with usage bit 0 set, which is the least a 51Did states.
     fn signed_51did() -> (FodId, Crypto) {
         let crypto = Crypto::new();
         let creator = Creator::new("51degrees.com", crypto.clone()).unwrap();
-        let mut payload = vec![0u8; fodid::PAYLOAD_LENGTH];
-        payload[0] = 0b0000_0101;
-        for (i, b) in payload[fodid::HASH_OFFSET..].iter_mut().enumerate() {
+        let mut payload = vec![0u8; 5 + 32];
+        payload[0] = 0b0000_0001;
+        for (i, b) in payload[5..].iter_mut().enumerate() {
             *b = 0x20 + i as u8;
         }
-        let owid = creator.sign_bytes(payload).unwrap();
+        let owid = creator.create(payload).unwrap();
         (FodId::from_owid(owid).unwrap(), crypto)
     }
 
@@ -445,8 +449,9 @@ mod tests {
             DidClient::builder(RESOURCE_KEY)
                 .endpoint("http://cloud.example/api/v4/")
                 .licence_key("licence-key-placeholder")
-                .transport(cloud)
-                .build(),
+                .http_client(Arc::new(cloud))
+                .build()
+                .expect("the client builds"),
         )
     }
 
@@ -508,12 +513,13 @@ mod tests {
         let app = build_app(
             DidClient::builder(RESOURCE_KEY)
                 .endpoint("http://cloud.example/api/v4")
-                .transport(FakeCloud {
+                .http_client(Arc::new(FakeCloud {
                     public_key_pem: String::new(),
                     redeem_status: 500,
                     redeem_body: "",
-                })
-                .build(),
+                }))
+                .build()
+                .expect("the client builds"),
         );
 
         let response = get(&app, "/").await;
@@ -624,7 +630,8 @@ mod tests {
         let app = build_app(
             DidClient::builder(RESOURCE_KEY)
                 .endpoint("http://127.0.0.1:9/api/v4/")
-                .build(),
+                .build()
+                .expect("the client builds"),
         );
         let response = get(&app, &redeem_uri(&fod_id)).await;
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
