@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 
 use crate::key::parse_utc;
-use crate::outcome::{ContextOutcome, FactorOutcome, SignatureOutcome};
+use crate::outcome::{ContextOutcome, Factor, FactorOutcome, SignatureOutcome};
 
 /// The typed answer from the cloud's redeem endpoint, built by
 /// [`DidClient::redeem`](crate::DidClient::redeem) from the JSON body.
@@ -81,8 +81,8 @@ impl RedeemResult {
     /// body that is not one, or carries no `context`, gives
     /// [`ContextOutcome::Unreadable`] with the body kept in
     /// [`RedeemResult::body`]. Factor values are read with
-    /// [`FactorOutcome::from_cloud`], so `misconfigured` never falls through
-    /// to a mismatch.
+    /// [`FactorOutcome::from_cloud`], so neither `misconfigured` nor
+    /// `notrecorded` falls through to a mismatch.
     pub fn from_response(status: u16, body: &str) -> Self {
         let value: serde_json::Value = match serde_json::from_str(body) {
             Ok(value) => value,
@@ -158,13 +158,29 @@ impl RedeemResult {
         self.signature
     }
 
-    /// The outcome of each creator context factor by name (`transport`,
-    /// `device`, `browserip`, `connectionip`, `asn`, `browser`), present
-    /// only when the cloud sent `factors`, which it does for a
+    /// The outcome of each creator context factor keyed by the name the
+    /// cloud sent, being the names [`Factor::as_cloud`] gives. Present only
+    /// when the cloud sent `factors`, which it does for a
     /// [`ContextOutcome::Mismatch`] and for a
     /// [`ContextOutcome::Misconfigured`] where some factors were compared.
+    /// Every key the cloud sent is kept, including one this client does not
+    /// know, so nothing the cloud said is lost.
     pub fn factors(&self) -> Option<&HashMap<String, FactorOutcome>> {
         self.factors.as_ref()
+    }
+
+    /// The outcome of one creator context factor, or `None` when the cloud
+    /// sent no `factors` or did not report that factor.
+    ///
+    /// A version mismatch beside a verified name means an upgrade, whilst a
+    /// mismatched name means a different operating system or browser, so
+    /// read [`Factor::PlatformName`] with [`Factor::PlatformVersion`] and
+    /// [`Factor::BrowserName`] with [`Factor::BrowserVersion`].
+    pub fn factor(&self, factor: Factor) -> Option<FactorOutcome> {
+        self.factors
+            .as_ref()
+            .and_then(|factors| factors.get(factor.as_cloud()))
+            .copied()
     }
 
     /// When the verify endpoint checked the context and sealed the result,
@@ -239,6 +255,98 @@ mod tests {
     }
 
     #[test]
+    fn the_four_browser_factors_are_read_into_their_own_members() {
+        let result = RedeemResult::from_response(
+            200,
+            r#"{"signature":"verified","context":"mismatch",
+                "factors":{"transport":"verified","device":"verified",
+                           "browserip":"verified","connectionip":"verified",
+                           "asn":"verified",
+                           "platformname":"verified",
+                           "platformversion":"misconfigured",
+                           "browsername":"verified",
+                           "browserversion":"mismatch"},
+                "verifiedAt":"2026-08-07T09:15:32Z",
+                "secondsSinceVerified":2}"#,
+        );
+        assert_eq!(result.context(), ContextOutcome::Mismatch);
+        assert_eq!(
+            result.factor(Factor::PlatformName),
+            Some(FactorOutcome::Verified)
+        );
+        assert_eq!(
+            result.factor(Factor::PlatformVersion),
+            Some(FactorOutcome::Misconfigured)
+        );
+        assert_eq!(
+            result.factor(Factor::BrowserName),
+            Some(FactorOutcome::Verified)
+        );
+        assert_eq!(
+            result.factor(Factor::BrowserVersion),
+            Some(FactorOutcome::Mismatch)
+        );
+        for factor in [
+            Factor::Transport,
+            Factor::Device,
+            Factor::BrowserIp,
+            Factor::ConnectionIp,
+            Factor::Asn,
+        ] {
+            assert_eq!(
+                result.factor(factor),
+                Some(FactorOutcome::Verified),
+                "{factor:?}"
+            );
+        }
+        assert_eq!(result.factors().unwrap().len(), 9);
+    }
+
+    #[test]
+    fn an_old_browser_factor_populates_none_of_the_four() {
+        let result = RedeemResult::from_response(
+            200,
+            r#"{"signature":"verified","context":"mismatch",
+                "factors":{"transport":"verified","browser":"mismatch"}}"#,
+        );
+        for factor in [
+            Factor::PlatformName,
+            Factor::PlatformVersion,
+            Factor::BrowserName,
+            Factor::BrowserVersion,
+        ] {
+            assert_eq!(result.factor(factor), None, "{factor:?}");
+        }
+        assert_eq!(Factor::from_cloud("browser"), None);
+        assert_eq!(
+            result.factor(Factor::Transport),
+            Some(FactorOutcome::Verified)
+        );
+    }
+
+    #[test]
+    fn factors_name_the_cloud_keys_in_the_documented_order() {
+        let names: Vec<&str> = Factor::ALL.iter().map(|f| f.as_cloud()).collect();
+        assert_eq!(
+            names,
+            [
+                "transport",
+                "device",
+                "browserip",
+                "connectionip",
+                "asn",
+                "platformname",
+                "platformversion",
+                "browsername",
+                "browserversion",
+            ]
+        );
+        for factor in Factor::ALL {
+            assert_eq!(Factor::from_cloud(factor.as_cloud()), Some(factor));
+        }
+    }
+
+    #[test]
     fn a_misconfigured_factor_is_not_a_mismatch() {
         let result = RedeemResult::from_response(
             200,
@@ -259,6 +367,43 @@ mod tests {
             !factors.values().any(|f| *f == FactorOutcome::Mismatch),
             "nothing here is a replay indicator"
         );
+    }
+
+    #[test]
+    fn a_not_recorded_factor_is_its_own_outcome() {
+        let result = RedeemResult::from_response(
+            200,
+            r#"{"context":"mismatch",
+                "factors":{"transport":"notrecorded","device":"verified",
+                           "browserip":"mismatch","asn":"misconfigured",
+                           "platformversion":"notrecorded"}}"#,
+        );
+        let factors = result.factors().expect("factors are present");
+        assert_eq!(
+            factors["transport"],
+            FactorOutcome::NotRecorded,
+            "the creating service recorded no value for this factor, so the \
+             identifier says nothing about it"
+        );
+        assert_eq!(factors["platformversion"], FactorOutcome::NotRecorded);
+        assert_ne!(factors["transport"], FactorOutcome::Mismatch);
+        assert_ne!(factors["transport"], FactorOutcome::Misconfigured);
+        assert_eq!(factors["browserip"], FactorOutcome::Mismatch);
+        assert_eq!(factors["asn"], FactorOutcome::Misconfigured);
+        assert_eq!(factors["device"], FactorOutcome::Verified);
+    }
+
+    #[test]
+    fn every_factor_outcome_reports_the_clouds_own_word() {
+        for (outcome, word) in [
+            (FactorOutcome::Verified, "verified"),
+            (FactorOutcome::Mismatch, "mismatch"),
+            (FactorOutcome::Misconfigured, "misconfigured"),
+            (FactorOutcome::NotRecorded, "notrecorded"),
+        ] {
+            assert_eq!(outcome.as_cloud(), word);
+            assert_eq!(FactorOutcome::from_cloud(Some(word)), outcome);
+        }
     }
 
     #[test]

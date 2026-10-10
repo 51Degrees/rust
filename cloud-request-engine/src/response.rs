@@ -36,6 +36,7 @@
 //! - Any entries in a top-level `warnings` array are returned so the caller can
 //!   log them.
 
+use fiftyone_pipeline_core::redact::redact;
 use fiftyone_pipeline_core::Error;
 
 use crate::http::CloudHttpResponse;
@@ -68,6 +69,13 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<u64> {
 /// endpoint, whose body is a flat JSON array that never carries an `errors`
 /// object.
 ///
+/// Anything that reaches the error message, or the warnings, goes through
+/// [`fiftyone_pipeline_core::redact`] first, because the address carries the
+/// resource key as a query parameter and the service repeats the key back
+/// inside its own message when it cannot read it. The parsed JSON returned on
+/// success is untouched, since that is data a downstream engine reads rather
+/// than text anyone prints.
+///
 /// Returns `Ok(ParsedResponse)` when the response is usable, or
 /// `Err(Error::CloudRequest)` describing the failure.
 pub fn validate_response(
@@ -98,7 +106,12 @@ pub fn validate_response(
                     messages.extend(errors.iter().filter_map(json_value_to_message));
                 }
                 if let Some(warns) = map.get("warnings").and_then(|v| v.as_array()) {
-                    warnings.extend(warns.iter().filter_map(json_value_to_message));
+                    warnings.extend(
+                        warns
+                            .iter()
+                            .filter_map(json_value_to_message)
+                            .map(|warning| redact(&warning).into_owned()),
+                    );
                 }
             }
             Ok(_) => {
@@ -115,6 +128,9 @@ pub fn validate_response(
         }
     }
 
+    // The address carries the resource key on the discovery request, so it is
+    // cleaned once here and the cleaned form is what every message below uses.
+    let url = redact(url);
     // No explicit error, but also no data: report the empty-response message.
     if messages.is_empty() && !has_data {
         messages.push(format!("No data in response from cloud service at '{url}'"));
@@ -122,10 +138,12 @@ pub fn validate_response(
     // No explicit error, data present, but a non-success status code: report the
     // status-code message.
     else if messages.is_empty() && !response.is_success() {
+        // The body is cleaned before it is cut down, so that cutting it can
+        // never leave the front half of a credential behind.
         messages.push(format!(
             "Cloud service at '{url}' returned status code '{}' with content {}",
             response.status,
-            truncate(body, 1000)
+            truncate(&redact(body), 1000)
         ));
     }
 
@@ -135,7 +153,9 @@ pub fn validate_response(
             warnings,
         })
     } else {
-        let mut message = messages.join("; ");
+        // The service repeats the resource key back inside its own error text,
+        // so the joined message is cleaned whatever it was built from.
+        let mut message = redact(&messages.join("; ")).into_owned();
         // An invalid or missing resource key is the most common cause of a cloud
         // error, so point the reader at the configurator to create a valid one.
         if message.to_lowercase().contains("resource key") {

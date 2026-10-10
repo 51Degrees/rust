@@ -40,6 +40,7 @@ use fiftyone_pipeline_core::{Evidence, Pipeline};
 struct Captured {
     body: String,
     origin: Option<String>,
+    user_agent: Option<String>,
 }
 
 /// Start a local server that answers the three cloud endpoints and reports back
@@ -72,9 +73,18 @@ fn start_server(
                     .iter()
                     .find(|h| h.field.equiv("Origin"))
                     .map(|h| h.value.as_str().to_owned());
+                let user_agent = request
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.equiv("User-Agent"))
+                    .map(|h| h.value.as_str().to_owned());
                 let mut body = String::new();
                 let _ = request.as_reader().read_to_string(&mut body);
-                let _ = tx.send(Captured { body, origin });
+                let _ = tx.send(Captured {
+                    body,
+                    origin,
+                    user_agent,
+                });
                 let response = tiny_http::Response::from_string(data_json);
                 let _ = request.respond(response);
             }
@@ -145,6 +155,18 @@ fn posts_url_encoded_form_with_stripped_prefixes_and_origin() {
     );
     // The Origin header was sent.
     assert_eq!(captured.origin.as_deref(), Some("https://example.com"));
+    // The end user's User-Agent travels only as evidence in the body, never in
+    // the request's own User-Agent header. The cloud service treats a request
+    // whose own header names a browser as a browser page, and such a page gets
+    // no 51Did until it has returned the results of every snippet.
+    assert!(
+        captured
+            .user_agent
+            .as_deref()
+            .is_none_or(|ua| !ua.contains("query-ua") && !ua.contains("header-ua")),
+        "the evidence User-Agent must not be sent as the HTTP User-Agent, got {:?}",
+        captured.user_agent
+    );
 }
 
 #[test]
@@ -294,5 +316,75 @@ fn live_cloud_state_round_trips() {
     assert_eq!(
         serde_json::to_string(&state1.accessible_properties).unwrap(),
         serde_json::to_string(&state2.accessible_properties).unwrap(),
+    );
+}
+
+/// Resolve a cloud license key from the environment for the live license-key
+/// test. A license key is the server-side credential, so it is read from the
+/// same variable the data-file update example uses.
+fn live_license_key() -> Option<String> {
+    match std::env::var("51DEGREES_LICENSE_KEY") {
+        Ok(value) if !value.trim().is_empty() => Some(value.trim().to_owned()),
+        _ => None,
+    }
+}
+
+/// The license-key path against the real 51Degrees cloud: authenticate on a
+/// license key alone, name the properties wanted, and confirm the answer carries
+/// them. Also confirms the silent drop is caught, by asking for a property no
+/// subscription covers alongside one that is covered, which the service answers
+/// `200` without naming what it left out.
+///
+/// Ignored by default. It runs only when a license key covering
+/// `device.ismobile` is present in the environment.
+#[test]
+#[ignore = "requires a network and a real license key (51DEGREES_LICENSE_KEY)"]
+fn live_license_key_names_the_properties_it_wants() {
+    let Some(license_key) = live_license_key() else {
+        eprintln!("no license key in the environment; skipping the live license-key test");
+        return;
+    };
+
+    // `no-such-property` is not a property of any product, so the service drops
+    // it whatever the subscription covers, which is the case being exercised.
+    let engine = CloudRequestEngine::builder()
+        .license_key(license_key)
+        .values(["device.ismobile", "device.no-such-property"])
+        .timeout_seconds(10)
+        .build()
+        .expect("an engine authenticating on a license key alone builds");
+
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .build()
+        .unwrap();
+    let mut data = pipeline.create_flow_data_with(
+        Evidence::builder()
+            .add(
+                "header.user-agent",
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) \
+                 AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 \
+                 Mobile/15E148 Safari/604.1",
+            )
+            .build(),
+    );
+    data.process().expect("the live request succeeds");
+
+    let cloud = data.get(CloudRequestEngine::DATA_KEY).unwrap();
+    let json = cloud.json_response().expect("a JSON response");
+    let body: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        body["device"]["ismobile"],
+        serde_json::Value::Bool(true),
+        "the asked-for property should be in the answer, got {json}"
+    );
+
+    // The dropped property is named once, and the request itself stands.
+    let warnings = cloud.warnings();
+    assert_eq!(warnings.len(), 1, "one warning, got {warnings:?}");
+    assert!(
+        warnings[0].contains("device.no-such-property"),
+        "the warning should name the property that did not come back, got {}",
+        warnings[0]
     );
 }

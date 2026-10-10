@@ -50,8 +50,19 @@ pub const ORIGIN_HEADER_NAME: &str = "Origin";
 /// string of the discovery requests.
 pub const RESOURCE_PARAMETER: &str = "resource";
 
-/// The form field carrying the license key, when one is supplied.
+/// The form field carrying the license key, which either stands in for a
+/// resource key or travels alongside one, adding the products it grants to
+/// those the resource key carries.
 pub const LICENSE_PARAMETER: &str = "license";
+
+/// The form field naming the properties the caller wants returned, as a
+/// comma-separated list of `product.property` names.
+///
+/// A license key carries no property list of its own, so the cloud service
+/// requires this field on a request that authenticates with one and answers
+/// `400` without it. A resource key already states which properties it carries,
+/// so a request presenting one ignores this field.
+pub const VALUES_PARAMETER: &str = "values";
 
 /// The default request timeout in seconds.
 pub const TIMEOUT_DEFAULT_SECONDS: u64 = 2;

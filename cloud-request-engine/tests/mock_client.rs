@@ -804,3 +804,267 @@ fn exported_state_returns_the_build_time_discovery_when_nothing_is_injected() {
         "export performs no further request"
     );
 }
+
+/// The URL the builder asked the `accessibleproperties` endpoint with.
+fn accessible_properties_url(client: &FakeClient) -> String {
+    client
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|r| r.url.contains("accessibleproperties"))
+        .expect("the build asked for the accessible properties")
+        .url
+        .clone()
+}
+
+#[test]
+fn accessible_properties_are_asked_for_with_the_license_key() {
+    // The cloud adds the products a license key grants to those of the
+    // resource key, and the data request sends both keys, so the metadata
+    // has to be asked for with both as well.
+    let client = Arc::new(FakeClient::default());
+    CloudRequestEngine::builder()
+        .resource_key("test-resource-key")
+        .license_key("LICENSE+KEY/1")
+        .endpoint("https://cloud.example.test/api/v4/")
+        .http_client(client.clone())
+        .build()
+        .unwrap();
+    assert_eq!(
+        accessible_properties_url(&client),
+        "https://cloud.example.test/api/v4/accessibleproperties\
+         ?resource=test-resource-key&license=LICENSE%2BKEY%2F1"
+    );
+}
+
+#[test]
+fn accessible_properties_are_asked_for_without_a_blank_license_key() {
+    for license in [None, Some(""), Some("  ")] {
+        let client = Arc::new(FakeClient::default());
+        let mut builder = CloudRequestEngine::builder()
+            .resource_key("test-resource-key")
+            .endpoint("https://cloud.example.test/api/v4/")
+            .http_client(client.clone());
+        if let Some(license) = license {
+            builder = builder.license_key(license);
+        }
+        builder.build().unwrap();
+        assert_eq!(
+            accessible_properties_url(&client),
+            "https://cloud.example.test/api/v4/accessibleproperties\
+             ?resource=test-resource-key",
+            "license key {license:?}"
+        );
+    }
+}
+
+#[test]
+fn accessible_properties_failure_names_neither_key() {
+    // The keys travel in the query string of this request, so a failure must
+    // name the endpoint without them.
+    let client = Arc::new(FakeClient::default());
+    client.set_properties(FakeClient::with_status(500, "{}"));
+    let result = CloudRequestEngine::builder()
+        .resource_key("test-resource-key")
+        .license_key("secret-license-key")
+        .endpoint("https://cloud.example.test/api/v4/")
+        .http_client(client)
+        .build();
+    let message = match result {
+        Err(error) => error.to_string(),
+        Ok(_) => panic!("expected the build to fail on a 500 from the cloud"),
+    };
+    assert!(
+        message.contains("https://cloud.example.test/api/v4/accessibleproperties"),
+        "the endpoint is named: {message}"
+    );
+    assert!(
+        !message.contains("secret-license-key"),
+        "the license key is not in the message: {message}"
+    );
+    assert!(
+        !message.contains("test-resource-key"),
+        "the resource key is not in the message: {message}"
+    );
+}
+
+/// Build an engine that authenticates with a license key alone and asks for the
+/// named properties, which is the one configuration in which the cloud service
+/// honours a property list.
+fn license_engine_with(client: Arc<FakeClient>, values: &[&str]) -> CloudRequestEngine {
+    CloudRequestEngine::builder()
+        .license_key("test-license-key")
+        .values(values.to_vec())
+        .endpoint("https://cloud.example.test/api/v4/")
+        .http_client(client)
+        .build()
+        .unwrap()
+}
+
+#[test]
+fn a_license_key_alone_authenticates_the_request() {
+    let client = Arc::new(FakeClient::default());
+    client.set_evidence_keys(FakeClient::ok(r#"["header.user-agent"]"#));
+    client.set_data(FakeClient::ok(
+        r#"{"device":{"ismobile":true,"iscrawler":false}}"#,
+    ));
+
+    let engine = license_engine_with(client.clone(), &["device.ismobile", "device.iscrawler"]);
+    // Only the evidence keys were fetched. The accessible-properties endpoint
+    // takes a resource key and refuses a request without one, so a license-key
+    // engine does not call it and starts with no accessible properties.
+    assert_eq!(client.request_count(), 1, "evidence keys only");
+    assert!(engine.public_properties().unwrap().products.is_empty());
+    assert_eq!(engine.resource_key(), None);
+
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .build()
+        .unwrap();
+    let mut data =
+        pipeline.create_flow_data_with(Evidence::builder().add("header.user-agent", "UA").build());
+    data.process().unwrap();
+
+    let requests = client.requests.lock().unwrap();
+    let data_request = requests
+        .iter()
+        .find(|r| r.method == HttpMethod::Post)
+        .expect("a POST to the data endpoint");
+
+    // The license key authenticates the request on its own, and the properties
+    // the caller named travel with it as a comma-separated list.
+    assert!(data_request
+        .form
+        .iter()
+        .any(|(k, v)| k == "license" && v == "test-license-key"));
+    assert!(
+        !data_request.form.iter().any(|(k, _)| k == "resource"),
+        "no resource key is sent"
+    );
+    assert!(
+        data_request
+            .form
+            .iter()
+            .any(|(k, v)| k == "values" && v == "device.ismobile,device.iscrawler"),
+        "the property list should reach the request, got {:?}",
+        data_request.form
+    );
+    // The evidence still travels alongside it.
+    assert!(data_request
+        .form
+        .iter()
+        .any(|(k, v)| k == "user-agent" && v == "UA"));
+}
+
+#[test]
+fn a_property_asked_for_and_not_returned_is_reported_once() {
+    let client = Arc::new(FakeClient::default());
+    client.set_evidence_keys(FakeClient::ok(r#"["header.user-agent"]"#));
+    // The service answers 200 carrying the property the license covers, and says
+    // nothing at all about the one it left out, so the difference is the only
+    // sign that a property was dropped.
+    client.set_data(FakeClient::ok(r#"{"device":{"ismobile":true}}"#));
+
+    let engine = license_engine_with(client.clone(), &["device.ismobile", "device.iscrawler"]);
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .build()
+        .unwrap();
+
+    let mut first =
+        pipeline.create_flow_data_with(Evidence::builder().add("header.user-agent", "UA").build());
+    first.process().unwrap();
+    assert!(
+        first.errors().is_empty(),
+        "a dropped property does not fail the request"
+    );
+    let warnings = first.get(CloudRequestEngine::DATA_KEY).unwrap().warnings();
+    assert_eq!(warnings.len(), 1, "one warning, got {warnings:?}");
+    assert!(
+        warnings[0].contains("device.iscrawler")
+            && !warnings[0].contains("device.ismobile")
+            && warnings[0].contains("entitlement matter rather than a fault"),
+        "the warning should name only the missing property and say what it means, \
+         got {}",
+        warnings[0]
+    );
+
+    // A second flow data through the same engine is not told again, because the
+    // credential and the property list were both settled when it was built and
+    // repeating the comparison would learn nothing.
+    let mut second =
+        pipeline.create_flow_data_with(Evidence::builder().add("header.user-agent", "UA2").build());
+    second.process().unwrap();
+    assert!(
+        second
+            .get(CloudRequestEngine::DATA_KEY)
+            .unwrap()
+            .warnings()
+            .is_empty(),
+        "the difference is reported once per engine"
+    );
+}
+
+#[test]
+fn nothing_is_reported_when_every_property_comes_back() {
+    let client = Arc::new(FakeClient::default());
+    client.set_evidence_keys(FakeClient::ok(r#"["header.user-agent"]"#));
+    // A property that the evidence cannot populate still comes back as a key,
+    // with a reason beside it, so it counts as answered rather than dropped.
+    client.set_data(FakeClient::ok(
+        r#"{"device":{"ismobile":true},
+            "location":{"country":null,"countrynullreason":"needs JavaScript"}}"#,
+    ));
+
+    let engine = license_engine_with(client.clone(), &["device.ismobile", "location.country"]);
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .build()
+        .unwrap();
+    let mut data =
+        pipeline.create_flow_data_with(Evidence::builder().add("header.user-agent", "UA").build());
+    data.process().unwrap();
+    assert!(data
+        .get(CloudRequestEngine::DATA_KEY)
+        .unwrap()
+        .warnings()
+        .is_empty());
+}
+
+#[test]
+fn evidence_named_values_does_not_displace_the_engines_property_list() {
+    let client = Arc::new(FakeClient::default());
+    // The service advertises `query.values` as accepted evidence, so it can
+    // reach the engine as evidence and would otherwise write a second `values`
+    // field into the body, leaving which list applied to the request undecided.
+    client.set_evidence_keys(FakeClient::ok(r#"["header.user-agent","query.values"]"#));
+    client.set_data(FakeClient::ok(r#"{"device":{"ismobile":true}}"#));
+
+    let engine = license_engine_with(client.clone(), &["device.ismobile"]);
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .build()
+        .unwrap();
+    let mut data = pipeline.create_flow_data_with(
+        Evidence::builder()
+            .add("header.user-agent", "UA")
+            .add("query.values", "device.iscrawler")
+            .build(),
+    );
+    data.process().unwrap();
+
+    let requests = client.requests.lock().unwrap();
+    let data_request = requests
+        .iter()
+        .find(|r| r.method == HttpMethod::Post)
+        .expect("a POST to the data endpoint");
+    let values: Vec<&String> = data_request
+        .form
+        .iter()
+        .filter(|(k, _)| k == "values")
+        .map(|(_, v)| v)
+        .collect();
+    assert_eq!(values.len(), 1, "one property list, got {values:?}");
+    assert_eq!(values[0], "device.ismobile", "the engine's list wins");
+}

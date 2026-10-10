@@ -116,11 +116,82 @@ impl ContextOutcome {
     }
 }
 
+/// One creator context factor, named as the cloud names it in the
+/// `factors` object of a redeem answer.
+///
+/// The operating system and the browser are each reported as a name and a
+/// version. A version mismatch beside a verified name means an upgrade,
+/// whilst a mismatched name means a different operating system or browser.
+/// Cloud releases before 4.4.38 reported a single `browser` factor instead
+/// of those four, and that name is not one of these values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Factor {
+    /// The TLS handshake and HTTP/2 settings fingerprints of the
+    /// connection, `transport`.
+    Transport,
+    /// The device hardware profile, `device`.
+    Device,
+    /// The network prefix of the public address the browser claims
+    /// through forwarding headers, `browserip`.
+    BrowserIp,
+    /// The network prefix of the address the connection arrived from,
+    /// `connectionip`.
+    ConnectionIp,
+    /// The autonomous system number, being the number of the network
+    /// operator, of the connection address, `asn`.
+    Asn,
+    /// The operating system name, `platformname`.
+    PlatformName,
+    /// The operating system version, `platformversion`.
+    PlatformVersion,
+    /// The browser name, `browsername`.
+    BrowserName,
+    /// The browser version, `browserversion`.
+    BrowserVersion,
+}
+
+impl Factor {
+    /// Every factor, in the order the cloud documents them.
+    pub const ALL: [Factor; 9] = [
+        Factor::Transport,
+        Factor::Device,
+        Factor::BrowserIp,
+        Factor::ConnectionIp,
+        Factor::Asn,
+        Factor::PlatformName,
+        Factor::PlatformVersion,
+        Factor::BrowserName,
+        Factor::BrowserVersion,
+    ];
+
+    /// The key the cloud uses for this factor in the `factors` object.
+    pub fn as_cloud(self) -> &'static str {
+        match self {
+            Self::Transport => "transport",
+            Self::Device => "device",
+            Self::BrowserIp => "browserip",
+            Self::ConnectionIp => "connectionip",
+            Self::Asn => "asn",
+            Self::PlatformName => "platformname",
+            Self::PlatformVersion => "platformversion",
+            Self::BrowserName => "browsername",
+            Self::BrowserVersion => "browserversion",
+        }
+    }
+
+    /// The factor the cloud key names, or `None` for a key this client
+    /// does not know, including the `browser` key earlier releases sent.
+    pub fn from_cloud(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.as_cloud() == value)
+    }
+}
+
 /// The outcome of one creator context factor, reported when the context is
 /// [`ContextOutcome::Mismatch`] or [`ContextOutcome::Misconfigured`].
 ///
-/// The factor names are `transport`, `device`, `browserip`, `connectionip`,
-/// `asn` and `browser`.
+/// The factors are named by [`Factor`], being `transport`, `device`,
+/// `browserip`, `connectionip`, `asn`, `platformname`, `platformversion`,
+/// `browsername` and `browserversion`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FactorOutcome {
     /// The factor matched the verifying connection.
@@ -134,21 +205,27 @@ pub enum FactorOutcome {
     /// identifier says nothing about it either way. Nothing a caller sends
     /// can produce it.
     Misconfigured,
+    /// The service that created the identifier recorded no value for this
+    /// factor, so the identifier says nothing about it and there was nothing
+    /// to compare.
+    ///
+    /// This is neither a mismatch nor [`FactorOutcome::Misconfigured`], which
+    /// says the checking service could not determine the factor.
+    NotRecorded,
 }
 
 impl FactorOutcome {
     /// Maps the cloud's factor string.
     ///
-    /// `misconfigured` is read on its own, because it is the one value that
-    /// must NOT fall through to a mismatch. It says the checking service
-    /// could not determine that factor, so reading it as a mismatch would
-    /// report a replay indicator for something the identifier says nothing
-    /// about. Everything else that is not the one word `verified` is a
-    /// mismatch, so an unexpected value never reads as a pass.
+    /// `verified`, `misconfigured` and `notrecorded` are each read on their
+    /// own, because none of them is a mismatch. Anything else, including a
+    /// word this client does not know, is a mismatch, so an unexpected value
+    /// never reads as a pass.
     pub fn from_cloud(value: Option<&str>) -> Self {
         match value {
             Some("verified") => Self::Verified,
             Some("misconfigured") => Self::Misconfigured,
+            Some("notrecorded") => Self::NotRecorded,
             _ => Self::Mismatch,
         }
     }
@@ -159,6 +236,7 @@ impl FactorOutcome {
             Self::Verified => "verified",
             Self::Mismatch => "mismatch",
             Self::Misconfigured => "misconfigured",
+            Self::NotRecorded => "notrecorded",
         }
     }
 }

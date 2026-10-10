@@ -70,11 +70,23 @@ try {
         Write-Host "Running performance example '$Bin'..."
         Push-Location $examplesDir
         try {
+            # The native exit code check is turned off for this one call so the
+            # example output is printed before any failure is raised. With it on,
+            # a non-zero cargo exit threw at the assignment, Write-Host below
+            # never ran, and the job log showed only that cargo ended
+            # with a non-zero exit code, with nothing the example or the
+            # compiler had said. That is what hid why ipi-onprem-performance was
+            # failing every night.
+            $PSNativeCommandUseErrorActionPreference = $false
             $output = cargo run --release --config source.toml -p $Package --bin $Bin 2>&1 | Out-String
+            $exitCode = $LASTEXITCODE
         } finally {
             Pop-Location
         }
         Write-Host $output
+        if ($exitCode -ne 0) {
+            Write-Error "'$Bin' exited with code $exitCode. Its output is above."
+        }
         $found = [regex]::Matches($output, $Pattern)
         if ($found.Count -eq 0) {
             Write-Error "Could not parse a throughput figure from '$Bin' output"

@@ -22,9 +22,8 @@
 
 //! The render context for the bundled Mustache template.
 //!
-//! This packages the eleven parameters the template expects and renders them
-//! with the
-//! crate's small [`crate::mustache`] renderer, implementing its [`Context`]
+//! This packages the twelve parameters the template expects and renders them
+//! with the crate's small [`crate::mustache`] renderer, implementing its [`Context`]
 //! trait so that HTML escaping is disabled for every field.
 
 use crate::constants::MISSING_JSON_OBJECT;
@@ -64,6 +63,10 @@ pub struct JavaScriptResource {
     update_enabled: bool,
     /// Whether the payload contains delayed-execution JavaScript properties.
     has_delayed_properties: bool,
+    /// Whether the script carries the section that gathers the visitor's
+    /// answer a 51Did is created from. True only when the cloud request
+    /// engine's licensed products include 51Did.
+    user_prompt: bool,
 }
 
 impl JavaScriptResource {
@@ -73,6 +76,9 @@ impl JavaScriptResource {
     /// empty or whitespace.
     /// `url` is the already-built callback URL (empty string when none could be
     /// formed). `update_enabled` should be `true` only when that URL is present.
+    /// `user_prompt` should be `true` only when the cloud request engine's
+    /// licensed products include 51Did. The section it controls sits inside the
+    /// update section, so it renders only when `update_enabled` is also `true`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         obj_name: impl Into<String>,
@@ -86,6 +92,7 @@ impl JavaScriptResource {
         enable_cookies: bool,
         update_enabled: bool,
         has_delayed_properties: bool,
+        user_prompt: bool,
     ) -> Self {
         let json_object = json_object.into();
         let json_object = if json_object.trim().is_empty() {
@@ -105,6 +112,7 @@ impl JavaScriptResource {
             enable_cookies,
             update_enabled,
             has_delayed_properties,
+            user_prompt,
         }
     }
 
@@ -138,6 +146,7 @@ impl Context for JavaScriptResource {
             "_enableCookies" => Some(Value::Str(bool_str(self.enable_cookies))),
             "_updateEnabled" => Some(Value::Str(bool_str(self.update_enabled))),
             "_hasDelayedProperties" => Some(Value::Str(bool_str(self.has_delayed_properties))),
+            "_userPrompt" => Some(Value::Str(bool_str(self.user_prompt))),
             _ => None,
         }
     }
@@ -149,6 +158,9 @@ impl Context for JavaScriptResource {
             "_enableCookies" => Some(self.enable_cookies),
             "_updateEnabled" => Some(self.update_enabled),
             "_hasDelayedProperties" => Some(self.has_delayed_properties),
+            // The renderer treats a name with no arm here as unknown and omits
+            // the section, so this arm is what lets the section render.
+            "_userPrompt" => Some(self.user_prompt),
             _ => None,
         }
     }
@@ -180,6 +192,7 @@ mod tests {
             true,
             true,
             false,
+            false,
         )
     }
 
@@ -206,6 +219,7 @@ mod tests {
             true,
             false,
             false,
+            false,
         );
         let rendered = resource.render(&template);
         // No HTML entities anywhere: the '<', '>', '&' and '"' survive verbatim.
@@ -224,12 +238,12 @@ mod tests {
         let template = Template::parse(source).unwrap();
 
         let cookies_on = JavaScriptResource::new(
-            "fod", "{}", "", 1, false, false, "", "{}", true, false, false,
+            "fod", "{}", "", 1, false, false, "", "{}", true, false, false, false,
         );
         assert_eq!(cookies_on.render(&template), "YES");
 
         let cookies_off = JavaScriptResource::new(
-            "fod", "{}", "", 1, false, false, "", "{}", false, false, false,
+            "fod", "{}", "", 1, false, false, "", "{}", false, false, false, false,
         );
         assert_eq!(cookies_off.render(&template), "NO");
     }
@@ -239,8 +253,31 @@ mod tests {
         let source = "var sequence = {{&_sequence}};";
         let template = Template::parse(source).unwrap();
         let resource = JavaScriptResource::new(
-            "fod", "{}", "", 7, false, false, "", "{}", true, false, false,
+            "fod", "{}", "", 7, false, false, "", "{}", true, false, false, false,
         );
         assert_eq!(resource.render(&template), "var sequence = 7;");
+    }
+
+    #[test]
+    fn user_prompt_section_renders_only_when_set() {
+        // The same nesting as the template, inside the update section.
+        let source = "{{#_updateEnabled}}{{#_userPrompt}}PROMPT{{/_userPrompt}}{{/_updateEnabled}}";
+        let template = Template::parse(source).unwrap();
+
+        let entitled = JavaScriptResource::new(
+            "fod", "{}", "", 1, false, false, "u", "{}", true, true, false, true,
+        );
+        assert_eq!(entitled.render(&template), "PROMPT");
+
+        let unentitled = JavaScriptResource::new(
+            "fod", "{}", "", 1, false, false, "u", "{}", true, true, false, false,
+        );
+        assert_eq!(unentitled.render(&template), "");
+
+        // Updates off leaves the section out even for an entitled key.
+        let no_updates = JavaScriptResource::new(
+            "fod", "{}", "", 1, false, false, "", "{}", true, false, false, true,
+        );
+        assert_eq!(no_updates.render(&template), "");
     }
 }

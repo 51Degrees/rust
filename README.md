@@ -302,13 +302,21 @@ automation. Its `Contract` category drives headless Chrome against a running
 example and checks that the page serves `51Degrees.core.js`, that client-side
 evidence flows back, and that the server renders a real detection result.
 
-CI does not run it here. The browser contract for this SDK runs in the
-cloud service's own repository, in the language matrix
-alongside the .NET, Java, Node, Python and PHP examples, against the container
-that run builds. It used to run here against the public cloud, which made this
-the only SDK testing production data rather than the code under review.
+CI runs it here in the `contract` job of the Examples workflow
+(`.github/workflows/examples.yml`), through `ci/run-browser-contract.ps1`,
+against both device detection web examples built from this checkout. The
+cloud example (`dd-web-getting-started-cloud`) talks to the public cloud with
+the bespoke resource key. The on-premise example
+(`dd-web-getting-started-onprem`) loads the TAC data file, because the Lite
+file has neither `DeviceType` nor the screen size JavaScript properties the
+contract checks. A test that fails, or that the suite skips as inconclusive,
+fails the job. Start it on any branch with
+`gh workflow run Examples --ref <branch>`. The cloud service also runs the
+cloud example against its own container, alongside the .NET, Java, Node,
+Python and PHP examples.
 
-To run it locally, check out `selenium-api-tests` as a sibling of this repo and
+To run the contract against an example that is already running, set
+`EXAMPLE_URL` to its address, as the CI script does. To run it locally, check out `selenium-api-tests` as a sibling of this repo and
 let the suite launch the example itself through its `rust` descriptor. Point
 `CLOUD_ROOT_URL` at a cloud container rather than the public service, so the
 result reflects the code and data you are testing:
@@ -323,7 +331,7 @@ dotnet test --filter TestCategory=Contract
 
 The `fodid` crate compiles the OWID envelope library (the library a 51Did is
 built on) into itself from the `owid-rust` submodule
-(https://github.com/51Degrees/owid-rust), so no OWID crate has to exist on
+(https://github.com/SWAN-community/owid-rust), so no OWID crate has to exist on
 any registry. After cloning, run `git submodule update --init` and then
 `pwsh ./ci/copy-owid-source.ps1` (PowerShell 7, on any platform) to place the
 source under `fodid/src/owid`, which git ignores. Run the script again after
