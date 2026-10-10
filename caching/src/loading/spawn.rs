@@ -20,7 +20,7 @@
  * such notice(s) shall fulfill the requirements of that article.
  * ********************************************************************* */
 
-//! Where a cache runs its loads: in the caller, or as tasks of their own
+//! Where a cache runs its loads, in the caller or as tasks of their own
 //! that a host starts.
 
 use std::future::Future;

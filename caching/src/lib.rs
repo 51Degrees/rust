@@ -213,9 +213,9 @@
 //!
 //! The crate builds for `wasm32-wasip1` and `wasm32-wasip2`, and for
 //! `wasm32-unknown-unknown` with default features off. The `pipeline`
-//! feature is the only part that needs `fiftyone-pipeline-core`. On WebAssembly `ahash` is seeded when the crate is
-//! compiled rather than at run time, because `wasm32-unknown-unknown` has no
-//! source of randomness.
+//! feature is the only part that needs `fiftyone-pipeline-core`. On
+//! WebAssembly `ahash` is seeded when the crate is compiled rather than at
+//! run time, because `wasm32-unknown-unknown` has no source of randomness.
 //!
 //! ## A minimal cache
 //!

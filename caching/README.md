@@ -32,8 +32,8 @@ runs.
 - `tokio`, for native hosts, adds a spawner over a tokio-util local pool.
 
 The crate builds for native targets, `wasm32-wasip1` and `wasm32-wasip2`,
-and for `wasm32-unknown-unknown` with default features off. The `pipeline` feature,
-on by default, brings `DataKeyedCache` and the dependency on
+and for `wasm32-unknown-unknown` with default features off. The `pipeline`
+feature, on by default, brings `DataKeyedCache` and the dependency on
 `fiftyone-pipeline-core` it needs.
 
 This crate is part of the [51Degrees](https://51degrees.com/?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fiftyone-caching-readme.md&utm_term=introduction) Rust solution for high-performance
