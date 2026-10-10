@@ -366,6 +366,8 @@ fn a_builder_reports_what_is_wrong_rather_than_building() {
     assert!(faults.to_string().contains("Format must be 1"), "{faults}");
 }
 
+// A test on WebAssembly has no file system to read from.
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn a_script_can_be_read_from_a_file() {
     // The shipped scripts are compiled in, and this is the one path that needs

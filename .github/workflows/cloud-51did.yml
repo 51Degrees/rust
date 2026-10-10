@@ -30,7 +30,7 @@ on:
   schedule:
     - cron: '50 5 * * *'
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
     paths:
       - 'fodid/**'
       - 'owid-rust/**'

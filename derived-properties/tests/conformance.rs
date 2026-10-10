@@ -18,6 +18,10 @@
 //! answer in .NET, Node, Java, Python or PHP then this crate has failed at its
 //! only job, so these tests are the point of the crate rather than a check on
 //! it.
+//!
+//! The cases are read from disk, so they are compiled only off WebAssembly,
+//! where a test has no file system.
+#![cfg(not(target_family = "wasm"))]
 
 use std::collections::BTreeSet;
 use std::fs;
