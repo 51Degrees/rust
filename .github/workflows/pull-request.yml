@@ -287,7 +287,8 @@ jobs:
             fiftyone-cloud-request-engine \
             fiftyone-device-detection-cloud \
             fiftyone-ip-intelligence-cloud \
-            fiftyone-fodid-cloud; do
+            fiftyone-fodid-cloud \
+            fodid-client; do
             echo "::group::build ${crate}"
             cargo build -p "${crate}" --no-default-features --target wasm32-wasip1
             echo "::endgroup::"
@@ -302,7 +303,8 @@ jobs:
             fiftyone-cloud-request-engine \
             fiftyone-device-detection-cloud \
             fiftyone-ip-intelligence-cloud \
-            fiftyone-fodid-cloud; do
+            fiftyone-fodid-cloud \
+            fodid-client; do
             echo "::group::clippy ${crate}"
             cargo clippy -p "${crate}" --no-default-features --target wasm32-wasip1 -- -D warnings
             echo "::endgroup::"
@@ -337,7 +339,8 @@ jobs:
             fiftyone-ip-intelligence-shared \
             fiftyone-device-detection-cloud \
             fiftyone-ip-intelligence-cloud \
-            fiftyone-fodid-cloud; do
+            fiftyone-fodid-cloud \
+            fodid-client; do
             echo "::group::test ${crate}"
             cargo test -p "${crate}" --no-default-features --target wasm32-wasip1
             echo "::endgroup::"

@@ -289,6 +289,9 @@ fn a_key_fetch_on_a_licence_key_refused_with_it_quoted_does_not_print_it() {
     );
 }
 
+// Catching the panic needs unwinding, which wasm32-wasip1 does not have,
+// so there a panic aborts the test binary.
+#[cfg(panic = "unwind")]
 #[test]
 fn the_panic_from_unwrapping_a_failed_call_carries_no_key() {
     // The client holds trait objects that carry no unwind-safety promise, so
