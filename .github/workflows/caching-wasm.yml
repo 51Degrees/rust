@@ -33,7 +33,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
   workflow_dispatch:
 
 # A newer push to the same ref cancels an in-flight run so the queue stays short.
