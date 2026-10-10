@@ -284,10 +284,13 @@ The other 51Did clients this crate is a port of, and the engine repositories:
 - https://github.com/51Degrees/pipeline-php-did
 - https://github.com/SWAN-community/owid-rust
 
+The OWID envelope a 51Did travels in:
+
+- https://github.com/SWAN-community/owid/blob/main/explainer.md
+
 On 51degrees.com:
 
 - [What a 51Did is and how it is used](https://51degrees.com/documentation/_identifiers__index.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-client-readme.md&utm_term=identifiers-documentation)
-- [The OWID envelope a 51Did travels in](https://51degrees.com/documentation/_pipeline_api__advanced_features__o_w_i_d.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-client-readme.md&utm_term=owid-documentation)
 - [The 51Did inspector, a visual breakdown of an identifier](https://51degrees.com/developers/51did-inspector?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-client-readme.md&utm_term=51did-inspector)
 - [Get a resource key](https://configure.51degrees.com/?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-client-readme.md&utm_term=configure)
 

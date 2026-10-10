@@ -105,6 +105,15 @@ is ignored by git and listed in the `fodid` manifest's `include`, so
 - `pull-request.yml` — fmt, build, test, clippy and doc on Windows, Linux
   (two LTS) and macOS (Intel and Apple Silicon), plus a wasm32-wasip1 job for
   the cloud crates. Runs on pushes to `main` and PRs targeting `main`.
+- `caching-wasm.yml` lints and tests `fiftyone-caching`, the loading cache
+  included, on wasm32-wasip1 under wasmtime and, with default features off,
+  on wasm32-unknown-unknown under Node through `ci/run-wasm-unknown.mjs`.
+  Each host feature has a job too. `fastly` is tested on Viceroy, Fastly's
+  local runtime. `cloudflare` runs the Worker in
+  `caching/host-tests/cloudflare` on workerd through Miniflare. `spin` runs
+  the component in `caching/host-tests/spin` on Spin, and that job also
+  tests the crate on wasm32-wasip2 under wasmtime. Same triggers, and it
+  reads no secrets.
 - `examples.yml` — builds and tests `examples/` against local source
   (`source.toml`) before a release. Runs on every PR.
 - `publish.yml` — publishes on push to `main`, then a `verify-published` job
@@ -147,6 +156,22 @@ is ignored by git and listed in the `fodid` manifest's `include`, so
   metadata URLs are allow-listed as untagged.
 - **Code style.** Wrap code and doc comments to about 80 columns (soft limit;
   do not break URLs or string literals to hit it). This keeps diffs reviewable.
+- **Caching on WebAssembly.** `fiftyone-caching` must keep building and
+  running on wasm32-unknown-unknown with default features off, where the
+  standard library has no clock and no randomness. Only its `pipeline`
+  feature may bring in another crate from this workspace, `ahash` takes a
+  build-time seed on wasm targets, and the loading cache takes every time
+  from its `Clock`, never from `Instant` or `SystemTime::now`.
+- **Caching host stores.** The `fastly`, `cloudflare` and `spin` modules
+  compile only with their feature on their own target, and their SDKs are
+  dependencies on that target alone, so a native build with every feature
+  leaves them out. Logic they can share without the SDK sits outside the
+  binding and is unit tested on every target. The crates in
+  `caching/host-tests` are test harnesses with workspaces of their own.
+  On Cloudflare the runtime stops a request that waits with nothing of its
+  own pending, and refuses I/O a request makes in another request's turn.
+  `cloudflare::with_context` handles both, and only the workerd job proves
+  a change there.
 - **MSRV.** The workspace pins `rust-version = "1.94"` (the JavaScript builder's
   minifier toolchain needs a recent compiler).
 

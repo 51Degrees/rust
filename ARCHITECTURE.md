@@ -43,7 +43,14 @@ examples        examples-shared, device-detection-examples,
 
 - **core** (`fiftyone-pipeline-core`, `fiftyone-caching`). FlowData, the
   FlowElement/Pipeline traits, immutable Evidence, ElementData, TypedKey,
-  WeightedValue, errors and constants, plus the sharded-LRU cache.
+  WeightedValue, errors and constants, plus the sharded-LRU cache and the
+  loading cache. The caching crate's `pipeline` feature, on by default,
+  brings `DataKeyedCache` and the crate's only dependency on the core, so
+  with it off the caches build without the pipeline, for WebAssembly hosts
+  included. Its `fastly`, `cloudflare`, `spin` and `tokio` features, off by
+  default, add stores over those platforms' key-value stores and caches and
+  spawners for their tasks, each pulling in the platform's SDK only on the
+  target the platform runs.
 - **engines** (`fiftyone-pipeline-engines`,
   `fiftyone-pipeline-engines-fiftyone`, `fiftyone-cloud-request-engine`,
   `fiftyone-derived-properties`, `fiftyone-json-builder`,
