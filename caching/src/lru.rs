@@ -163,6 +163,11 @@ where
         self.clear_entries();
     }
 
+    /// Remove the entry for `key`, returning its value if there was one.
+    pub fn remove(&self, key: &K) -> Option<V> {
+        self.shard_for(key).lock().remove(key)
+    }
+
     /// Drop every entry from every shard. Shared by the inherent
     /// [`LruCache::clear`] and the [`PutCache::clear`] trait method so the two
     /// cannot drift apart.
