@@ -230,7 +230,9 @@ jobs:
 
   # The cloud crates must keep compiling for WebAssembly (wasm32-wasip1) so a
   # wasm consumer (for example a trusted-server deployment) can link them and
-  # supply its own synchronous CloudHttpClient. They build with reqwest and the
+  # supply its own synchronous CloudHttpClient. The derived property element is
+  # covered too, because it compiles its scripts in so that it can run where
+  # there is no file system. They build with reqwest and the
   # data-update service disabled (default-features = false), so this job needs
   # neither the C/C++ sources the -sys crates compile nor the data submodules,
   # and it runs on Linux alone because a cross-compile to wasm is host-neutral.
@@ -243,7 +245,9 @@ jobs:
   # resource key, which wasip1 sandboxes and which the reqwest-disabled build has
   # no transport for. fiftyone-caching's concurrency tests are also skipped, but
   # only those: they spawn threads and so live in a native-only test file, while
-  # the crate's single-threaded behavioural suite does run here on wasm.
+  # the crate's single-threaded behavioural suite does run here on wasm. The
+  # derived property element's conformance cases and its one script file test
+  # read from disk, so they are native only as well.
   wasm:
     name: wasm (wasm32-wasip1)
     # Cross-compile to wasm is host-neutral; pin to a current LTS for consistency.
@@ -287,7 +291,8 @@ jobs:
             fiftyone-cloud-request-engine \
             fiftyone-device-detection-cloud \
             fiftyone-ip-intelligence-cloud \
-            fiftyone-fodid-cloud; do
+            fiftyone-fodid-cloud \
+            fiftyone-derived-properties; do
             echo "::group::build ${crate}"
             cargo build -p "${crate}" --no-default-features --target wasm32-wasip1
             echo "::endgroup::"
@@ -302,7 +307,8 @@ jobs:
             fiftyone-cloud-request-engine \
             fiftyone-device-detection-cloud \
             fiftyone-ip-intelligence-cloud \
-            fiftyone-fodid-cloud; do
+            fiftyone-fodid-cloud \
+            fiftyone-derived-properties; do
             echo "::group::clippy ${crate}"
             cargo clippy -p "${crate}" --no-default-features --target wasm32-wasip1 -- -D warnings
             echo "::endgroup::"
@@ -337,7 +343,8 @@ jobs:
             fiftyone-ip-intelligence-shared \
             fiftyone-device-detection-cloud \
             fiftyone-ip-intelligence-cloud \
-            fiftyone-fodid-cloud; do
+            fiftyone-fodid-cloud \
+            fiftyone-derived-properties; do
             echo "::group::test ${crate}"
             cargo test -p "${crate}" --no-default-features --target wasm32-wasip1
             echo "::endgroup::"
