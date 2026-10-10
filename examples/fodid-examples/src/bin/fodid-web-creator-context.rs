@@ -403,7 +403,7 @@ mod tests {
     use axum::body::{to_bytes, Body};
     use axum::http::{HeaderValue, Request};
     use fodid_client::{DidHttpClient, DidHttpRequest, DidHttpResponse, LocalBoxFuture};
-    use owid::{Creator, Crypto};
+    use fodid::{Creator, Crypto};
     use tower::ServiceExt;
 
     const RESOURCE_KEY: &str = "resource-key-placeholder";
