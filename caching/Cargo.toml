@@ -1,7 +1,7 @@
 [package]
 name = "fiftyone-caching"
 version = "4.5.2"
-description = "Sharded-LRU cache trait and default implementation for the 51Degrees pipeline."
+description = "Sharded LRU cache and loading cache for the 51Degrees pipeline and services built with it, for native and WebAssembly hosts."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -9,12 +9,65 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+[features]
+default = ["pipeline"]
+# DataKeyedCache, which keys a cache by a flow data's evidence. Only it needs
+# fiftyone-pipeline-core, so turning this off lets the rest of the crate build
+# for wasm32-unknown-unknown.
+pipeline = ["dep:fiftyone-pipeline-core"]
+# Stores over the Fastly KV store and core cache, in the fastly module, for
+# wasm32-wasip1 on Fastly Compute. The SDK is only a dependency there.
+fastly = ["dep:fastly"]
+# Stores over Workers KV and the Cache API, a spawner that keeps a load
+# running with the request's wait_until, and a clock, in the cloudflare
+# module, for wasm32-unknown-unknown on Cloudflare Workers. Use it with
+# default features off, because the pipeline feature does not build there.
+cloudflare = ["dep:worker"]
+# A store over Spin's key-value store, in the spin module, for wasm32-wasip2
+# on Spin 4. The SDK is only a dependency there.
+spin = ["dep:spin-sdk"]
+# A spawner that runs loads on a tokio-util local pool, in the tokio module,
+# for native hosts.
+tokio = ["dep:tokio-util"]
+
 [dependencies]
-fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
-ahash.workspace = true
+fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core", optional = true }
 # A current insertion-ordered hash map. Moving an entry to the back on access
 # and popping from the front gives least-recently-used eviction per shard.
 hashlink = "0.10"
+
+# Native builds seed ahash at run time from the operating system. The tokio
+# feature's local pool needs threads, so it is native only.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+ahash.workspace = true
+tokio-util = { version = "0.7", optional = true, features = ["rt"] }
+
+# WebAssembly builds seed ahash when the crate is compiled, so getrandom, which
+# does not build for wasm32-unknown-unknown without a JavaScript backend, never
+# reaches them.
+[target.'cfg(target_family = "wasm")'.dependencies]
+ahash = { version = "0.8", default-features = false, features = ["std", "compile-time-rng"] }
+
+# The Fastly Compute SDK, which builds for wasm32-wasip1 only.
+[target.'cfg(all(target_os = "wasi", target_env = "p1"))'.dependencies]
+fastly = { version = "0.13", optional = true }
+
+# The Cloudflare Workers SDK, which builds for wasm32-unknown-unknown only.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+worker = { version = "0.8", optional = true }
+
+# The Spin SDK, which builds for wasm32-wasip2 only. Only its key-value
+# interface is used.
+[target.'cfg(all(target_os = "wasi", target_env = "p2"))'.dependencies]
+spin-sdk = { version = "7", optional = true, default-features = false, features = ["key-value"] }
+
+# The multi-threaded spawner test runs loads on a tokio runtime, which needs
+# threads, so it is a native-only test dependency. The crate depends on
+# itself with the tokio feature so its native tests cover the local pool
+# spawner. Default features stay as the command line sets them.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+fiftyone-caching = { path = ".", default-features = false, features = ["tokio"] }
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the

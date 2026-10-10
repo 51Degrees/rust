@@ -14,7 +14,7 @@ describes what a 51Did is and how it is used. This crate parses the 51Did byte
 layout, which is carried in a signed
 [OWID](https://github.com/SWAN-community/owid) envelope. For the OWID envelope
 concept see the
-[OWID documentation](https://51degrees.com/documentation/_pipeline_api__advanced_features__o_w_i_d.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=owid).
+[OWID explainer](https://github.com/SWAN-community/owid/blob/main/explainer.md).
 
 The code blocks in this file are compiled and run as documentation tests of
 the crate, so they stay true to the code.
