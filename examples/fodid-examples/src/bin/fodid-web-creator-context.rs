@@ -423,7 +423,7 @@ mod tests {
             request: &'a DidHttpRequest,
         ) -> LocalBoxFuture<'a, Result<DidHttpResponse, String>> {
             Box::pin(async move {
-                if request.url.contains("/id/key/") {
+                if request.url.contains("/id/key") {
                     let body = serde_json::json!([{
                         "startsAt": "2020-01-01T00:00:00Z",
                         "publicKey": self.public_key_pem,

@@ -998,6 +998,7 @@ version = "4.5.0"
 dependencies = [
  "chrono",
  "fodid",
+ "reqwest",
  "serde_json",
  "thiserror",
 ]
