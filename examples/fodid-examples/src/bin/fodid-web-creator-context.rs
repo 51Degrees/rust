@@ -183,11 +183,26 @@ struct RedeemQuery {
     challenge: String,
 }
 
-/// The server-side step. The client is asynchronous, so the handler awaits
-/// it directly. Its transport is not Send, which is why the work must stay
-/// on this task rather than moving to a blocking thread as it once did.
+/// The server-side step. The client's futures are not Send, because its
+/// transport is written for hosts without threads, and axum needs a handler
+/// whose future is, so the calls run on a blocking thread with a runtime of
+/// their own.
 async fn redeem(State(demo): State<Demo>, Query(query): Query<RedeemQuery>) -> Response {
-    redeem_with(&demo.client, &query).await
+    let client = Arc::clone(&demo.client);
+    let redeemed = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a current-thread runtime starts");
+        runtime.block_on(redeem_with(&client, &query))
+    })
+    .await;
+    redeemed.unwrap_or_else(|error| {
+        errors_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("the redeem step did not complete: {error}"),
+        )
+    })
 }
 
 /// The lines a developer copies into their own server. The licence key is
