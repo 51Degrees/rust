@@ -41,27 +41,91 @@ A 51Did is described at three levels, and this crate keeps them distinct.
 
 ## Identifier types
 
-Bits 6-7 of the flags byte select the `IdType`, which determines the length
-and meaning of the match key:
+The flags byte carries the identifier type, read through `FodId::id_type`,
+which determines the length and meaning of the match key:
 
 - `IdType::Probabilistic` (the default; legacy identifiers decode as this)
   and `IdType::HashedEmail` carry a 32-byte SHA-256.
 - `IdType::Random` carries a 16-byte server-generated GUID.
 - `IdType::Reserved` is not yet assigned and is parsed best effort.
 
+## The terms the identifier was created under
+
+The byte after the match key says which terms document the 51Did was created
+under, so that the terms travel with the identifier rather than beside it. It
+is an index into a table published in the
+[specification](https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md)
+and is not a version number. `FodId::terms` answers with the address of the
+document, so a caller never handles the byte.
+
+| Index | Document | `FodId::terms` |
+| --- | --- | --- |
+| `0` | Not stated in the identifier | `None` |
+| `1` | Model Terms for Marketing, version 2 | `Some("https://m4ow.uk/mtm/2.txt")` |
+| any other | One this crate cannot name | `None` |
+
+An identifier whose payload ends at the match key carries no terms byte, and
+a missing byte is index 0, which answers with no address. An index added to
+the specification after this release answers with no address as well, and no
+address is ever built from an index this crate cannot name, since that would
+name a document nobody wrote. A caller therefore cannot tell an index of
+zero from an index this crate cannot name, which is deliberate, because both
+lead to the same place. This crate answers with the address and never
+fetches it.
+
+## The payload version
+
+Bits 4 and 5 of the flags byte say which payload layout the identifier
+follows, and this crate reads version 0. A payload naming version 1, 2 or 3
+is refused with `Error::UnsupportedPayloadVersion`, which names the version
+it found.
+
+No field is read under the layout this crate knows once the version says
+otherwise. A later version exists precisely because a field moved, so
+reading such a payload here would answer with values that are wrong rather
+than absent, which is worse than refusing. A version that nothing checks
+protects nothing.
+
+The version is not exposed. Either this crate read the layout, in which case
+the accessors are the answer, or it did not, in which case there is no
+identifier to read fields from.
+
+## A payload with no usage
+
+`Usage` has exactly three values, being `NonMarketing`, `Standard` and
+`Personalized`. A payload whose usage bits 0 to 2 are all clear is refused
+with `Error::NoUsage`. Every usage the cloud accepts sets bit 0, so such a
+payload is damaged or forged, and the only safe answer to it is not to pass
+the identifier on, which the refusal already gives.
+
+`usage_is_indirect()` answers whether the usage was stated by the caller
+(`false`) or worked out by the issuer from another signal the caller sent
+(`true`). Today a consent string is the only such signal.
+
 ## Payload layout
 
-| Offset | Length | Field                                              |
-|-------:|-------:|----------------------------------------------------|
-|      0 |      1 | Flags (bits 0-2 usage, bits 6-7 type)              |
-|      1 |      4 | LicenseId (`u32` little endian)                    |
-|      5 |     32 | Value: SHA-256 (Probabilistic, HashedEmail)        |
-|      5 |     16 | Value: GUID (Random)                               |
+The payload is a five byte header, being a flags byte and a four byte little
+endian License Id, followed by the match key. Every field is read through a
+typed accessor on `FodId`, and the offsets and lengths are internal to the
+crate, because the only use a caller has for an offset is to read a field out
+of the payload by hand, and that is how the usage comes out wrong. The layout
+is specified at
+[identifier-layout.md](https://github.com/51Degrees/specifications/blob/main/did-specification/identifier-layout.md)
+and the accessors every 51Did package offers at
+[package-surface.md](https://github.com/51Degrees/specifications/blob/main/did-specification/package-surface.md),
+and those two pages are the authority rather than any summary here.
 
-These lengths are lower bounds. The payload must hold the 5 byte header
+A terms byte follows the match key, read through `FodId::terms`, which
+answers with the address of the document the identifier was created under.
+Where it sits depends on the match key length the type requires, which is
+one reason the offsets stay internal.
+
+The lengths given there are lower bounds. The payload must hold the header
 before the type can be read, and then the value the type requires, being 16
 GUID bytes for a random identifier and 32 hash bytes for a probabilistic or
-hashed email one. A payload may carry more bytes after the value, which this
+hashed email one. The terms byte follows the value, so where it sits depends
+on the value length the type requires, and a payload that ends at the value
+carries none. A payload may carry more bytes after the terms, which this
 crate accepts and leaves in place. There is no upper bound on a 51Did in this
 crate, so a reader built today keeps reading identifiers issued in a newer,
 longer shape.
@@ -85,19 +149,27 @@ use fodid::{FodId, SignatureStatus};
 fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::Error> {
     let fod_id = FodId::from_base64(base64_from_cloud_service)?;
 
-    let flags = fod_id.flags();          // u8
+    let usage = fod_id.usage();          // the highest usage granted
+    let indirect = fod_id.usage_is_indirect(); // stated or worked out
+    let id_type = fod_id.id_type();      // IdType
     let license_id = fod_id.license_id(); // u32
     let match_key = fod_id.match_key();  // the match key bytes (SHA-256 or GUID)
+
+    // The terms the identifier was created under, and the address of that
+    // document where this crate knows the index.
+    let terms = fod_id.terms();             // Option<&'static str>
 
     // Inherited OWID level fields and operations, available through Deref.
     let domain = fod_id.domain();
     let round_trip = fod_id.as_base64()?;
 
     // The second question, asked separately.
-    let genuine = fod_id.verify_status_with_public_key(public_pem, &[])
+    let genuine = fod_id.verify_status_with_public_key(public_pem)
         == SignatureStatus::Valid;
 
-    let _ = (flags, license_id, match_key, domain, round_trip, genuine);
+    let _ = (usage, indirect, id_type, license_id, match_key);
+    let _ = (domain, round_trip, genuine);
+    let _ = terms;
     Ok(())
 }
 ```
@@ -109,16 +181,18 @@ have written, so malformed input is expected and a failed read is an ordinary
 `Err` naming the reason, never a panic. Every result carries three facts:
 whether the read succeeded, the value (present only on success, never a
 partly read `FodId`), and the status, which is the `Error` variant on failure.
-The status vocabulary is the OWID one plus two 51Did statuses, checked in this
-order.
+The status vocabulary is the OWID one plus four 51Did statuses, checked in
+this order.
 
 | Status | Meaning |
 |---|---|
 | `Error::Parse` | The bytes are not an OWID envelope. The OWID reason is kept unchanged inside and read with `.status()`, for example `ParseStatus::MissingInput`, `InvalidBase64`, `UnexpectedEnd` or `ByteCountMismatch`. |
 | `Error::PayloadTooShort` | The envelope is fine, but the payload cannot hold the 5 byte 51Did header, so the identifier type cannot be read. |
+| `Error::UnsupportedPayloadVersion` | The flags byte names a payload version other than 0, and the variant names the version found. |
+| `Error::NoUsage` | The flags byte sets none of usage bits 0 to 2. |
 | `Error::InvalidTypePayloadLength` | The header was read, and the payload is shorter than the value the identifier type requires (21 bytes in all for random, 37 for probabilistic and hashed email). |
 
-All three are data results. `Error::Owid` is the one exceptional variant, and
+All five are data results. `Error::Owid` is the one exceptional variant, and
 no read produces it. It appears only when a caller uses `?` on an OWID
 operation of a parsed value, such as serialising it again.
 
@@ -175,7 +249,7 @@ The OWID implementation this crate builds on was hardened so that an OWID
 reaches a caller only from a successful read or from a creator that signs it,
 and at the same time this crate stopped depending on an `owid` crate (see
 "Where the OWID code comes from" below). Callers who reached the envelope
-through this crate will find four changes.
+through this crate will find five changes.
 
 OWID types are named through `fodid` rather than through an `owid` crate,
 because there is no `owid` dependency to add any more. A test that signs an
@@ -225,6 +299,16 @@ and there is no unsigned state.
 creator.sign_bytes(payload)?             creator.create(payload)?
 ```
 
+The functions that check a signature take the key alone, because a signature
+covers its own OWID and nothing else. They used to take a list of other OWIDs
+as well, and for a 51Did that list was always empty. A creator signs the same
+way, so `Creator::create_with_others` is gone.
+
+```text
+// Before                                // After
+fod_id.verify_with_public_key(pem, &[])  fod_id.verify_with_public_key(pem)
+```
+
 ## Non goals
 
 - **Signature verification on construction.** Reading a `FodId` does not check
@@ -240,8 +324,7 @@ creator.sign_bytes(payload)?             creator.create(payload)?
 This crate does not depend on an `owid` crate from crates.io or from git. The
 OWID library is compiled into `fodid` as a private module from the
 `owid-rust` submodule of this repository,
-[51Degrees/owid-rust](https://github.com/51Degrees/owid-rust), a fork that
-follows [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust).
+[SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust).
 The script `ci/copy-owid-source.ps1` copies the source into `fodid/src/owid`
 before every build, together with a `NOTICE` naming the exact commit the copy
 came from and the library's own Apache 2.0 `LICENSE`, and the published crate
@@ -260,9 +343,8 @@ directory is ignored by git, and the script can be run again at any time.
 
 ## See also
 
-- [51Degrees/owid-rust](https://github.com/51Degrees/owid-rust) - the OWID
-  envelope library compiled into this crate, following
-  [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust).
+- [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust) -
+  the OWID envelope library compiled into this crate.
 - The [51Did inspector](https://51degrees.com/developers/51did-inspector?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=51did-inspector) for a
   visual breakdown of the same byte layout.
 

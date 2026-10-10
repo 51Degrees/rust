@@ -49,6 +49,15 @@
 //! `query.fod-js-enable-cookies`, `header.host` and `header.protocol`). See
 //! [`JavaScriptBuilderElement`] for the full derivation rules.
 //!
+//! ## The user prompt section
+//!
+//! The template has a section that gathers the visitor's answer from the
+//! 51Degrees Preference Management Platform (PMP) or a consent platform on the
+//! page, which is what a 51Did is created from. It is rendered only when the
+//! builder was given a cloud request engine, through
+//! [`JavaScriptBuilderElementBuilder::set_cloud_request_engine`], whose
+//! resource key is licensed for 51Did.
+//!
 //! ## Minification
 //!
 //! With the default-on `minify` feature the rendered script is minified by the
@@ -95,8 +104,8 @@ pub use constants::{
     BUILDER_DEFAULT_ENABLE_COOKIES, BUILDER_DEFAULT_HOST, BUILDER_DEFAULT_MINIFY,
     BUILDER_DEFAULT_OBJECT_NAME, BUILDER_DEFAULT_PROTOCOL, EVIDENCE_ENABLE_COOKIES,
     EVIDENCE_ENABLE_COOKIES_SUFFIX, EVIDENCE_HOST_KEY, EVIDENCE_OBJECT_NAME,
-    EVIDENCE_OBJECT_NAME_SUFFIX, FALLBACK_PROTOCOL, JAVASCRIPT_BUILDER_ELEMENT_DATA_KEY,
-    JAVASCRIPT_PROPERTY_KEY,
+    EVIDENCE_OBJECT_NAME_SUFFIX, FALLBACK_PROTOCOL, FODID_PRODUCT_NAME,
+    JAVASCRIPT_BUILDER_ELEMENT_DATA_KEY, JAVASCRIPT_PROPERTY_KEY,
 };
 pub use data::{JavaScriptBuilderElementData, JAVASCRIPT_BUILDER_DATA_KEY};
 pub use element::JavaScriptBuilderElement;

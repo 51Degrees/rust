@@ -76,7 +76,8 @@ use crate::dto::map_fodid_object;
 /// # Metadata
 ///
 /// The property metadata is derived lazily from the request engine's
-/// accessible properties on first use, taking the product whose key is `fodid`.
+/// accessible properties on first use, taking the product whose key is `fodid`
+/// compared ignoring case, as the cloud service reports it as `FODid`.
 /// Until that fetch succeeds the engine reports the shared default metadata (the
 /// two identifier properties), so a consumer always sees the documented set.
 ///
@@ -151,13 +152,18 @@ impl FodIdCloudEngine {
     }
 
     /// Derive the identifier metadata from the request engine's accessible
-    /// properties, taking the product keyed by `fodid`. Returns `None` if the
-    /// discovery fetch fails or the resource key grants no identifier product, in
-    /// which case the engine keeps reporting the shared defaults.
+    /// properties, taking the product keyed by `fodid` compared ignoring case,
+    /// because the cloud service reports the product as `FODid`. Returns `None`
+    /// if the discovery fetch fails or the resource key grants no identifier
+    /// product, in which case the engine keeps reporting the shared defaults.
     fn derive_metadata(
         products: &LicensedProducts,
     ) -> Option<(Vec<PropertyMetaData>, Vec<AspectPropertyMetaData>)> {
-        let product = products.products.get(FODID_ELEMENT_DATA_KEY)?;
+        let product = products
+            .products
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(FODID_ELEMENT_DATA_KEY))
+            .map(|(_, product)| product)?;
         if product.properties.is_empty() {
             return None;
         }
@@ -422,6 +428,34 @@ mod tests {
         assert_eq!(engine.properties().len(), 6);
         assert_eq!(engine.aspect_properties().len(), 6);
         assert!(!engine.has_loaded_properties());
+    }
+
+    #[test]
+    fn metadata_is_derived_from_the_product_as_the_cloud_names_it() {
+        // The cloud service reports the product as "FODid", which differs in
+        // case from the "fodid" element data key.
+        let products = LicensedProducts::parse(
+            r#"{"Products":{"FODid":{"DataTier":"CloudV5Bespoke","Properties":[
+                {"Name":"IdProbGlobal","Type":"String"},
+                {"Name":"IdRandGlobal","Type":"String"}
+            ]}}}"#,
+        )
+        .unwrap();
+        let (core, aspect) = FodIdCloudEngine::derive_metadata(&products)
+            .expect("the FODid product is found whatever its case");
+        let names: Vec<&str> = core.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["IdProbGlobal", "IdRandGlobal"]);
+        assert_eq!(aspect.len(), 2);
+
+        // A product with no properties, or no identifier product at all,
+        // still leaves the engine on its defaults.
+        for json in [
+            r#"{"Products":{"FODid":{"Properties":[]}}}"#,
+            r#"{"Products":{"device":{"Properties":[{"Name":"IsMobile","Type":"Bool"}]}}}"#,
+        ] {
+            let products = LicensedProducts::parse(json).unwrap();
+            assert!(FodIdCloudEngine::derive_metadata(&products).is_none());
+        }
     }
 
     #[test]
