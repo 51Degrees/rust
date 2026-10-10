@@ -496,6 +496,7 @@ dependencies = [
  "fiftyone-pipeline-web",
  "fiftyone-pipeline-web-axum",
  "serde",
+ "serde_json",
  "serde_norway",
  "tokio",
  "tower",
@@ -590,6 +591,8 @@ dependencies = [
  "chrono",
  "fiftyone-pipeline-core",
  "fiftyone-pipeline-engines",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
@@ -1320,6 +1323,7 @@ dependencies = [
  "fiftyone-pipeline-engines-fiftyone",
  "fiftyone-pipeline-web",
  "fiftyone-pipeline-web-axum",
+ "serde_json",
  "serde_norway",
  "tokio",
  "tower",
