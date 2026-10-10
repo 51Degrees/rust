@@ -49,6 +49,9 @@
 //!   data file and return age and Lite-tier warnings for the example to print.
 //! - [`get_property_as_string`]. Render any property from an element data bag to
 //!   a display string, handling the missing and no-value cases.
+//! - [`PerformanceResults`] and [`json_output_path`]. The results model the
+//!   performance examples emit for the nightly performance graphs, and the
+//!   `--json-output` argument they take the path from.
 //! - A set of sample evidence values (see the [`evidence`] module) covering the
 //!   common detection paths.
 
@@ -61,6 +64,7 @@ mod data_paths;
 mod endpoint;
 mod find_file;
 mod keys;
+mod performance_results;
 mod properties;
 
 pub use data_file_check::{check_data_file, data_file_info, DATA_FILE_AGE_WARNING_DAYS};
@@ -73,6 +77,7 @@ pub use endpoint::{cloud_endpoint_from_env, CLOUD_ENDPOINT_ENV_VAR};
 pub use find_file::{
     find_file, find_file_from, MAX_DESCENT_DEPTH, MAX_DIRECTORIES_SCANNED, MAX_PARENT_LEVELS,
 };
+pub use performance_results::{json_output_path, PerformanceResults, JSON_OUTPUT_FLAG};
 pub use keys::{
     is_invalid_key, resource_key_from_env, CI_RESOURCE_KEY_FREE_ENV_VAR,
     CI_RESOURCE_KEY_PAID_ENV_VAR, RESOURCE_KEY_ENV_VAR, RESOURCE_KEY_ENV_VARS,
