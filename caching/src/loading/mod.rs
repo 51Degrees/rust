@@ -23,8 +23,10 @@
 //! The loading cache, its stores and its loaders. The crate documentation
 //! describes how they fit together.
 
+mod byte_store;
 mod cache;
 mod clock;
+mod codec;
 mod entry;
 mod flight;
 mod loader;
@@ -33,10 +35,12 @@ mod shards;
 mod spawn;
 mod store;
 
+pub use byte_store::{ByteLookup, ByteStore, EncodedStore, EncodedStoreBuilder, ListKeys};
 pub use cache::{LoadingCache, LoadingCacheBuilder, LruLoadingCache};
 pub use clock::Clock;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 pub use clock::SystemClock;
+pub use codec::{decode_entry, encode_entry, Codec, DecodeError, Raw, Stored, Utf8, ENTRY_FORMAT};
 pub use entry::{Entry, Loaded};
 pub use loader::{from_fn, FnLoader, ValueLoader};
 pub use lru_store::{LruStore, LruStoreBuilder};
