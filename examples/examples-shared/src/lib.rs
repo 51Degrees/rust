@@ -40,8 +40,10 @@
 //! - [`resource_key_from_env`] and [`is_invalid_key`]. Read a cloud resource key
 //!   from the aligned, legacy and CI-exported environment variables, and screen
 //!   out obvious placeholders.
-//! - [`cloud_endpoint_from_env`]. Read the optional self-hosted cloud endpoint
-//!   from `51DEGREES_CLOUD_ENDPOINT`, trimmed and screened for blankness.
+//! - [`cloud_endpoint_from_env`]. Read the optional cloud endpoint from
+//!   `51DEGREES_CLOUD_ENDPOINT`, trimmed and screened for blankness, for an on
+//!   premise web server or a privately hosted 51Degrees cloud (see
+//!   [`CLOUD_ENDPOINT_ENV_VAR`]).
 //! - [`dd_data_path`] and [`ipi_data_path`]. Resolve the on-premise Device
 //!   Detection and IP Intelligence data files, the latter through the
 //!   ([`IpiTier`]) Enterprise/ASN scheme.
@@ -49,6 +51,9 @@
 //!   data file and return age and Lite-tier warnings for the example to print.
 //! - [`get_property_as_string`]. Render any property from an element data bag to
 //!   a display string, handling the missing and no-value cases.
+//! - [`PerformanceResults`] and [`json_output_path`]. The results model the
+//!   performance examples emit for the nightly performance graphs, and the
+//!   `--json-output` argument they take the path from.
 //! - A set of sample evidence values (see the [`evidence`] module) covering the
 //!   common detection paths.
 
@@ -61,6 +66,7 @@ mod data_paths;
 mod endpoint;
 mod find_file;
 mod keys;
+mod performance_results;
 mod properties;
 
 pub use data_file_check::{check_data_file, data_file_info, DATA_FILE_AGE_WARNING_DAYS};
@@ -73,6 +79,7 @@ pub use endpoint::{cloud_endpoint_from_env, CLOUD_ENDPOINT_ENV_VAR};
 pub use find_file::{
     find_file, find_file_from, MAX_DESCENT_DEPTH, MAX_DIRECTORIES_SCANNED, MAX_PARENT_LEVELS,
 };
+pub use performance_results::{json_output_path, PerformanceResults, JSON_OUTPUT_FLAG};
 pub use keys::{
     is_invalid_key, resource_key_from_env, CI_RESOURCE_KEY_FREE_ENV_VAR,
     CI_RESOURCE_KEY_PAID_ENV_VAR, RESOURCE_KEY_ENV_VAR, RESOURCE_KEY_ENV_VARS,

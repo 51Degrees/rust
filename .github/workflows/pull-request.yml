@@ -172,6 +172,15 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # The fodid crate's cloud client sits behind its opt-in `cloud`
+      # feature, which the workspace commands above leave off, so the crate
+      # is tested and linted again here with every feature on.
+      - name: cargo test (fodid, all features)
+        run: cargo test -p fodid --all-features
+
+      - name: cargo clippy (fodid, all features)
+        run: cargo clippy -p fodid --all-targets --all-features -- -D warnings
+
       - name: cargo doc
         run: cargo doc --workspace --no-deps
 
@@ -227,6 +236,8 @@ jobs:
           # shared macOS runner to get the process OS-killed (SIGKILL). Running the
           # cloud tests alone keeps the coverage without the pileup.
           cargo test --workspace -- --ignored --nocapture
+          # The cloud client's live tests need its opt-in feature.
+          cargo test -p fodid --all-features -- --ignored --nocapture
 
   # The cloud crates must keep compiling for WebAssembly (wasm32-wasip1) so a
   # wasm consumer (for example a trusted-server deployment) can link them and
@@ -287,7 +298,8 @@ jobs:
             fiftyone-cloud-request-engine \
             fiftyone-device-detection-cloud \
             fiftyone-ip-intelligence-cloud \
-            fiftyone-fodid-cloud; do
+            fiftyone-fodid-cloud \
+            fodid-client; do
             echo "::group::build ${crate}"
             cargo build -p "${crate}" --no-default-features --target wasm32-wasip1
             echo "::endgroup::"
@@ -302,7 +314,8 @@ jobs:
             fiftyone-cloud-request-engine \
             fiftyone-device-detection-cloud \
             fiftyone-ip-intelligence-cloud \
-            fiftyone-fodid-cloud; do
+            fiftyone-fodid-cloud \
+            fodid-client; do
             echo "::group::clippy ${crate}"
             cargo clippy -p "${crate}" --no-default-features --target wasm32-wasip1 -- -D warnings
             echo "::endgroup::"
@@ -337,7 +350,8 @@ jobs:
             fiftyone-ip-intelligence-shared \
             fiftyone-device-detection-cloud \
             fiftyone-ip-intelligence-cloud \
-            fiftyone-fodid-cloud; do
+            fiftyone-fodid-cloud \
+            fodid-client; do
             echo "::group::test ${crate}"
             cargo test -p "${crate}" --no-default-features --target wasm32-wasip1
             echo "::endgroup::"

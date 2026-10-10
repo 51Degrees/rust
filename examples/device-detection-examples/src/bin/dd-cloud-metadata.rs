@@ -154,7 +154,12 @@ fn main() -> Result<()> {
 
     run(ExampleOptions {
         resource_key,
-        endpoint: None,
+        // The cloud endpoint. Unset, the cloud request engine reads
+        // 51DEGREES_CLOUD_ENDPOINT itself, and it is passed here as well so the
+        // choice is visible. A host other than cloud.51degrees.com is an on
+        // premise web server or a privately hosted 51Degrees cloud (see
+        // examples_shared::CLOUD_ENDPOINT_ENV_VAR).
+        endpoint: examples_shared::cloud_endpoint_from_env(),
     })
 }
 
@@ -171,7 +176,7 @@ mod tests {
         };
         run(ExampleOptions {
             resource_key,
-            endpoint: None,
+            endpoint: examples_shared::cloud_endpoint_from_env(),
         })
         .expect("the cloud metadata example should complete");
     }
