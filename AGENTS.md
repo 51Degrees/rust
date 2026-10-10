@@ -105,6 +105,10 @@ is ignored by git and listed in the `fodid` manifest's `include`, so
 - `pull-request.yml` — fmt, build, test, clippy and doc on Windows, Linux
   (two LTS) and macOS (Intel and Apple Silicon), plus a wasm32-wasip1 job for
   the cloud crates. Runs on pushes to `main` and PRs targeting `main`.
+- `caching-wasm.yml` lints and tests `fiftyone-caching`, the loading cache
+  included, on wasm32-wasip1 under wasmtime and, with default features off,
+  on wasm32-unknown-unknown under Node through `ci/run-wasm-unknown.mjs`.
+  Same triggers, and it reads no secrets.
 - `examples.yml` — builds and tests `examples/` against local source
   (`source.toml`) before a release. Runs on every PR.
 - `publish.yml` — publishes on push to `main`, then a `verify-published` job
@@ -147,6 +151,12 @@ is ignored by git and listed in the `fodid` manifest's `include`, so
   metadata URLs are allow-listed as untagged.
 - **Code style.** Wrap code and doc comments to about 80 columns (soft limit;
   do not break URLs or string literals to hit it). This keeps diffs reviewable.
+- **Caching on WebAssembly.** `fiftyone-caching` must keep building and
+  running on wasm32-unknown-unknown with default features off, where the
+  standard library has no clock and no randomness. Only its `pipeline`
+  feature may bring in another crate from this workspace, `ahash` takes a
+  build-time seed on wasm targets, and the loading cache takes every time
+  from its `Clock`, never from `Instant` or `SystemTime::now`.
 - **MSRV.** The workspace pins `rust-version = "1.94"` (the JavaScript builder's
   minifier toolchain needs a recent compiler).
 
