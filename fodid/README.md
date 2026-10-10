@@ -90,6 +90,18 @@ The version is not exposed. Either this crate read the layout, in which case
 the accessors are the answer, or it did not, in which case there is no
 identifier to read fields from.
 
+## A payload with no usage
+
+`Usage` has exactly three values, being `NonMarketing`, `Standard` and
+`Personalized`. A payload whose usage bits 0 to 2 are all clear is refused
+with `Error::NoUsage`. Every usage the cloud accepts sets bit 0, so such a
+payload is damaged or forged, and the only safe answer to it is not to pass
+the identifier on, which the refusal already gives.
+
+`usage_is_indirect()` answers whether the usage was stated by the caller
+(`false`) or worked out by the issuer from another signal the caller sent
+(`true`). Today a consent string is the only such signal.
+
 ## Payload layout
 
 The payload is a five byte header, being a flags byte and a four byte little
@@ -138,7 +150,7 @@ fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::
     let fod_id = FodId::from_base64(base64_from_cloud_service)?;
 
     let usage = fod_id.usage();          // the highest usage granted
-    let from_consent = fod_id.usage_from_consent();
+    let indirect = fod_id.usage_is_indirect(); // stated or worked out
     let id_type = fod_id.id_type();      // IdType
     let license_id = fod_id.license_id(); // u32
     let match_key = fod_id.match_key();  // the match key bytes (SHA-256 or GUID)
@@ -152,10 +164,10 @@ fn read(base64_from_cloud_service: &str, public_pem: &str) -> Result<(), fodid::
     let round_trip = fod_id.as_base64()?;
 
     // The second question, asked separately.
-    let genuine = fod_id.verify_status_with_public_key(public_pem, &[])
+    let genuine = fod_id.verify_status_with_public_key(public_pem)
         == SignatureStatus::Valid;
 
-    let _ = (usage, from_consent, id_type, license_id, match_key);
+    let _ = (usage, indirect, id_type, license_id, match_key);
     let _ = (domain, round_trip, genuine);
     let _ = terms;
     Ok(())
@@ -169,16 +181,18 @@ have written, so malformed input is expected and a failed read is an ordinary
 `Err` naming the reason, never a panic. Every result carries three facts:
 whether the read succeeded, the value (present only on success, never a
 partly read `FodId`), and the status, which is the `Error` variant on failure.
-The status vocabulary is the OWID one plus two 51Did statuses, checked in this
-order.
+The status vocabulary is the OWID one plus four 51Did statuses, checked in
+this order.
 
 | Status | Meaning |
 |---|---|
 | `Error::Parse` | The bytes are not an OWID envelope. The OWID reason is kept unchanged inside and read with `.status()`, for example `ParseStatus::MissingInput`, `InvalidBase64`, `UnexpectedEnd` or `ByteCountMismatch`. |
 | `Error::PayloadTooShort` | The envelope is fine, but the payload cannot hold the 5 byte 51Did header, so the identifier type cannot be read. |
+| `Error::UnsupportedPayloadVersion` | The flags byte names a payload version other than 0, and the variant names the version found. |
+| `Error::NoUsage` | The flags byte sets none of usage bits 0 to 2. |
 | `Error::InvalidTypePayloadLength` | The header was read, and the payload is shorter than the value the identifier type requires (21 bytes in all for random, 37 for probabilistic and hashed email). |
 
-All three are data results. `Error::Owid` is the one exceptional variant, and
+All five are data results. `Error::Owid` is the one exceptional variant, and
 no read produces it. It appears only when a caller uses `?` on an OWID
 operation of a parsed value, such as serialising it again.
 
@@ -235,7 +249,7 @@ The OWID implementation this crate builds on was hardened so that an OWID
 reaches a caller only from a successful read or from a creator that signs it,
 and at the same time this crate stopped depending on an `owid` crate (see
 "Where the OWID code comes from" below). Callers who reached the envelope
-through this crate will find four changes.
+through this crate will find five changes.
 
 OWID types are named through `fodid` rather than through an `owid` crate,
 because there is no `owid` dependency to add any more. A test that signs an
@@ -285,6 +299,16 @@ and there is no unsigned state.
 creator.sign_bytes(payload)?             creator.create(payload)?
 ```
 
+The functions that check a signature take the key alone, because a signature
+covers its own OWID and nothing else. They used to take a list of other OWIDs
+as well, and for a 51Did that list was always empty. A creator signs the same
+way, so `Creator::create_with_others` is gone.
+
+```text
+// Before                                // After
+fod_id.verify_with_public_key(pem, &[])  fod_id.verify_with_public_key(pem)
+```
+
 ## Non goals
 
 - **Signature verification on construction.** Reading a `FodId` does not check
@@ -300,8 +324,7 @@ creator.sign_bytes(payload)?             creator.create(payload)?
 This crate does not depend on an `owid` crate from crates.io or from git. The
 OWID library is compiled into `fodid` as a private module from the
 `owid-rust` submodule of this repository,
-[51Degrees/owid-rust](https://github.com/51Degrees/owid-rust), a fork that
-follows [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust).
+[SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust).
 The script `ci/copy-owid-source.ps1` copies the source into `fodid/src/owid`
 before every build, together with a `NOTICE` naming the exact commit the copy
 came from and the library's own Apache 2.0 `LICENSE`, and the published crate
@@ -320,9 +343,8 @@ directory is ignored by git, and the script can be run again at any time.
 
 ## See also
 
-- [51Degrees/owid-rust](https://github.com/51Degrees/owid-rust) - the OWID
-  envelope library compiled into this crate, following
-  [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust).
+- [SWAN-community/owid-rust](https://github.com/SWAN-community/owid-rust) -
+  the OWID envelope library compiled into this crate.
 - The [51Did inspector](https://51degrees.com/developers/51did-inspector?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fodid-readme.md&utm_term=51did-inspector) for a
   visual breakdown of the same byte layout.
 

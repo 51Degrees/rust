@@ -28,6 +28,7 @@ use fiftyone_pipeline_core::{
     ElementData, EvidenceKeyFilter, EvidenceKeyFilterWhitelist, FlowData, FlowElement, Pipeline,
     PropertyMetaData, PropertyValue, PropertyValueType, Result,
 };
+use fiftyone_pipeline_engines_fiftyone::SequenceElement;
 use serde_json::{Map, Value};
 
 use crate::builder::JsonBuilderElementBuilder;
@@ -269,13 +270,26 @@ impl JsonBuilderElement {
         self.property_exclusion.contains(lowercased_name)
     }
 
-    /// Read the request sequence number from evidence.
+    /// The request sequence number that the cap is compared against.
     ///
-    /// Returns `None` when no sequence number is present or it cannot be parsed
-    /// as an integer. The caller treats a missing sequence number as "do not
-    /// cap" by defaulting to `0`, which keeps the JavaScript-properties list on
-    /// for direct, non-web callers that never set the sequence.
+    /// Taken from the sequence element's data when that element ran, because
+    /// it has already added one to any `query.sequence` evidence. The other
+    /// 51Degrees pipelines write that new value back into the evidence before
+    /// their JSON builder reads it, whilst evidence is immutable here, so
+    /// reading the evidence alone kept the list for one request more than they
+    /// do. Without a sequence element the evidence is read instead.
+    ///
+    /// Returns `None` when neither holds a whole number. The caller treats a
+    /// missing sequence number as "do not cap" by defaulting to `0`, which
+    /// keeps the JavaScript-properties list on for direct, non-web callers that
+    /// never set the sequence.
     fn sequence_number(data: &FlowData) -> Option<i64> {
+        if let Some(sequence) = data
+            .get(SequenceElement::KEY)
+            .and_then(|sequence| sequence.sequence())
+        {
+            return Some(sequence);
+        }
         data.evidence()
             .get(SEQUENCE_EVIDENCE_KEY)
             .and_then(|s| s.trim().parse::<i64>().ok())

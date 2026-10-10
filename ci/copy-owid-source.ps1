@@ -84,10 +84,9 @@ the rest of the crate.
 
 Copyright 2026 51 Degrees Mobile Experts Limited (51degrees.com)
 
-Taken from the 51Degrees fork of the OWID project,
-https://github.com/51Degrees/owid-rust, at commit
+Taken from the OWID project, https://github.com/SWAN-community/owid-rust,
+at commit
 $commit
-which follows https://github.com/SWAN-community/owid-rust.
 
 The files are compiled as the private module owid inside the fodid crate, so
 that publishing fodid never claims the crate name "owid" on any registry and
@@ -95,7 +94,7 @@ no OWID crate has to exist for fodid to build. On the way in lib.rs was
 renamed mod.rs, every path starting with crate:: was changed to start with
 crate::owid::, and the examples in the documentation comments reach the
 library through fodid:: rather than owid::. Nothing else was altered. Use the
-OWID library from the fork itself rather than from here.
+OWID library from the OWID project itself rather than from here.
 "@
 Set-Content -Path (Join-Path $target "NOTICE") -NoNewline -Encoding utf8 `
     -Value (($notice -replace "`r?`n", "`n") + "`n")

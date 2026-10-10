@@ -44,7 +44,7 @@ jobs:
       # The commit the bundled asset was taken from, used by push and pull
       # request builds. Move this and the bundled asset together, never one
       # without the other.
-      UPSTREAM_PINNED_REF: 13ba5e7db47f88efc3440377121958b4aee1d3ac
+      UPSTREAM_PINNED_REF: ede377cc9ef17de8b4d76c80f77fa54c988a7ce6
       # The moving branch, used by the weekly schedule and by a manual run, so
       # an upstream change is still reported once a week. A failure here is the
       # signal to prepare the refresh, not a fault in whatever was pushed.

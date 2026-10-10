@@ -1,16 +1,21 @@
 name: Cloud 51Did Tests
 
-# Runs the two live cloud 51Did integration tests once for every resource key
-# the central common-ci script exports from the _51DEGREES_RESOURCE_KEY*
-# secrets (free, paid and any added later). Each run sets the single
-# 51DEGREES_RESOURCE_KEY both tests read. New resource keys are added once at
-# the organisation level, and this workflow needs no change for one.
+# Runs the two live cloud 51Did integration tests once for every
+# _51DEGREES_RESOURCE_KEY* secret passed in below. Each run sets the single
+# 51DEGREES_RESOURCE_KEY both tests read first.
+#
+# The secrets are named one by one rather than passed as toJSON(secrets).
+# GitHub marks a workflow that hands every secret to a step as possibly
+# malicious and holds each run until someone approves it by hand. A new
+# resource key therefore needs a line here as well as the organisation secret.
 #
 # The two tests cover different halves. fodid/tests/cloud_51did.rs creates an
 # identifier at each usage the key grants and checks it parses.
 # fodid-client/tests/live_cloud.rs takes the server side further, verifying
 # through the cloud and offline, sealing a creator context result and
-# redeeming it with the license key to read the nine factors.
+# redeeming it with the license key to read the nine factors. A run with no
+# license secret still passes, asserting the refusal the cloud gives a caller
+# who has none.
 #
 # Both tests carry #[ignore] so a plain `cargo test` leaves them alone, which
 # is why the runs below pass --include-ignored. Each skips itself when no key
@@ -24,6 +29,14 @@ name: Cloud 51Did Tests
 
 on:
   workflow_dispatch:
+  # Nightly as well, because a pull_request run only ever checks the package
+  # against the cloud as it stood that day. A released package is not checked
+  # again, so a field the cloud starts writing, stops writing or changes goes
+  # unnoticed until a customer finds it. That is what happened when the cloud service began
+  # writing the Terms byte. The six 51Did packages are
+  # staggered ten minutes apart so they do not all ask production at once.
+  schedule:
+    - cron: '50 5 * * *'
   pull_request:
     branches: [main]
     paths:
@@ -45,30 +58,20 @@ jobs:
         with:
           # fodid compiles the owid-rust submodule source, copied in below.
           submodules: recursive
-      - name: Checkout common-ci
-        uses: actions/checkout@v4
-        with:
-          # Provides steps/set-resource-keys.ps1, the central script that
-          # exports the _51DEGREES_RESOURCE_KEY* secrets as environment
-          # variables.
-          repository: 51Degrees/common-ci
-          path: common-ci
       - uses: dtolnay/rust-toolchain@stable
       - name: Copy the OWID source into the crate
         shell: pwsh
         run: ./ci/copy-owid-source.ps1
-      - name: Cloud 51Did test for each resource key secret
+      - name: Cloud 51Did tests for each resource key secret
         shell: pwsh
         env:
-          SECRETS: ${{ toJSON(secrets) }}
+          _51DEGREES_RESOURCE_KEY_FREE: ${{ secrets._51DEGREES_RESOURCE_KEY_FREE }}
+          _51DEGREES_RESOURCE_KEY_PAID: ${{ secrets._51DEGREES_RESOURCE_KEY_PAID }}
+          _51DEGREES_RESOURCE_KEY_BESPOKE: ${{ secrets._51DEGREES_RESOURCE_KEY_BESPOKE }}
+          # The client test's redemption half reads these two, in this order.
+          _51DEGREES_LICENSE_KEY_51DID: ${{ secrets._51DEGREES_LICENSE_KEY_51DID }}
+          _51DEGREES_LICENSE_KEY_BESPOKE: ${{ secrets._51DEGREES_LICENSE_KEY_BESPOKE }}
         run: |
-          $secrets = ConvertFrom-Json -AsHashtable $env:SECRETS
-          ./common-ci/steps/set-resource-keys.ps1 -Keys $secrets
-          # The redemption half of the client test needs a license key, which
-          # the same script exports under its own naming convention. A run
-          # with no license secret still passes, asserting the refusal the
-          # cloud gives a caller who has none.
-          ./common-ci/steps/set-resource-keys.ps1 -Keys $secrets -Prefix '_51DEGREES_LICENSE_KEY'
           $keys = Get-ChildItem env: |
             Where-Object { $_.Name -like '_51DEGREES_RESOURCE_KEY*' -and $_.Value }
           if (-not $keys) {
@@ -78,11 +81,9 @@ jobs:
           $failed = $false
           foreach ($k in $keys) {
             Write-Host "::group::51Did cloud tests with $($k.Name)"
-            # Both tests read 51DEGREES_RESOURCE_KEY first and fall back to
-            # the tiered names, so the loop sets that one. Setting
-            # _51DEGREES_RESOURCE_KEY instead, as this did, left every
-            # iteration reading whichever tiered name the test listed first,
-            # so one key was tested three times under three headings.
+            # Both tests read 51DEGREES_RESOURCE_KEY before the tiered names,
+            # so the loop sets that one. Setting a name the tests read later
+            # would leave every iteration on the first tiered name they find.
             Set-Item -Path 'Env:51DEGREES_RESOURCE_KEY' -Value $k.Value
             cargo test -p fodid --test cloud_51did -- --include-ignored
             if ($LASTEXITCODE -ne 0) { $failed = $true }

@@ -94,11 +94,11 @@ a trusted publisher (one-time setup in `ci/setup-trusted-publishing.sh`).
 
 The OWID library the `fodid` crates build on is not a crates.io dependency.
 Its source is compiled into `fodid` as a private module from the `owid-rust`
-submodule (https://github.com/51Degrees/owid-rust, a fork that follows the
-SWAN community repository) by `ci/copy-owid-source.ps1`, which every workflow
-runs before building, so no OWID crate has to exist on any registry. The
-copied directory `fodid/src/owid` is ignored by git and listed in the `fodid`
-manifest's `include`, so `cargo publish` packages it.
+submodule (https://github.com/SWAN-community/owid-rust) by
+`ci/copy-owid-source.ps1`, which every workflow runs before building, so no
+OWID crate has to exist on any registry. The copied directory `fodid/src/owid`
+is ignored by git and listed in the `fodid` manifest's `include`, so
+`cargo publish` packages it.
 
 ## CI gates
 

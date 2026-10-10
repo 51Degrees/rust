@@ -191,10 +191,12 @@ fn request_with(resource_key: &str, name: &str, value: &str) -> serde_json::Valu
 /// Marked `#[ignore]` for the same reason as the test above.
 #[test]
 #[ignore = "live cloud test: set 51DEGREES_RESOURCE_KEY and run with `--include-ignored` (see module docs)"]
-fn consent_string_sets_the_usage_from_consent_bit() {
+fn consent_string_sets_the_usage_is_indirect_bit() {
     let Some(resource_key) = resource_key() else {
         panic!(
-            "no resource key found for the live cloud 51Did test. See the              message on resource_key_returns_51did_for_supported_usages for              how to set one."
+            "no resource key found for the live cloud 51Did test. See the \
+             message on resource_key_returns_51did_for_supported_usages for \
+             how to set one."
         );
     };
 
@@ -207,7 +209,8 @@ fn consent_string_sets_the_usage_from_consent_bit() {
 
         let Some(fodid) = response.get("fodid") else {
             eprintln!(
-                "consent string granting {expected:?}: no 'fodid' element                  returned, so this key is not entitled to that marketing usage"
+                "consent string granting {expected:?}: no 'fodid' element \
+                 returned, so this key is not entitled to that marketing usage"
             );
             continue;
         };
@@ -232,10 +235,12 @@ fn consent_string_sets_the_usage_from_consent_bit() {
     // rather than leaving a pass to be read as proof.
     if proven == 0 {
         eprintln!(
-            "NOTHING PROVEN: this resource key returned no identifier for              either consent string, so the usage-from-consent bit was never              read. Use a key entitled to the standard or personalized usage."
+            "NOTHING PROVEN: this resource key returned no identifier for \
+             either consent string, so the usage is indirect bit was never \
+             read. Use a key entitled to the standard or personalized usage."
         );
     } else {
-        eprintln!("Usage-from-consent read on {proven} identifier(s).");
+        eprintln!("Usage is indirect read on {proven} identifier(s).");
     }
 }
 
@@ -246,7 +251,7 @@ fn assert_valid_51did(
     base64: &str,
     expected_terms: Option<&str>,
     expected_usage: Usage,
-    from_consent: bool,
+    indirect: bool,
 ) {
     assert!(!base64.is_empty(), "{label} should not be empty");
 
@@ -313,16 +318,16 @@ fn assert_valid_51did(
         fod_id.usage()
     );
     assert_eq!(
-        fod_id.usage_from_consent(),
-        from_consent,
+        fod_id.usage_is_indirect(),
+        indirect,
         "{label}: expected the usage to be recorded as {}, and it reads as {}",
-        if from_consent {
-            "derived from a consent string"
+        if indirect {
+            "indirect, worked out from a consent string"
         } else {
             "stated by the caller"
         },
-        if fod_id.usage_from_consent() {
-            "derived from a consent string"
+        if fod_id.usage_is_indirect() {
+            "indirect, worked out from a consent string"
         } else {
             "stated by the caller"
         }
@@ -341,10 +346,10 @@ fn assert_valid_51did(
         .map(|b| format!("{b:02x}"))
         .collect();
     println!(
-        "{label}: domain={} usage={:?} from_consent={} type={:?} license_id={:#010x} hash={hash_hex}",
+        "{label}: domain={} usage={:?} indirect={} type={:?} license_id={:#010x} hash={hash_hex}",
         fod_id.domain(),
         fod_id.usage(),
-        fod_id.usage_from_consent(),
+        fod_id.usage_is_indirect(),
         fod_id.id_type(),
         fod_id.license_id()
     );

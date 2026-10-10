@@ -65,11 +65,18 @@ use fiftyone_pipeline_core::Evidence;
 /// together with the field part of the key that the native side uses as its key.
 ///
 /// The pipeline key is `prefix.field` with the prefix lowercased (see the
-/// evidence specification). The native engine recognizes three categories that
-/// matter to detection: HTTP header strings, query string values (which the
-/// engine also treats as header-like string evidence) and server values such as
-/// the client IP, which arrive as an IP address string. Keys whose prefix the
-/// native engine does not understand return [`None`] and are skipped.
+/// evidence specification). The native engine recognizes four categories that
+/// matter to detection: HTTP header strings, query string values, cookies and
+/// server values such as the client IP, which arrive as an IP address string.
+/// Keys whose prefix the native engine does not understand return [`None`] and
+/// are skipped.
+///
+/// Query values keep their own category, as the other 51Degrees SDKs do. The
+/// engine reads a query value as a header when matching, in preference to the
+/// real header, so a User-Agent supplied for off-line processing still works.
+/// It also reads the values the client-side JavaScript sends back (the
+/// `51D_` property overrides and profile ids) only from the query and cookie
+/// categories, so labelling a query value as a header would hide them.
 ///
 /// The native [`fiftyoneDegreesEvidenceAddString`] takes the prefix as the enum
 /// argument and the bare field name as the key, NOT the full `prefix.field`
@@ -86,12 +93,11 @@ use fiftyone_pipeline_core::Evidence;
 fn native_prefix_for(key: &str) -> Option<(NativeEvidencePrefix, &str)> {
     let (prefix, field) = key.split_once(constants::EVIDENCE_SEPARATOR)?;
     let native_prefix = match prefix {
-        // Headers and query values are parsed by the engine as header strings.
-        // The query prefix is how a user agent is supplied for off-line
-        // processing, and the engine treats it the same as a header value.
-        constants::EVIDENCE_HTTP_HEADER_PREFIX | constants::EVIDENCE_QUERY_PREFIX => {
-            NativeEvidencePrefix::HttpHeaderString
-        }
+        // Headers are parsed by the engine as header strings.
+        constants::EVIDENCE_HTTP_HEADER_PREFIX => NativeEvidencePrefix::HttpHeaderString,
+        // Query values are matched like headers, taking precedence over them,
+        // and are also where the engine looks for client-side overrides.
+        constants::EVIDENCE_QUERY_PREFIX => NativeEvidencePrefix::Query,
         // Server values carry the client IP address list to be parsed.
         constants::EVIDENCE_SERVER_PREFIX => NativeEvidencePrefix::HttpHeaderIpAddresses,
         // Cookies can carry client-side collected evidence the engine reads.
@@ -139,6 +145,13 @@ impl EvidencePool {
     /// recreating it larger when it does not. A freshly created array starts
     /// empty, so callers must repopulate it.
     ///
+    /// The capacity carries headroom beyond `needed` because the engine adds
+    /// pairs of its own, the headers it derives from a high-entropy values
+    /// blob, during processing. When those do not fit, the engine chains a
+    /// further array on through `next`. [`EvidencePool::release_chain`] frees
+    /// any such chain after each call, so a reused array never carries pairs
+    /// from an earlier request.
+    ///
     /// # Safety
     /// Calls into the native evidence allocator. Safe to call repeatedly.
     unsafe fn ensure_capacity(&mut self, needed: u32) {
@@ -149,7 +162,7 @@ impl EvidencePool {
             }
             // Grow with a little headroom so a request a few pairs larger does
             // not force an immediate reallocation next time.
-            let capacity = needed.max(8);
+            let capacity = needed.saturating_add(ENGINE_ADDED_PAIRS).max(8);
             self.array = fiftyoneDegreesEvidenceCreate(capacity);
             self.capacity = if self.array.is_null() { 0 } else { capacity };
         } else {
@@ -159,6 +172,34 @@ impl EvidencePool {
         }
     }
 }
+
+#[cfg(feature = "dd")]
+impl EvidencePool {
+    /// Free the array if the engine chained another array on to it during the
+    /// last call, so the next call starts from a fresh, unchained array.
+    ///
+    /// Resetting `count` alone would leave the chained arrays in place, and
+    /// their pairs point at key and value strings that belong to the earlier
+    /// request, which the pool has since dropped.
+    ///
+    /// # Safety
+    /// Calls into the native evidence allocator. `self.array` must be null or
+    /// an array from `fiftyoneDegreesEvidenceCreate`.
+    unsafe fn release_chain(&mut self) {
+        if !self.array.is_null() && !(*self.array).next.is_null() {
+            // fiftyoneDegreesEvidenceFree frees every array in the chain.
+            fiftyoneDegreesEvidenceFree(self.array);
+            self.array = std::ptr::null_mut();
+            self.capacity = 0;
+        }
+    }
+}
+
+/// Room left in the native evidence array for the pairs the engine adds while
+/// processing, being the User-Agent Client Hints headers it derives from a
+/// high-entropy values blob.
+#[cfg(feature = "dd")]
+const ENGINE_ADDED_PAIRS: u32 = 16;
 
 #[cfg(feature = "dd")]
 impl Drop for EvidencePool {
@@ -239,7 +280,9 @@ pub(crate) unsafe fn with_native_evidence<R>(
             fiftyoneDegreesEvidenceAddString(array, *prefix, key_ptr, value_ptr);
         }
 
-        process(array)
+        let result = process(array);
+        pool.release_chain();
+        result
     })
 }
 
@@ -275,16 +318,31 @@ mod tests {
 
     #[cfg(feature = "dd")]
     #[test]
-    fn header_and_query_map_to_header_string() {
+    fn header_maps_to_header_string() {
         // The native prefix is the header-string category and the native key is
         // the bare field name, with the pipeline prefix stripped.
         assert_eq!(
             native_prefix_for("header.user-agent"),
             Some((NativeEvidencePrefix::HttpHeaderString, "user-agent"))
         );
+    }
+
+    #[cfg(feature = "dd")]
+    #[test]
+    fn query_and_cookie_keep_their_own_category() {
+        // The engine looks for client-side overrides only under these two
+        // categories, and still matches a query User-Agent like a header.
         assert_eq!(
             native_prefix_for("query.user-agent"),
-            Some((NativeEvidencePrefix::HttpHeaderString, "user-agent"))
+            Some((NativeEvidencePrefix::Query, "user-agent"))
+        );
+        assert_eq!(
+            native_prefix_for("query.51d_screenpixelswidth"),
+            Some((NativeEvidencePrefix::Query, "51d_screenpixelswidth"))
+        );
+        assert_eq!(
+            native_prefix_for("cookie.51d_screenpixelswidth"),
+            Some((NativeEvidencePrefix::Cookie, "51d_screenpixelswidth"))
         );
     }
 

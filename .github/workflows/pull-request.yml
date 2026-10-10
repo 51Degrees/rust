@@ -151,8 +151,8 @@ jobs:
 
       # 6a. The OWID source the fodid crate compiles in. ci/copy-owid-source.ps1
       #     copies it from the owid-rust submodule (checked out in step 1) into
-      #     fodid/src/owid, which git ignores, so every fmt, build, test, lint
-      #     and doc step below needs the copy in place first.
+      #     fodid/src/owid, which git ignores, so every build, test, lint and
+      #     doc step below needs the copy in place first.
       - name: Copy the OWID source into fodid
         shell: pwsh
         run: ./ci/copy-owid-source.ps1

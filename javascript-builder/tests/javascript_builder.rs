@@ -28,12 +28,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use fiftyone_cloud_request_engine::{
+    CloudEngineState, CloudHttpClient, CloudHttpRequest, CloudHttpResponse, CloudRequestEngine,
+    LicensedProducts,
+};
 use fiftyone_javascript_builder::{JavaScriptBuilderElement, JAVASCRIPT_BUILDER_DATA_KEY};
 use fiftyone_json_builder::JsonBuilderElement;
 use fiftyone_pipeline_core::{
     ElementData, Evidence, EvidenceKeyFilter, EvidenceKeyFilterWhitelist, FlowData, FlowElement,
     NoValueError, Pipeline, PropertyMetaData, PropertyValue, PropertyValueType, Result, TypedKey,
 };
+use fiftyone_pipeline_engines_fiftyone::SequenceElement;
 
 // ---------------------------------------------------------------------------
 // A minimal device-like element that exposes the Promise and Fetch properties
@@ -307,6 +312,102 @@ fn full_template_renders_through_pipeline() {
     assert!(js.ends_with("var fod = new fiftyoneDegreesManager();"));
 }
 
+/// A cloud request engine whose accessible products are the supplied JSON. The
+/// state is injected, so the build makes no discovery request, and the stub
+/// transport refuses every call, so the test never reaches the network.
+fn request_engine(accessible_properties: &str) -> CloudRequestEngine {
+    struct NoNetwork;
+    impl CloudHttpClient for NoNetwork {
+        fn send(
+            &self,
+            _request: &CloudHttpRequest,
+        ) -> std::result::Result<CloudHttpResponse, String> {
+            Err("no network in tests".to_owned())
+        }
+    }
+    CloudRequestEngine::builder()
+        .resource_key("test-resource-key")
+        .http_client(Arc::new(NoNetwork))
+        .set_state(CloudEngineState {
+            evidence_keys: Vec::new(),
+            accessible_properties: LicensedProducts::parse(accessible_properties)
+                .expect("valid accessible properties"),
+        })
+        .build()
+        .expect("request engine builds")
+}
+
+/// Render the full template for a JavaScript builder configured from the
+/// supplied request engine, with a host so the update section is present.
+fn render_for_key(engine: &CloudRequestEngine) -> String {
+    run(
+        None,
+        |b| {
+            b.set_minify(false)
+                .set_protocol("https")
+                .unwrap()
+                .set_cloud_request_engine(engine)
+                .build()
+        },
+        &[("header.host", "example.com")],
+    )
+}
+
+#[test]
+fn user_prompt_section_follows_the_keys_licensed_products() {
+    // A statement found only inside the user prompt section of the template.
+    const USER_PROMPT_MARKER: &str = "var answerKeys = [\"id.usage\", \"tcstring\"];";
+
+    // The product name is written the way the cloud service reports it,
+    // "FODid", which differs in case from the "fodid" element data key.
+    let entitled = request_engine(
+        r#"{"Products":{
+            "device":{"Properties":[{"Name":"IsMobile","Type":"Bool"}]},
+            "FODid":{"Properties":[{"Name":"IdProbGlobal","Type":"String"}]}
+        }}"#,
+    );
+    let js = render_for_key(&entitled);
+    assert!(
+        js.contains(USER_PROMPT_MARKER),
+        "a key licensed for 51Did renders the user prompt section"
+    );
+    assert!(!js.contains("{{"));
+    assert!(!js.contains("}}"));
+    assert_eq!(js, js.trim_end());
+    assert!(js.ends_with("var fod = new fiftyoneDegreesManager();"));
+
+    // A key with no 51Did product, and a key whose 51Did product grants no
+    // property, both leave the section out.
+    for unentitled in [
+        r#"{"Products":{"device":{"Properties":[{"Name":"IsMobile","Type":"Bool"}]}}}"#,
+        r#"{"Products":{"FODid":{"Properties":[]}}}"#,
+    ] {
+        let js = render_for_key(&request_engine(unentitled));
+        assert!(
+            !js.contains(USER_PROMPT_MARKER),
+            "a key without 51Did leaves the user prompt section out: {unentitled}"
+        );
+        assert!(!js.contains("{{"));
+        assert!(!js.contains("}}"));
+        assert!(js.ends_with("var fod = new fiftyoneDegreesManager();"));
+    }
+
+    // A builder given no request engine has no licensed products to read, so
+    // the section is left out as well.
+    let js = run(
+        None,
+        |b| b.set_minify(false).build(),
+        &[("header.host", "example.com")],
+    );
+    assert!(!js.contains(USER_PROMPT_MARKER));
+}
+
+#[test]
+fn fodid_product_name_matches_the_51did_engine_data_key() {
+    assert!(fiftyone_javascript_builder::FODID_PRODUCT_NAME
+        .eq_ignore_ascii_case(fiftyone_fodid_cloud::FODID_ELEMENT_DATA_KEY));
+}
+
 #[test]
 fn full_template_render_is_deterministic_under_repetition() {
     // Rendering the full template repeatedly must always yield identical bytes.
@@ -342,4 +443,86 @@ fn builder_rejects_invalid_object_name() {
     assert!(JavaScriptBuilderElement::builder()
         .set_object_name("_ok$Name1")
         .is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Session id and sequence, which the specification takes from the sequence
+// element's data rather than from evidence.
+// ---------------------------------------------------------------------------
+
+/// Run a pipeline that starts with the sequence element, as the web pipeline
+/// does, and return the generated JavaScript.
+fn run_with_sequence(evidence: &[(&str, &str)]) -> String {
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(SequenceElement::new()))
+        .add_element(Arc::new(JsonBuilderElement::new()))
+        .add_element(Arc::new(
+            JavaScriptBuilderElement::builder()
+                .set_minify(false)
+                .build(),
+        ))
+        .build()
+        .expect("pipeline builds");
+
+    let mut ev = Evidence::builder();
+    for (key, value) in evidence {
+        ev = ev.add(*key, *value);
+    }
+    let mut data = pipeline.create_flow_data_with(ev.build());
+    data.process().expect("processing succeeds");
+
+    data.get(JAVASCRIPT_BUILDER_DATA_KEY)
+        .expect("javascript builder data present")
+        .javascript()
+        .to_owned()
+}
+
+/// The value the template assigned to `var sessionId`.
+fn rendered_session_id(js: &str) -> String {
+    let start = js
+        .find("var sessionId = \"")
+        .expect("the template declares sessionId")
+        + "var sessionId = \"".len();
+    let end = js[start..].find('"').expect("sessionId is a closed string");
+    js[start..start + end].to_owned()
+}
+
+#[test]
+fn first_request_carries_the_session_id_the_sequence_element_created() {
+    // A first page load has no session-id evidence. The sequence element
+    // creates one, and the include must carry it, or fod.sessionId is empty
+    // and the browser cannot tell one include from the next.
+    let first = rendered_session_id(&run_with_sequence(&[("header.host", "localhost")]));
+    let second = rendered_session_id(&run_with_sequence(&[("header.host", "localhost")]));
+    assert_eq!(first.len(), 36, "a GUID session id, got '{first}'");
+    assert_ne!(first, second, "each first request gets its own session id");
+}
+
+#[test]
+fn supplied_session_id_is_kept_and_the_sequence_moves_on() {
+    // With session-id and sequence evidence the sequence element keeps the id
+    // and adds one to the sequence, and the include shows both.
+    let js = run_with_sequence(&[
+        ("header.host", "localhost"),
+        ("query.session-id", "abc"),
+        ("query.sequence", "1"),
+    ]);
+    assert_eq!(rendered_session_id(&js), "abc");
+    assert!(js.contains("var sequence = 2;"), "the sequence is one more");
+}
+
+#[test]
+fn without_a_sequence_element_the_evidence_is_used() {
+    // A pipeline with no sequence element still reads the evidence directly.
+    let js = run(
+        None,
+        |b| b.set_minify(false).build(),
+        &[
+            ("header.host", "localhost"),
+            ("query.session-id", "abc"),
+            ("query.sequence", "4"),
+        ],
+    );
+    assert_eq!(rendered_session_id(&js), "abc");
+    assert!(js.contains("var sequence = 4;"));
 }
