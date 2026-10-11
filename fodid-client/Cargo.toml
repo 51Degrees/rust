@@ -41,6 +41,19 @@ fodid = { path = "../fodid", version = "4.5", features = ["creator"] }
 # dependency.
 tokio = { workspace = true, features = ["macros", "rt"] }
 
+# The live cloud test (tests/live_cloud.rs) needs the built-in transport, so
+# the crate depends on itself here with the feature on, and needs a blocking
+# HTTP client of its own for the two calls that are not part of the client,
+# being the cloud json endpoint that creates an identifier and the
+# verify-context endpoint that a browser calls. Both are narrowed to targets
+# that are not wasm, because a dev-dependency's features are chosen whatever
+# --no-default-features says, and reqwest and ureq both need native sockets.
+# The test file carries #![cfg(feature = "reqwest-client")] so it compiles to
+# nothing where the feature is off.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+fodid-client = { path = ".", features = ["reqwest-client"] }
+ureq = "2"
+
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the
 # built-in transport is documented alongside the trait it implements.

@@ -946,10 +946,12 @@ version = "4.5.0"
 dependencies = [
  "chrono",
  "fodid",
+ "fodid-client",
  "reqwest",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "ureq",
 ]
 
 [[package]]

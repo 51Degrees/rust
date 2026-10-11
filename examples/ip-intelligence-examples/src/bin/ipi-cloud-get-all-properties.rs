@@ -162,6 +162,10 @@ fn main() -> Result<()> {
 
     run(Options {
         resource_key,
+        // The cloud endpoint from 51DEGREES_CLOUD_ENDPOINT, or the public cloud
+        // when unset. A host other than cloud.51degrees.com is an on premise web
+        // server or a privately hosted 51Degrees cloud (see
+        // examples_shared::CLOUD_ENDPOINT_ENV_VAR).
         endpoint: examples_shared::cloud_endpoint_from_env(),
     })
 }

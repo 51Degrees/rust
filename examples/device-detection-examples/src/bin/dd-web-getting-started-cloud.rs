@@ -63,6 +63,10 @@ use web_support::{
 pub struct Options {
     /// The 51Degrees cloud resource key (from <https://configure.51degrees.com?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-device-detection-examples-src-bin-dd-web-getting-started-cloud.rs&utm_term=resource_key>).
     pub resource_key: String,
+    /// An optional override for the cloud endpoint, read from
+    /// `51DEGREES_CLOUD_ENDPOINT`. `None` leaves the choice to the cloud request
+    /// engine, which reads the same variable and defaults to the public cloud.
+    pub endpoint: Option<String>,
     /// The socket address the server binds to.
     pub address: SocketAddr,
 }
@@ -79,13 +83,26 @@ pub struct Options {
 /// that discovery up front so the build does no cloud call, which the integration
 /// test uses to assemble the app offline. Passing `None` lets the builder fetch
 /// the discovery from the cloud, which is the live path the binary takes.
-pub fn build_app(resource_key: &str, state: Option<CloudEngineState>) -> anyhow::Result<Router> {
+pub fn build_app(
+    resource_key: &str,
+    endpoint: Option<&str>,
+    state: Option<CloudEngineState>,
+) -> anyhow::Result<Router> {
     // Build the cloud device-detection pipeline. Usage sharing is REQUIRED for a
     // web example (it lets 51Degrees improve detection for everyone), so it is
     // turned on here, unlike the console examples where it must stay off.
-    let pipeline = DeviceDetectionPipelineBuilder::cloud(resource_key)
+    let mut builder = DeviceDetectionPipelineBuilder::cloud(resource_key)
         .set_state_opt(state)
-        .share_usage(true)
+        .share_usage(true);
+    // The cloud endpoint. Unset, the cloud request engine reads
+    // 51DEGREES_CLOUD_ENDPOINT itself, and it is passed here as well so the
+    // choice is visible. A host other than cloud.51degrees.com is an on premise
+    // web server or a privately hosted 51Degrees cloud (see
+    // examples_shared::CLOUD_ENDPOINT_ENV_VAR).
+    if let Some(endpoint) = endpoint {
+        builder = builder.endpoint(endpoint);
+    }
+    let pipeline = builder
         .build()
         .context("building the cloud device-detection pipeline")?;
 
@@ -123,7 +140,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     // panic.
     // No injected state on the live path: the builder fetches discovery from the
     // cloud as it builds.
-    let app = build_app(&options.resource_key, None)?;
+    let app = build_app(&options.resource_key, options.endpoint.as_deref(), None)?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -224,6 +241,7 @@ fn main() -> anyhow::Result<()> {
 
     run(Options {
         resource_key,
+        endpoint: examples_shared::cloud_endpoint_from_env(),
         address,
     })
 }
@@ -306,6 +324,7 @@ mod tests {
         // client) is owned and dropped here on the plain test thread.
         let app = build_app(
             "resource-key-placeholder",
+            None,
             Some(CloudEngineState::default()),
         )
         .unwrap();
@@ -340,6 +359,7 @@ mod tests {
         let runtime = runtime();
         let app = build_app(
             "resource-key-placeholder",
+            None,
             Some(CloudEngineState::default()),
         )
         .unwrap();
@@ -370,7 +390,12 @@ mod tests {
 
         let runtime = runtime();
         // None on the live path: the builder fetches discovery from the cloud.
-        let app = build_app(&resource_key, None).unwrap();
+        let app = build_app(
+            &resource_key,
+            examples_shared::cloud_endpoint_from_env().as_deref(),
+            None,
+        )
+        .unwrap();
         let (status, has_accept_ch) = runtime.block_on(async {
             let response = app
                 .clone()
