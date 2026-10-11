@@ -59,3 +59,8 @@ anyhow = "1"
 # records from evidence.yml in the ip-intelligence-data submodule. serde_norway
 # is the maintained fork of the (now unmaintained) serde_yaml.
 serde_norway.workspace = true
+
+[dev-dependencies]
+# The performance example's test reads back the results JSON it wrote and
+# asserts on the shared schema, rather than on the printed report.
+serde_json.workspace = true
