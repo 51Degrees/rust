@@ -5,7 +5,8 @@ name: Examples
 # BEFORE-publish gate: it tests the examples against the LOCAL source tree
 # (cargo --config source.toml), so a change is validated through the examples
 # before it ships. The AFTER-publish check, that the RELEASED packages work,
-# runs in publish.yml once a release has been published.
+# runs in publish.yml once a release has been published, and the published
+# job below is the same check, run by hand on a branch before a release.
 #
 # The contract job runs the shared browser tests against the two device
 # detection web examples built from this checkout. It can be started by hand
@@ -35,6 +36,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      # The examples reach the 51Degrees crates through crates.io, and
+      # source.toml is the one route to this tree. The script fails on a path
+      # dependency into the workspace, a crate missing from source.toml or a
+      # lock written during a source build, because the only build against
+      # the published crates runs after a release, too late to stop one.
+      - name: Check the examples take the crates from crates.io
+        shell: pwsh
+        working-directory: .
+        run: ./ci/check-examples-sources.ps1
       - uses: dtolnay/rust-toolchain@stable
       # ci/copy-owid-source.ps1 copies that source into fodid/src/owid, which
       # git ignores, so fodid cannot compile from the local tree without it.
@@ -47,6 +57,24 @@ jobs:
       # Data-file and resource-key gated tests skip cleanly when those are
       # absent, so this validates the build and the offline tests.
       - run: cargo test --config source.toml
+
+  # The check publish.yml runs after a release, here so that it can be run by
+  # hand on a branch before one: gh workflow run Examples --ref <branch>. It
+  # builds the examples against the crates on crates.io, so an example that
+  # needs a change not yet released fails here until the release, which is
+  # why it does not run on pull requests.
+  published:
+    name: examples vs published crates
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo update
+      - run: cargo test
 
   # The Contract category of the shared selenium-api-tests suite
   # (https://github.com/51Degrees/selenium-api-tests), run against both device
