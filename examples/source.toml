@@ -4,11 +4,13 @@
 # Paths are relative to the repository root (how cargo resolves --config patch paths).
 [patch.crates-io]
 fodid = { path = "fodid" }
+fodid-client = { path = "fodid-client" }
 fiftyone-pipeline-core = { path = "pipeline-core" }
 fiftyone-caching = { path = "caching" }
 fiftyone-pipeline-engines = { path = "pipeline-engines" }
 fiftyone-pipeline-engines-fiftyone = { path = "pipeline-engines-fiftyone" }
 fiftyone-cloud-request-engine = { path = "cloud-request-engine" }
+fiftyone-derived-properties = { path = "derived-properties" }
 fiftyone-json-builder = { path = "json-builder" }
 fiftyone-javascript-builder = { path = "javascript-builder" }
 fiftyone-common-sys = { path = "common-sys" }
