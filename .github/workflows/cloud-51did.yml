@@ -1,7 +1,7 @@
 name: Cloud 51Did Tests
 
 # Runs the two live cloud 51Did integration tests once for every
-# _51DEGREES_RESOURCE_KEY* secret passed in below. Each run sets the single
+# _51DEGREES_RESOURCE_KEY* key passed in below. Each run sets the single
 # 51DEGREES_RESOURCE_KEY both tests read first.
 #
 # The secrets are named one by one rather than passed as toJSON(secrets).
@@ -65,8 +65,7 @@ jobs:
       - name: Cloud 51Did tests for each resource key secret
         shell: pwsh
         env:
-          _51DEGREES_RESOURCE_KEY_FREE: ${{ secrets._51DEGREES_RESOURCE_KEY_FREE }}
-          _51DEGREES_RESOURCE_KEY_PAID: ${{ secrets._51DEGREES_RESOURCE_KEY_PAID }}
+          _51DEGREES_RESOURCE_KEY_BASIC: ${{ vars._51DEGREES_RESOURCE_KEY_BASIC }}
           _51DEGREES_RESOURCE_KEY_BESPOKE: ${{ secrets._51DEGREES_RESOURCE_KEY_BESPOKE }}
           # The client test's redemption half reads these two, in this order.
           _51DEGREES_LICENSE_KEY_51DID: ${{ secrets._51DEGREES_LICENSE_KEY_51DID }}

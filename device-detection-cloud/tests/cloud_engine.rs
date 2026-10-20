@@ -356,7 +356,7 @@ fn missing_cloud_request_engine_is_a_configuration_error() {
 /// Resolve a cloud resource key from the environment for the live test.
 ///
 /// The aligned `51DEGREES_RESOURCE_KEY` is checked first, then the CI-exported
-/// paid and free tiered names, mirroring the order in
+/// bespoke and basic tiered names, mirroring the order in
 /// `examples-shared::keys::resource_key_from_env`, so the live test runs from an
 /// explicit key or the keys CI exports. Returns `None` when none is set, so the
 /// test skips cleanly.
@@ -368,8 +368,8 @@ fn missing_cloud_request_engine_is_a_configuration_error() {
 fn live_resource_key() -> Option<String> {
     [
         "51DEGREES_RESOURCE_KEY",
-        "_51DEGREES_RESOURCE_KEY_PAID",
-        "_51DEGREES_RESOURCE_KEY_FREE",
+        "_51DEGREES_RESOURCE_KEY_BESPOKE",
+        "_51DEGREES_RESOURCE_KEY_BASIC",
     ]
     .into_iter()
     .find_map(|name| match std::env::var(name) {
@@ -386,7 +386,7 @@ fn live_resource_key() -> Option<String> {
 // feature on, and a standalone run needs `--features reqwest-client`.
 #[cfg(feature = "reqwest-client")]
 #[test]
-#[ignore = "requires a network and a real resource key (51DEGREES_RESOURCE_KEY or the _51DEGREES_RESOURCE_KEY_PAID/_FREE tiered names)"]
+#[ignore = "requires a network and a real resource key (51DEGREES_RESOURCE_KEY or the _51DEGREES_RESOURCE_KEY_BESPOKE/_BASIC tiered names)"]
 fn live_cloud_detection() {
     let Some(resource_key) = live_resource_key() else {
         eprintln!("no resource key in the environment; skipping live cloud test");

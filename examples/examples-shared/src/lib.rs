@@ -81,7 +81,7 @@ pub use find_file::{
 };
 pub use performance_results::{json_output_path, PerformanceResults, JSON_OUTPUT_FLAG};
 pub use keys::{
-    is_invalid_key, resource_key_from_env, CI_RESOURCE_KEY_FREE_ENV_VAR,
-    CI_RESOURCE_KEY_PAID_ENV_VAR, RESOURCE_KEY_ENV_VAR, RESOURCE_KEY_ENV_VARS,
+    is_invalid_key, resource_key_from_env, CI_RESOURCE_KEY_BASIC_ENV_VAR,
+    CI_RESOURCE_KEY_BESPOKE_ENV_VAR, RESOURCE_KEY_ENV_VAR, RESOURCE_KEY_ENV_VARS,
 };
 pub use properties::{get_property_as_string, property_value_to_string, NO_VALUE_MARKER};

@@ -543,7 +543,7 @@ mod tests {
     }
 
     /// Resolve a cloud resource key from the environment for the live test,
-    /// honouring the aligned name first and then the CI-exported paid and free
+    /// honouring the aligned name first and then the CI-exported bespoke and basic
     /// names, mirroring `examples-shared::keys::resource_key_from_env`, so the live
     /// test runs from an explicit key or the keys CI exports.
     ///
@@ -554,8 +554,8 @@ mod tests {
     fn live_resource_key() -> Option<String> {
         [
             "51DEGREES_RESOURCE_KEY",
-            "_51DEGREES_RESOURCE_KEY_PAID",
-            "_51DEGREES_RESOURCE_KEY_FREE",
+            "_51DEGREES_RESOURCE_KEY_BESPOKE",
+            "_51DEGREES_RESOURCE_KEY_BASIC",
         ]
         .into_iter()
         .find_map(|name| match std::env::var(name) {
@@ -569,7 +569,7 @@ mod tests {
     // that feature on, and a standalone run needs `--features reqwest-client`.
     #[cfg(feature = "reqwest-client")]
     #[test]
-    #[ignore = "requires network and a resource key (51DEGREES_RESOURCE_KEY or the _51DEGREES_RESOURCE_KEY_PAID/_FREE tiered names)"]
+    #[ignore = "requires network and a resource key (51DEGREES_RESOURCE_KEY or the _51DEGREES_RESOURCE_KEY_BESPOKE/_BASIC tiered names)"]
     fn live_cloud_returns_country_code() {
         use fiftyone_pipeline_core::{Evidence, Pipeline};
 

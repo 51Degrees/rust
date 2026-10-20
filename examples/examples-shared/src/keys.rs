@@ -36,25 +36,25 @@ use base64::Engine as _;
 /// source.
 pub const RESOURCE_KEY_ENV_VAR: &str = "51DEGREES_RESOURCE_KEY";
 
-/// The CI-exported paid-tier resource-key environment variable, checked second.
+/// The CI-exported bespoke-tier resource-key environment variable, checked second.
 ///
-/// Preferred over the free tier because a paid key is a superset: it grants the
-/// free-tier properties too, so every cloud example and test resolves a working
-/// key from it, whereas a free key would fail the paid-only examples.
-pub const CI_RESOURCE_KEY_PAID_ENV_VAR: &str = "_51DEGREES_RESOURCE_KEY_PAID";
+/// Preferred over the basic tier because a bespoke key is a superset: it grants the
+/// basic-tier properties too, so every cloud example and test resolves a working
+/// key from it, whereas a basic key would fail the paid-only examples.
+pub const CI_RESOURCE_KEY_BESPOKE_ENV_VAR: &str = "_51DEGREES_RESOURCE_KEY_BESPOKE";
 
-/// The CI-exported free-tier resource-key environment variable, checked last.
-pub const CI_RESOURCE_KEY_FREE_ENV_VAR: &str = "_51DEGREES_RESOURCE_KEY_FREE";
+/// The CI-exported basic-tier resource-key environment variable, checked last.
+pub const CI_RESOURCE_KEY_BASIC_ENV_VAR: &str = "_51DEGREES_RESOURCE_KEY_BASIC";
 
 /// The order in which the resource-key environment variables are consulted.
 ///
-/// An explicit `51DEGREES_RESOURCE_KEY` wins, then the paid CI key (a superset of
-/// the free one), then the free CI key. The first variable set to a non-blank
+/// An explicit `51DEGREES_RESOURCE_KEY` wins, then the bespoke CI key (a superset of
+/// the basic one), then the basic CI key. The first variable set to a non-blank
 /// value supplies the key.
 pub const RESOURCE_KEY_ENV_VARS: [&str; 3] = [
     RESOURCE_KEY_ENV_VAR,
-    CI_RESOURCE_KEY_PAID_ENV_VAR,
-    CI_RESOURCE_KEY_FREE_ENV_VAR,
+    CI_RESOURCE_KEY_BESPOKE_ENV_VAR,
+    CI_RESOURCE_KEY_BASIC_ENV_VAR,
 ];
 
 /// Read a cloud resource key from the environment.
@@ -133,8 +133,8 @@ mod tests {
     fn aligned_name_wins_over_tiered() {
         let _guard = ENV_LOCK.lock().unwrap();
         clear_all();
-        std::env::set_var(CI_RESOURCE_KEY_PAID_ENV_VAR, "paid-key");
-        std::env::set_var(CI_RESOURCE_KEY_FREE_ENV_VAR, "free-key");
+        std::env::set_var(CI_RESOURCE_KEY_BESPOKE_ENV_VAR, "bespoke-key");
+        std::env::set_var(CI_RESOURCE_KEY_BASIC_ENV_VAR, "basic-key");
         std::env::set_var(RESOURCE_KEY_ENV_VAR, "aligned-key");
         assert_eq!(resource_key_from_env().as_deref(), Some("aligned-key"));
         clear_all();
@@ -144,9 +144,9 @@ mod tests {
     fn falls_back_through_the_chain() {
         let _guard = ENV_LOCK.lock().unwrap();
         clear_all();
-        // Only the free CI name is set; it is last in the chain but still found.
-        std::env::set_var(CI_RESOURCE_KEY_FREE_ENV_VAR, "free-key");
-        assert_eq!(resource_key_from_env().as_deref(), Some("free-key"));
+        // Only the basic CI name is set; it is last in the chain but still found.
+        std::env::set_var(CI_RESOURCE_KEY_BASIC_ENV_VAR, "basic-key");
+        assert_eq!(resource_key_from_env().as_deref(), Some("basic-key"));
         clear_all();
     }
 
@@ -155,7 +155,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         clear_all();
         std::env::set_var(RESOURCE_KEY_ENV_VAR, "   ");
-        std::env::set_var(CI_RESOURCE_KEY_PAID_ENV_VAR, "real-key");
+        std::env::set_var(CI_RESOURCE_KEY_BESPOKE_ENV_VAR, "real-key");
         assert_eq!(resource_key_from_env().as_deref(), Some("real-key"));
         clear_all();
     }

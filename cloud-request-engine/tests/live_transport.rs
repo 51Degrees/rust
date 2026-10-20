@@ -253,8 +253,8 @@ fn state_round_trips_over_the_real_transport() {
 fn live_resource_key() -> Option<String> {
     [
         "51DEGREES_RESOURCE_KEY",
-        "_51DEGREES_RESOURCE_KEY_PAID",
-        "_51DEGREES_RESOURCE_KEY_FREE",
+        "_51DEGREES_RESOURCE_KEY_BESPOKE",
+        "_51DEGREES_RESOURCE_KEY_BASIC",
     ]
     .into_iter()
     .find_map(|name| match std::env::var(name) {
@@ -269,7 +269,7 @@ fn live_resource_key() -> Option<String> {
 /// the second build makes no cloud call. Ignored by default; runs only when a
 /// resource key is present in the environment.
 #[test]
-#[ignore = "requires a network and a real resource key (51DEGREES_RESOURCE_KEY or the _51DEGREES_RESOURCE_KEY_PAID/_FREE tiered names)"]
+#[ignore = "requires a network and a real resource key (51DEGREES_RESOURCE_KEY or the _51DEGREES_RESOURCE_KEY_BESPOKE/_BASIC tiered names)"]
 fn live_cloud_state_round_trips() {
     let Some(resource_key) = live_resource_key() else {
         eprintln!("no resource key in the environment; skipping live cloud state round-trip");

@@ -60,7 +60,7 @@
 //! keys are fetched once and cached.
 //!
 //! Environment: `51DEGREES_RESOURCE_KEY` is required (the CI names
-//! `_51DEGREES_RESOURCE_KEY_PAID` and `_51DEGREES_RESOURCE_KEY_FREE` are
+//! `_51DEGREES_RESOURCE_KEY_BESPOKE` and `_51DEGREES_RESOURCE_KEY_BASIC` are
 //! accepted too), `51DEGREES_LICENSE_KEY` is optional, `51DEGREES_CLOUD_ENDPOINT`
 //! overrides the cloud API base and `PORT` overrides the default port of 5100.
 //!
@@ -346,8 +346,8 @@ async fn main() -> anyhow::Result<()> {
     // variables were looked at and stop.
     let Some(resource_key) = examples_shared::resource_key_from_env() else {
         eprintln!(
-            "Set 51DEGREES_RESOURCE_KEY (or _51DEGREES_RESOURCE_KEY_PAID or \
-             _51DEGREES_RESOURCE_KEY_FREE) to a resource key from \
+            "Set 51DEGREES_RESOURCE_KEY (or _51DEGREES_RESOURCE_KEY_BESPOKE or \
+             _51DEGREES_RESOURCE_KEY_BASIC) to a resource key from \
              https://configure.51degrees.com?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-fodid-examples-src-bin-fodid-web-creator-context.rs&utm_term=resource-key-required \
              and run again."
         );
