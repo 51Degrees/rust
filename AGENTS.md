@@ -60,8 +60,8 @@ absent, so the offline build and tests stay green without data. To run them,
 point the relevant variable at a local file: `51DEGREES_DD_PATH` for a Device
 Detection `.hash` file, `51DEGREES_IPI_PATH` for an IP Intelligence `.ipi`
 file. Live cloud tests are `#[ignore]`d and read a resource key from
-`51DEGREES_RESOURCE_KEY` (or the CI tiered names `_51DEGREES_RESOURCE_KEY_PAID`
-then `_51DEGREES_RESOURCE_KEY_FREE`).
+`51DEGREES_RESOURCE_KEY` (or the CI tiered names `_51DEGREES_RESOURCE_KEY_BESPOKE`
+then `_51DEGREES_RESOURCE_KEY_BASIC`).
 
 ## examples/
 

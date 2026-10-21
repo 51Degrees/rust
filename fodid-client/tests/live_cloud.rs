@@ -50,7 +50,7 @@
 //!
 //! The key is read from `51DEGREES_RESOURCE_KEY`, then the CI-exported names
 //! `_51DEGREES_RESOURCE_KEY_51DID`, `_51DEGREES_RESOURCE_KEY_BESPOKE`,
-//! `_51DEGREES_RESOURCE_KEY_PAID` and `_51DEGREES_RESOURCE_KEY_FREE`. With
+//! `_51DEGREES_RESOURCE_KEY_BESPOKE` and `_51DEGREES_RESOURCE_KEY_BASIC`. With
 //! none of them set the test says why and passes, so a fork with no secrets
 //! stays green.
 //!
@@ -112,8 +112,8 @@ fn resource_key() -> Option<String> {
         "51DEGREES_RESOURCE_KEY",
         "_51DEGREES_RESOURCE_KEY_51DID",
         "_51DEGREES_RESOURCE_KEY_BESPOKE",
-        "_51DEGREES_RESOURCE_KEY_PAID",
-        "_51DEGREES_RESOURCE_KEY_FREE",
+        "_51DEGREES_RESOURCE_KEY_BESPOKE",
+        "_51DEGREES_RESOURCE_KEY_BASIC",
     ]
     .into_iter()
     .find_map(non_blank_variable)

@@ -25,7 +25,7 @@
 //!
 //! The test uses a single resource key from the environment. Set
 //! `51DEGREES_RESOURCE_KEY` (or one of the CI-exported tiered names
-//! `_51DEGREES_RESOURCE_KEY_PAID` / `_51DEGREES_RESOURCE_KEY_FREE`) to a key
+//! `_51DEGREES_RESOURCE_KEY_BESPOKE` / `_51DEGREES_RESOURCE_KEY_BASIC`) to a key
 //! whose properties include `fodid.*`. Create one with the 51Degrees Configurator
 //! sharing link <https://configure.51degrees.com/N57Wygby> (the free tier now
 //! includes 51Did).
@@ -64,12 +64,12 @@ use fodid::{FodId, IdType, Usage};
 mod layout;
 
 /// The resource-key environment variable names, in the workspace's resolution
-/// order: the aligned name first, then the CI-exported paid and free tiered
+/// order: the aligned name first, then the CI-exported bespoke and basic tiered
 /// names. Mirrors `examples-shared::keys::resource_key_from_env`.
 const RESOURCE_KEY_ENVS: [&str; 3] = [
     "51DEGREES_RESOURCE_KEY",
-    "_51DEGREES_RESOURCE_KEY_PAID",
-    "_51DEGREES_RESOURCE_KEY_FREE",
+    "_51DEGREES_RESOURCE_KEY_BESPOKE",
+    "_51DEGREES_RESOURCE_KEY_BASIC",
 ];
 
 /// The 51Degrees cloud V4 JSON endpoint.
@@ -145,7 +145,7 @@ const USAGES: &[UsageCase] = &[
 ];
 
 /// Returns the resource key from the environment, trying the aligned name
-/// first and then the CI-exported paid and free tiered names. Returns `None`
+/// first and then the CI-exported bespoke and basic tiered names. Returns `None`
 /// when none is set.
 fn resource_key() -> Option<String> {
     RESOURCE_KEY_ENVS.into_iter().find_map(|name| {
@@ -381,12 +381,12 @@ fn resource_key_returns_51did_for_supported_usages() {
              \x20 - inline, single run:  {env}=<your-key> cargo test -p fodid \
              --test cloud_51did -- --include-ignored\n\
              \n\
-             The CI-exported tiered names {paid} / {free} are also accepted. Get \
+             The CI-exported tiered names {bespoke} / {basic} are also accepted. Get \
              a free key that includes 51Did from \
              https://configure.51degrees.com/N57Wygby",
             env = RESOURCE_KEY_ENVS[0],
-            paid = RESOURCE_KEY_ENVS[1],
-            free = RESOURCE_KEY_ENVS[2]
+            bespoke = RESOURCE_KEY_ENVS[1],
+            basic = RESOURCE_KEY_ENVS[2]
         );
     };
 

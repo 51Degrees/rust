@@ -190,7 +190,7 @@ jobs:
       #    central script when present, with a direct fallback to the well-known
       #    secret names so the tests still run if the script is unavailable. The
       #    examples-shared resolver reads 51DEGREES_RESOURCE_KEY first, then the
-      #    paid tiered key then the free tiered key.
+      #    bespoke tiered key then the basic tiered key.
       - name: Checkout common-ci
         uses: actions/checkout@v4
         with:
@@ -211,7 +211,7 @@ jobs:
             & $script -Keys $all
           } else {
             Write-Host 'common-ci set-resource-keys.ps1 not found; using direct secret names'
-            foreach ($name in '_51DEGREES_RESOURCE_KEY_PAID','_51DEGREES_RESOURCE_KEY_FREE') {
+            foreach ($name in '_51DEGREES_RESOURCE_KEY_BESPOKE','_51DEGREES_RESOURCE_KEY_BASIC') {
               if ($all.ContainsKey($name) -and $all[$name]) {
                 [System.Environment]::SetEnvironmentVariable($name, $all[$name])
               }
@@ -220,8 +220,8 @@ jobs:
           # Resolve a single key in the examples-shared resolver order. The
           # leading-digit name must use the ${env:NAME} brace form to read.
           $key = ${env:51DEGREES_RESOURCE_KEY}
-          if (-not $key) { $key = ${env:_51DEGREES_RESOURCE_KEY_PAID} }
-          if (-not $key) { $key = ${env:_51DEGREES_RESOURCE_KEY_FREE} }
+          if (-not $key) { $key = ${env:_51DEGREES_RESOURCE_KEY_BESPOKE} }
+          if (-not $key) { $key = ${env:_51DEGREES_RESOURCE_KEY_BASIC} }
           if (-not $key) {
             Write-Host 'No resource key secret available; skipping live cloud tests.'
             exit 0
