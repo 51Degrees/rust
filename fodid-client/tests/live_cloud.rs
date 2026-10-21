@@ -22,7 +22,7 @@
 
 //! Live integration test for the server side of a 51Did: create one through
 //! the cloud, verify it two ways, seal a creator context result and redeem
-//! that result with the licence key.
+//! that result with the license key.
 //!
 //! Every other test in this crate answers from a stub transport, so nothing
 //! here had ever run against the service the crate is written for. This test
@@ -54,19 +54,20 @@
 //! none of them set the test says why and passes, so a fork with no secrets
 //! stays green.
 //!
-//! The licence key decides how far step 6 goes. It is read from
+//! The license key decides how far step 6 goes. It is read from
 //! `_51DEGREES_LICENSE_KEY_51DID`, then `_51DEGREES_LICENSE_KEY_BESPOKE`, then
 //! `51DEGREES_LICENSE_KEY`, in that order, because the first two are named for
 //! the product they carry whilst the last is the general runtime name and may
-//! hold a data file licence that carries no 51Did product at all.
+//! hold a data file license that carries no 51Did product at all.
 //!
-//! With no licence key the cloud answers `unreadable`, which is the correct
+//! With no license key the cloud answers `unreadable`, which is the correct
 //! refusal and is asserted as such, because that is what a caller who forgot
-//! the licence has to see. With one that carries the product the redemption
-//! reads the sealed verdict and every factor is checked. With one that does
-//! not, the answer is `unreadable` again, and the test says so and stops
-//! rather than failing, because no test can tell from here which products a
-//! licence carries.
+//! the license has to see. With one the redemption must read the sealed
+//! verdict, and the signature and every factor are checked. A supplied key
+//! that still answers `unreadable` fails the test, because the service only
+//! opens a sealed result for a license key of the account whose resource key
+//! sealed it, so the run was given a mismatched pair. A pass is given a
+//! license key only when it matches the resource key.
 
 #![cfg(feature = "reqwest-client")]
 
@@ -119,9 +120,9 @@ fn resource_key() -> Option<String> {
     .find_map(non_blank_variable)
 }
 
-/// The licence key, read the same way, with the two names that say which
-/// product the licence carries put ahead of the general runtime name.
-fn licence_key() -> Option<String> {
+/// The license key, read the same way, with the two names that say which
+/// product the license carries put ahead of the general runtime name.
+fn license_key() -> Option<String> {
     [
         "_51DEGREES_LICENSE_KEY_51DID",
         "_51DEGREES_LICENSE_KEY_BESPOKE",
@@ -191,7 +192,7 @@ fn redacted(error: &fodid_client::Error) -> String {
 /// held, for example one named in a message about another key, does not
 /// reach the log either.
 fn redact(text: &str) -> String {
-    redact_secrets(text, [resource_key(), licence_key()].into_iter().flatten())
+    redact_secrets(text, [resource_key(), license_key()].into_iter().flatten())
 }
 
 /// The two passes, with the held secrets given rather than read, so the
@@ -505,12 +506,12 @@ async fn creates_verifies_and_redeems_a_51did_against_the_live_cloud() {
     );
 
     let mut builder = DidClient::builder(resource_key.clone()).endpoint(endpoint());
-    let licence = licence_key();
-    if let Some(licence) = &licence {
-        builder = builder.licence_key(licence.clone());
+    let license = license_key();
+    if let Some(license) = &license {
+        builder = builder.licence_key(license.clone());
     }
     let client = builder.build().expect("the client builds");
-    assert_eq!(client.has_licence_key(), licence.is_some());
+    assert_eq!(client.has_licence_key(), license.is_some());
 
     // 3. Verify through the cloud.
     assert!(
@@ -549,28 +550,27 @@ async fn creates_verifies_and_redeems_a_51did_against_the_live_cloud() {
         .await
         .unwrap_or_else(|e| panic!("the redeem call succeeds: {}", redacted(&e)));
 
-    if licence.is_none() {
+    if license.is_none() {
         assert_eq!(
             outcome.context(),
             ContextOutcome::Unreadable,
-            "without a licence key the sealed result cannot be read: {}",
+            "without a license key the sealed result cannot be read: {}",
             redact(outcome.body())
         );
-        eprintln!("no licence key, so the redemption correctly answered unreadable.");
+        eprintln!("no license key, so the redemption correctly answered unreadable.");
         return;
     }
 
-    // A licence that carries no 51Did product cannot read the sealed result
-    // either, and the answer is the same refusal. Nothing here can tell which
-    // products a licence carries, so this says what happened and stops rather
-    // than reporting a fault that may not be one.
-    if outcome.context() == ContextOutcome::Unreadable {
-        eprintln!(
-            "a licence key was supplied and the redemption still answered \
-             unreadable, so that licence carries no 51Did product."
-        );
-        return;
-    }
+    // A supplied license key must read the result. Returning early on
+    // `unreadable` here once kept CI green while the readable verdict was
+    // never checked, so a mismatched pair is a failure, not a skip.
+    assert_ne!(
+        outcome.context(),
+        ContextOutcome::Unreadable,
+        "a license key was supplied, so the sealed result must be readable. Is the \
+         license key from the same account as the resource key? {}",
+        redact(outcome.body())
+    );
 
     assert_eq!(
         outcome.signature(),

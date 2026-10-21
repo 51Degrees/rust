@@ -13,9 +13,11 @@ name: Cloud 51Did Tests
 # identifier at each usage the key grants and checks it parses.
 # fodid-client/tests/live_cloud.rs takes the server side further, verifying
 # through the cloud and offline, sealing a creator context result and
-# redeeming it with the license key to read the nine factors. A run with no
-# license secret still passes, asserting the refusal the cloud gives a caller
-# who has none.
+# redeeming it with the license key to read the nine factors. The service
+# only opens a sealed result for a license key of the account whose resource
+# key sealed it, so each pass is given only the license key with the same
+# suffix as its resource key. A pass with no matching license key still
+# passes, asserting the refusal the cloud gives a caller who has none.
 #
 # Both tests carry #[ignore] so a plain `cargo test` leaves them alone, which
 # is why the runs below pass --include-ignored. Each skips itself when no key
@@ -67,10 +69,22 @@ jobs:
         env:
           _51DEGREES_RESOURCE_KEY_BASIC: ${{ vars._51DEGREES_RESOURCE_KEY_BASIC }}
           _51DEGREES_RESOURCE_KEY_BESPOKE: ${{ secrets._51DEGREES_RESOURCE_KEY_BESPOKE }}
-          # The client test's redemption half reads these two, in this order.
+          _51DEGREES_RESOURCE_KEY_51DID: ${{ vars._51DEGREES_RESOURCE_KEY_51DID }}
+          # A license key reads a sealed result only with the resource key of
+          # the same suffix, so the loop pairs them by name.
           _51DEGREES_LICENSE_KEY_51DID: ${{ secrets._51DEGREES_LICENSE_KEY_51DID }}
           _51DEGREES_LICENSE_KEY_BESPOKE: ${{ secrets._51DEGREES_LICENSE_KEY_BESPOKE }}
         run: |
+          # The client test reads the suffixed license names before
+          # 51DEGREES_LICENSE_KEY, so they are taken out of the environment
+          # here and each pass sets only the general name to its match.
+          $licenses = @{}
+          Get-ChildItem env: |
+            Where-Object { $_.Name -like '_51DEGREES_LICENSE_KEY*' } |
+            ForEach-Object {
+              $licenses[$_.Name] = $_.Value
+              Remove-Item -Path "Env:$($_.Name)"
+            }
           $keys = Get-ChildItem env: |
             Where-Object { $_.Name -like '_51DEGREES_RESOURCE_KEY*' -and $_.Value }
           if (-not $keys) {
@@ -84,6 +98,14 @@ jobs:
             # so the loop sets that one. Setting a name the tests read later
             # would leave every iteration on the first tiered name they find.
             Set-Item -Path 'Env:51DEGREES_RESOURCE_KEY' -Value $k.Value
+            $licenseName = $k.Name -replace '^_51DEGREES_RESOURCE_KEY', '_51DEGREES_LICENSE_KEY'
+            if ($licenses[$licenseName]) {
+              Set-Item -Path 'Env:51DEGREES_LICENSE_KEY' -Value $licenses[$licenseName]
+              Write-Host "License key: $licenseName"
+            } else {
+              Remove-Item -Path 'Env:51DEGREES_LICENSE_KEY' -ErrorAction SilentlyContinue
+              Write-Host 'License key: none'
+            }
             cargo test -p fodid --test cloud_51did -- --include-ignored
             if ($LASTEXITCODE -ne 0) { $failed = $true }
             cargo test -p fodid-client --test live_cloud -- --include-ignored --nocapture
