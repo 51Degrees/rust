@@ -71,9 +71,10 @@ jobs:
           _51DEGREES_RESOURCE_KEY_BESPOKE: ${{ secrets._51DEGREES_RESOURCE_KEY_BESPOKE }}
           _51DEGREES_RESOURCE_KEY_51DID: ${{ vars._51DEGREES_RESOURCE_KEY_51DID }}
           # A license key reads a sealed result only with the resource key of
-          # the same suffix, so the loop pairs them by name.
+          # the same suffix, so the loop pairs them by name. The BESPOKE
+          # license key is left out because the BESPOKE resource key's sealed
+          # results answer unreadable with it, so that pass runs with none.
           _51DEGREES_LICENSE_KEY_51DID: ${{ secrets._51DEGREES_LICENSE_KEY_51DID }}
-          _51DEGREES_LICENSE_KEY_BESPOKE: ${{ secrets._51DEGREES_LICENSE_KEY_BESPOKE }}
         run: |
           # The client test reads the suffixed license names before
           # 51DEGREES_LICENSE_KEY, so they are taken out of the environment
