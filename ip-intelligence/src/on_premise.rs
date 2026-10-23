@@ -71,7 +71,7 @@ impl OnPremiseIpIntelligencePipelineBuilder {
             file_system_watcher: false,
             data_update_url: None,
             suppress_process_exceptions: false,
-            share_usage: false,
+            share_usage: cfg!(feature = "share-usage"),
         }
     }
 
@@ -139,14 +139,15 @@ impl OnPremiseIpIntelligencePipelineBuilder {
         self
     }
 
-    /// Toggle usage sharing. Off by default. A production web deployment
-    /// should turn this on, so evidence from its requests reaches 51Degrees.
+    /// Toggle usage sharing. On by default with the `share-usage` feature,
+    /// which is a default feature, so evidence from the requests the pipeline
+    /// processes reaches 51Degrees. A console or off-line tool turns it off.
     ///
     /// When enabled, a [`SequenceElement`] is added first, so each shared
     /// record carries its session id and sequence, and a [`ShareUsageElement`]
     /// with default settings is added last. The element only transmits if the
     /// `fiftyone-pipeline-engines-fiftyone/share-usage-transport` feature is
-    /// also enabled.
+    /// enabled, which the `share-usage` feature does.
     pub fn share_usage(mut self, enabled: bool) -> Self {
         self.share_usage = enabled;
         self
@@ -252,6 +253,8 @@ mod tests {
         let pipeline = IpIntelligencePipelineBuilder::on_premise(&data_file)
             .performance_profile(PerformanceProfile::HighPerformance)
             .properties(ASN_PROPERTIES.iter().copied())
+            // Off so the test sends nothing to 51Degrees.
+            .share_usage(false)
             .build()
             .expect("the ASN data file should build an on-premise pipeline");
 

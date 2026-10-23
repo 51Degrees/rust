@@ -48,8 +48,9 @@
 //!     and yields an [`OnPremiseIpIntelligencePipelineBuilder`] that assembles a
 //!     single [`IpIntelligenceOnPremiseEngine`].
 //!
-//!   Calling `share_usage(true)` on either builder adds a sequence element
-//!   before the engines and a usage-sharing element after them.
+//!   Usage sharing is on by default in both builders, which then add a
+//!   sequence element before the engines and a usage-sharing element after
+//!   them. A console or off-line tool turns it off with `share_usage(false)`.
 //!
 //! Both deployments populate the same [`IpIntelligenceDataBase`] under the same
 //! [`IP_DATA_KEY`], so an application can swap one for the other without touching
@@ -62,6 +63,8 @@
 //!
 //! - `cloud` (default): the cloud engine and the cloud request engine.
 //! - `on-premise` (default): the native on-premise engine.
+//! - `share-usage` (default): usage sharing on in both builders, and the
+//!   built-in transport it sends with.
 //!
 //! See [`IpIntelligencePipelineBuilder::cloud`] and
 //! [`IpIntelligencePipelineBuilder::on_premise`] for runnable examples of each

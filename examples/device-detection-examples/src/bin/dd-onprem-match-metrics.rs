@@ -59,10 +59,12 @@ pub struct ExampleOptions {
 pub fn run(options: ExampleOptions) -> Result<()> {
     // Build a pipeline that returns every property in the data tier. Requesting
     // no specific property loads them all, so every component is resolved and the
-    // full DeviceId (all four profile ids) is produced. No ShareUsageElement is
-    // added: usage sharing is forbidden for console examples.
+    // full DeviceId (all four profile ids) is produced. Usage sharing is off
+    // because this is a console example. In normal operation leave it on,
+    // which is the builder's default.
     let pipeline = DeviceDetectionPipelineBuilder::on_premise(&options.data_file)
         .performance_profile(PerformanceProfile::LowMemory)
+        .share_usage(false)
         .build()
         .context("failed to build the on-premise device-detection pipeline")?;
 
@@ -156,6 +158,7 @@ fn compare_property_count_timing(options: &ExampleOptions) -> Result<()> {
     let few = DeviceDetectionPipelineBuilder::on_premise(&options.data_file)
         .performance_profile(PerformanceProfile::LowMemory)
         .property("IsMobile")
+        .share_usage(false)
         .build()
         .context("failed to build the single-property pipeline")?;
 
@@ -163,6 +166,7 @@ fn compare_property_count_timing(options: &ExampleOptions) -> Result<()> {
     // property the data tier supports, across all components.
     let all = DeviceDetectionPipelineBuilder::on_premise(&options.data_file)
         .performance_profile(PerformanceProfile::LowMemory)
+        .share_usage(false)
         .build()
         .context("failed to build the all-properties pipeline")?;
 
@@ -361,9 +365,9 @@ mod tests {
  * https://51degrees.com/documentation/_device_detection__hash.html?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-device-detection-examples-src-bin-dd-onprem-match-metrics.rs&utm_term=dd-onprem-match-metrics and the
  * performance-options page.
  *
- * Usage sharing is intentionally not enabled here. Console examples must not add
- * the `ShareUsageElement`. A production web deployment should enable usage
- * sharing with `.share_usage(true)`.
+ * Usage sharing is turned off with `.share_usage(false)`, because this is a
+ * console example. In normal operation leave it on, which is the builder's
+ * default, so 51Degrees receives evidence that improves detection.
  *
  * The data file is read from the first command-line argument, the
  * `51DEGREES_DD_PATH` environment variable, or the Lite Hash file shipped in the

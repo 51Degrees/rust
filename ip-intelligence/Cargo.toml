@@ -10,7 +10,12 @@ repository.workspace = true
 homepage.workspace = true
 
 [features]
-default = ["cloud", "on-premise"]
+default = ["cloud", "on-premise", "share-usage"]
+# Turn usage sharing on by default in both pipeline builders, and compile the
+# built-in transport the usage-sharing element sends with. Without it the
+# builders leave usage sharing off unless share_usage(true) is called, and the
+# element sends nothing unless the transport is enabled another way.
+share-usage = ["fiftyone-pipeline-engines-fiftyone/share-usage-transport"]
 # Pull in the cloud IP-intelligence engine and the cloud request engine, so the
 # facade can assemble a cloud pipeline from a resource key.
 cloud = ["dep:fiftyone-ip-intelligence-cloud", "dep:fiftyone-cloud-request-engine"]

@@ -65,11 +65,13 @@ pub struct ExampleOptions {
 /// runs device detection on each, and writes the input evidence together with the
 /// detected properties to a YAML output file.
 pub fn run(options: ExampleOptions) -> Result<()> {
-    // Build the on-premise pipeline. No ShareUsageElement is added. In general,
-    // off-line processing usage should NOT be shared back to 51Degrees: it lacks
-    // the full evidence the processing back-end needs and would be discarded.
+    // Build the on-premise pipeline with usage sharing off. Off-line processing
+    // should not share usage with 51Degrees, because it lacks the full evidence
+    // the data back-end needs and would be discarded. In normal operation, on
+    // a web server, leave usage sharing on, which is the builder's default.
     let pipeline = DeviceDetectionPipelineBuilder::on_premise(&options.data_file)
         .performance_profile(PerformanceProfile::LowMemory)
+        .share_usage(false)
         .build()
         .context("failed to build the on-premise device-detection pipeline")?;
 
@@ -383,11 +385,10 @@ mod tests {
  * fields (hardware vendor, model and name) are available with a paid Enterprise
  * data file and can be added in the same way.
  *
- * Usage sharing is intentionally not enabled. Console examples must not add the
- * `ShareUsageElement`, and in general off-line processing usage should not be
- * shared back to 51Degrees because it lacks the full evidence the data back-end
- * needs and would be discarded. A production web deployment should enable usage
- * sharing with `.share_usage(true)`.
+ * Usage sharing is turned off with `.share_usage(false)`. Off-line processing
+ * should not share usage with 51Degrees, because it lacks the full evidence the
+ * data back-end needs and would be discarded. In normal operation, on a web
+ * server, leave it on, which is the builder's default.
  *
  * The data and evidence files are read from the first two command-line arguments,
  * the `51DEGREES_DD_PATH` environment variable, or the files shipped in the

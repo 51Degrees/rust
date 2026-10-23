@@ -51,14 +51,15 @@ const RECORD_COUNT: usize = 500;
 /// `HighPerformance` holds the data set in memory for the fastest detections,
 /// which is what a throughput measurement wants, and a single requested property
 /// (`IsMobile`) keeps detection resolving one component, the fastest realistic
-/// configuration. No `ShareUsageElement` is added, as usage sharing is forbidden
-/// for console/offline tools and would add network work that has nothing to do
-/// with the figure being measured. A production web deployment should enable it
-/// with `.share_usage(true)`.
+/// configuration. Usage sharing is turned off, as it is for console and
+/// off-line tools, because it would add work that has nothing to do with the
+/// figure being measured. In normal operation leave it on, which is the
+/// builder's default.
 fn build_pipeline(data_file: &Path) -> Arc<Pipeline> {
     DeviceDetectionPipelineBuilder::on_premise(data_file)
         .performance_profile(PerformanceProfile::InMemory)
         .property("IsMobile")
+        .share_usage(false)
         .build()
         .expect("the benchmark on-premise pipeline should build from the Lite .hash file")
 }
@@ -199,9 +200,9 @@ criterion_main!(benches);
  *   component, the fastest realistic configuration. A property is read on each
  *   detection, behind `black_box`, so the optimizer cannot remove the work.
  *
- * Usage sharing is intentionally not enabled: the `ShareUsageElement` is omitted,
- * as it must be for console and offline tooling, and would otherwise add network
- * work unrelated to the measurement. A production web deployment should enable it.
+ * Usage sharing is turned off with `.share_usage(false)`, as it is for console
+ * and off-line tools, because it would add work unrelated to the measurement.
+ * In normal operation leave it on, which is the builder's default.
  *
  * Data is resolved through `examples_shared` (the Lite .hash via `dd_data_path`,
  * the evidence file via `find_file`). When either is missing the benchmark

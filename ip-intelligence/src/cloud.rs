@@ -69,16 +69,16 @@ impl CloudIpIntelligencePipelineBuilder {
             timeout: None,
             suppress_process_exceptions: false,
             cloud_state: None,
-            share_usage: false,
+            share_usage: cfg!(feature = "share-usage"),
         }
     }
 
-    /// Toggle usage sharing. Off by default. When enabled, a [`SequenceElement`]
-    /// is added first and a [`ShareUsageElement`] with default settings last,
-    /// as for the on-premise builder. The element
-    /// only transmits if the
+    /// Toggle usage sharing. On by default with the `share-usage` feature,
+    /// which is a default feature. When enabled, a [`SequenceElement`] is
+    /// added first and a [`ShareUsageElement`] with default settings last, as
+    /// for the on-premise builder. The element only transmits if the
     /// `fiftyone-pipeline-engines-fiftyone/share-usage-transport` feature is
-    /// also enabled.
+    /// enabled, which the `share-usage` feature does.
     pub fn share_usage(mut self, enabled: bool) -> Self {
         self.share_usage = enabled;
         self
@@ -317,6 +317,23 @@ mod tests {
             .set_state(fiftyone_cloud_request_engine::CloudEngineState::default())
             .build();
         assert!(pipeline.is_ok(), "a configured cloud builder should build");
+    }
+
+    #[cfg(all(feature = "reqwest-client", feature = "share-usage"))]
+    #[test]
+    fn usage_sharing_is_on_by_default() {
+        // Built but never processed, so nothing is queued or sent.
+        let pipeline = IpIntelligencePipelineBuilder::cloud("test-key")
+            .set_state(fiftyone_cloud_request_engine::CloudEngineState::default())
+            .build()
+            .expect("a cloud pipeline should build offline from an injected state");
+        assert_eq!(
+            pipeline
+                .flow_elements()
+                .last()
+                .map(|element| element.type_name()),
+            Some("fiftyone_pipeline_engines_fiftyone::share_usage_element::ShareUsageElement")
+        );
     }
 
     #[cfg(feature = "reqwest-client")]

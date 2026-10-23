@@ -63,10 +63,12 @@
 //!   ([`SHARE_USAGE_DEFAULT_URL`](crate::constants::SHARE_USAGE_DEFAULT_URL) by
 //!   default).
 //!
-//! Sending usage data therefore requires two deliberate opt-ins: the element
-//! must be added to the pipeline, *and* `share-usage-transport` must be enabled.
-//! On a target where the built-in client cannot run (such as `wasm32-wasip1`)
-//! the feature is left off and the element runs with the no-op transport.
+//! Sending usage data therefore requires two opt-ins: the element must be
+//! added to the pipeline, *and* `share-usage-transport` must be enabled. The
+//! Device Detection and IP Intelligence facade crates make both by default,
+//! through their `share-usage` feature. On a target where the built-in client
+//! cannot run (such as `wasm32-wasip1`) the feature is left off and the
+//! element runs with the no-op transport.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

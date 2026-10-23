@@ -93,18 +93,18 @@ path, so cloud-only users and most of CI build without a C compiler.
 ## Feature notes
 
 - The Device Detection and IP Intelligence facades both default to
-  `["cloud", "on-premise"]`. A cloud-only application can disable the
-  `on-premise` feature to drop the native FFI crates and build without a C
-  toolchain.
-- Usage sharing is optional and off by default, so a default build (and any
-  on-premise/local deployment that does not opt in) sends nothing to 51Degrees.
-  Enabling it takes two deliberate opt-ins: add the share-usage element (the
-  facades expose `.share_usage(true)`), and enable the
-  `fiftyone-pipeline-engines-fiftyone/share-usage-transport` Cargo feature, which
-  compiles the built-in HTTP sender. With the element present but the feature
-  off, the element still runs but its sender is a no-op, so no network connection
-  to 51Degrees is made. The web examples switch both on to demonstrate the
-  feature; the console examples leave it off. See the
+  `["cloud", "on-premise", "share-usage"]`. A cloud-only application can
+  disable the `on-premise` feature to drop the native FFI crates and build
+  without a C toolchain.
+- Usage sharing is on by default in the facades' pipeline builders, as it is
+  in the other languages. The default `share-usage` feature adds the
+  share-usage element to both builders and compiles the built-in HTTP sender
+  it posts with. A console or off-line tool turns it off, as the console
+  examples do, with `.share_usage(false)` or by leaving out the feature. With
+  the feature off, the builders leave usage sharing off unless
+  `.share_usage(true)` is called, and the element's sender is a no-op unless the
+  `fiftyone-pipeline-engines-fiftyone/share-usage-transport` feature is
+  enabled, so no network connection to 51Degrees is made. See the
   [usage sharing](https://51degrees.com/documentation/_pipeline_api__features__usage_sharing.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=readme.md&utm_term=usage-sharing)
   documentation for what is shared, and the `fiftyone-pipeline-engines-fiftyone`
   crate docs for the feature detail.
@@ -215,8 +215,8 @@ use fiftyone_pipeline_web_axum::{register, FiftyOneResult, FiftyOneState};
 use std::sync::Arc;
 
 # async fn run() -> anyhow::Result<()> {
-// Usage sharing is optional. This example switches it on to help improve
-// 51Degrees data; a deployment can leave it off.
+// Usage sharing is on by default, and is set here so the choice is visible.
+// It helps improve 51Degrees data.
 let pipeline = DeviceDetectionPipelineBuilder::cloud("YOUR_RESOURCE_KEY")
     .share_usage(true)
     .build()?;
