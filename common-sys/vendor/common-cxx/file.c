@@ -27,6 +27,7 @@
 
 #ifdef _MSC_VER
 #include <windows.h>
+#include <share.h>
 #else
 #include <stdio.h>
 #include <unistd.h>
@@ -159,8 +160,14 @@ static StatusCode fileOpen(
 		}
 	}
 #else
-	/* If using Microsoft use the fopen_s method to avoid warning */
-	errno_t error = fopen_s(handle, fileName, mode);
+	/* Use _fsopen rather than fopen_s so that the file can be opened with
+	 * shared access. fopen_s opens files without sharing, which means a file
+	 * that is already open in another process (e.g. a data file still being
+	 * generated and read concurrently) cannot be opened and fails with a
+	 * permission error. _SH_DENYNO requests read/write sharing so the open
+	 * succeeds in that scenario. _fsopen sets errno on failure. */
+	*handle = _fsopen(fileName, mode, _SH_DENYNO);
+	errno_t error = (*handle == NULL) ? errno : 0;
 	if (error != 0) {
 		switch (error) {
 		case ENFILE:

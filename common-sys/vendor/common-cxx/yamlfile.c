@@ -139,14 +139,37 @@ static bool isValue(FileState* state) {
 
 // Adds the character to the key value pair if the conditions are met.
 static void addCharacter(
-	PairState* pairState, 
-	FileState* fileState, 
+	PairState* pairState,
+	FileState* fileState,
 	char* current) {
 	if (pairState->current < pairState->end &&
 		pairState->index < pairState->size &&
 		isValue(fileState)) {
 		*pairState->current = *current;
 		pairState->current++;
+	}
+}
+
+// Removes wrapping double quotes that YAML serializers add around a value
+// where the first non-whitespace character is a single quote 
+// e.g. "'hello world" -> 'hello world.
+// Client Hint headers such as "Chromium";v="8" whose double quotes
+// are part of the value are left untouched.
+static void stripDoubleQuoteWrap(PairState* state) {
+	char* start = (char*)(state->pairs + state->index)->value;
+	// The last character written to the value. current points one beyond it.
+	char* last = state->current - 1;
+	if (last > start && *start == '"' && *last == '"') {
+		char* inner = start + 1;
+		while (inner < last && (*inner == ' ' || *inner == '\t')) {
+			inner++;
+		}
+		if (inner < last && *inner == '\'') {
+			// Shift the body left over the opening quote and drop the trailing
+			// quote by moving the write pointer back over both quotes.
+			memmove(start, start + 1, (size_t)(last - (start + 1)));
+			state->current -= 2;
+		}
 	}
 }
 
@@ -199,13 +222,22 @@ StatusCode fiftyoneDegreesYamlFileIterateWithLimit(
 
 		// If EOF or the first new line then move to the next pair.
 		if (!current || *current == '\n' || *current == '\r') {
-			if (fileState.newLineCount == 0) {
+			// Only finalise a pair if one is actually in progress. Position is
+			// zero on a blank line or an empty file so finalising there would 
+			// emit a phantom empty.
+			if (fileState.newLineCount == 0 && fileState.position > 0) {
 
-				// If there was a quote earlier in the string and the last one
-				// is also a quote then remove the last quote.
-				if (fileState.quote > 0 && 
+				// If the value opened with a single quote and the last
+				// character is also a single quote then remove the trailing
+				// quote (the opening one was skipped while reading).
+				if (fileState.quote > 0 &&
 					*(pairState.current - 1) == '\'') {
 					pairState.current--;
+				}
+				// If there is a value, remove any wrapping double
+				// quotes the serializer added around a leading single quote.
+				else if (fileState.colon > 0) {
+					stripDoubleQuoteWrap(&pairState);
 				}
 				nextPair(&pairState);
 			}
