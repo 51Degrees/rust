@@ -23,7 +23,21 @@ workspace of runnable examples.
 The three `-sys` crates (`common-sys`, `device-detection-sys`,
 `ip-intelligence-sys`) link the 51Degrees C/C++ sources. They **vendor** those
 sources under `<crate>/vendor/`, so the published crates are self-contained and
-build without any submodule checkout.
+build without any submodule checkout. Each `vendor/UPSTREAM.txt` names the
+repository and commits the copy was taken from.
+
+To refresh the vendored sources, check out `device-detection-cxx` and
+`ip-intelligence-cxx` with their submodules at the commits wanted, then run:
+
+```
+pwsh ./ci/vendor-c-sources.ps1 -DeviceDetectionCxx <checkout> -IpIntelligenceCxx <checkout>
+```
+
+It copies the `.c` and `.h` files of exactly the directories each build script
+compiles and rewrites the `UPSTREAM.txt` files. `common-sys` takes the
+`common-cxx` that `device-detection-cxx` pins. After a refresh, build and run
+`pwsh ./ci/check-native-symbols.ps1`, which fails when a `common-cxx` function
+is missing from `ip-intelligence-sys/src/symbol_prefix.h`.
 
 ## Building and testing
 
@@ -104,7 +118,16 @@ is ignored by git and listed in the `fodid` manifest's `include`, so
 
 - `pull-request.yml` — fmt, build, test, clippy and doc on Windows, Linux
   (two LTS) and macOS (Intel and Apple Silicon), plus a wasm32-wasip1 job for
-  the cloud crates. Runs on pushes to `main` and PRs targeting `main`.
+  the cloud crates. Runs on pushes to `main` and PRs targeting `main`. It
+  builds the vendored C sources, which are what the published crates compile,
+  and takes the data files from the C repositories at the commits recorded in
+  `vendor/UPSTREAM.txt`. It also runs `ci/check-native-symbols.ps1` and the
+  property lookup scaling test in release.
+- `vendored-c-drift.yml` checks the vendored C sources against the commits in
+  `vendor/UPSTREAM.txt` on every push and PR. Weekly and on a manual run it
+  checks them against upstream `main` instead, and builds and tests the
+  workspace against upstream `main`. A failure there means the vendored copies
+  need refreshing with `ci/vendor-c-sources.ps1`.
 - `caching-wasm.yml` lints and tests `fiftyone-caching`, the loading cache
   included, on wasm32-wasip1 under wasmtime and, with default features off,
   on wasm32-unknown-unknown under Node through `ci/run-wasm-unknown.mjs`.

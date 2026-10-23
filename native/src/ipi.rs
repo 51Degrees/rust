@@ -776,25 +776,26 @@ mod tests {
         candidates.into_iter().find(|p| p.is_file())
     }
 
+    /// Open a data file that was found, failing if it does not load, because
+    /// a file the vendored sources cannot read is a fault, not a reason to skip.
+    fn open_found(data_file: &Path, profile: PerformanceProfile) -> Arc<Manager> {
+        Manager::open(data_file, profile).unwrap_or_else(|err| {
+            panic!(
+                "the IP Intelligence data file {} should load: {err}",
+                data_file.display()
+            )
+        })
+    }
+
     /// Open the data file through the safe `Manager`, run a public IP
-    /// lookup and read a value back. A data file that does not load is reported
-    /// as a clean skip after the safe init path has executed.
+    /// lookup and read a value back.
     #[test]
     fn lite_lookup_via_safe_api() {
         let Some(data_file) = ipi_data_file() else {
             eprintln!("no IP Intelligence data file found; skipping safe-API lookup");
             return;
         };
-        let manager = match Manager::open(&data_file, PerformanceProfile::Default) {
-            Ok(manager) => manager,
-            Err(err) => {
-                eprintln!(
-                    "IP Intelligence data file did not load ({err}); init path executed, \
-                     skipping"
-                );
-                return;
-            }
-        };
+        let manager = open_found(&data_file, PerformanceProfile::Default);
 
         let mut results = manager.create_results().expect("results should allocate");
         results
@@ -825,26 +826,14 @@ mod tests {
     /// Look up a public IP and read a weighted property through
     /// [`Results::values_weighted`], asserting at least one `(value, weighting)`
     /// pair is returned and that the pairs are sorted by descending weighting.
-    ///
-    /// When the data file is absent or does not load the manager does not open,
-    /// so the test reports a clean skip after the safe init path has executed.
-    /// The weighted binding is still compiled and linked on every run.
+    /// The candidates cover the ASN file CI uses as well as the larger files.
     #[test]
     fn lite_weighted_lookup() {
         let Some(data_file) = ipi_data_file() else {
             eprintln!("no IP Intelligence data file found; skipping weighted lookup");
             return;
         };
-        let manager = match Manager::open(&data_file, PerformanceProfile::Default) {
-            Ok(manager) => manager,
-            Err(err) => {
-                eprintln!(
-                    "IP Intelligence data file did not load ({err}); init path executed, \
-                     skipping"
-                );
-                return;
-            }
-        };
+        let manager = open_found(&data_file, PerformanceProfile::Default);
 
         let mut results = manager.create_results().expect("results should allocate");
         results
@@ -861,6 +850,8 @@ mod tests {
         );
 
         let candidates = [
+            "Asn",
+            "AsnName",
             "RegisteredCountry",
             "RegisteredName",
             "RegisteredOwner",
@@ -901,13 +892,7 @@ mod tests {
             eprintln!("no IP Intelligence data file found; skipping evidence lookup");
             return;
         };
-        let manager = match Manager::open(&data_file, PerformanceProfile::HighPerformance) {
-            Ok(manager) => manager,
-            Err(err) => {
-                eprintln!("IP Intelligence data file did not load ({err}); skipping");
-                return;
-            }
-        };
+        let manager = open_found(&data_file, PerformanceProfile::HighPerformance);
         let mut results = manager.create_results().expect("results should allocate");
 
         let with_ip = Evidence::builder()
