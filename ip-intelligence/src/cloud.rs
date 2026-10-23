@@ -34,6 +34,7 @@ use std::time::Duration;
 use fiftyone_cloud_request_engine::{CloudEngineState, CloudRequestEngine};
 use fiftyone_ip_intelligence_cloud::IpIntelligenceCloudEngine;
 use fiftyone_pipeline_core::{Pipeline, Result};
+use fiftyone_pipeline_engines_fiftyone::{SequenceElement, ShareUsageElement};
 
 /// A fluent builder that assembles a cloud IP-intelligence
 /// [`Pipeline`](fiftyone_pipeline_core::Pipeline).
@@ -42,9 +43,11 @@ use fiftyone_pipeline_core::{Pipeline, Result};
 /// optionally tune the cloud request (endpoint, origin, timeout), then call
 /// [`build`](CloudIpIntelligencePipelineBuilder::build).
 ///
-/// The built pipeline runs `[CloudRequestEngine, IpIntelligenceCloudEngine]`.
-/// The cloud request engine makes one HTTP call and stores the raw JSON, and
-/// the IP-intelligence engine reads the `ip` part of that response.
+/// The built pipeline runs `[CloudRequestEngine, IpIntelligenceCloudEngine]`,
+/// with a sequence element before them and a usage-sharing element after them
+/// when usage sharing is on. The cloud request engine makes one HTTP call and
+/// stores the raw JSON, and the IP-intelligence engine reads the `ip` part of
+/// that response.
 pub struct CloudIpIntelligencePipelineBuilder {
     resource_key: String,
     endpoint: Option<String>,
@@ -52,6 +55,7 @@ pub struct CloudIpIntelligencePipelineBuilder {
     timeout: Option<Duration>,
     suppress_process_exceptions: bool,
     cloud_state: Option<CloudEngineState>,
+    share_usage: bool,
 }
 
 impl CloudIpIntelligencePipelineBuilder {
@@ -65,7 +69,19 @@ impl CloudIpIntelligencePipelineBuilder {
             timeout: None,
             suppress_process_exceptions: false,
             cloud_state: None,
+            share_usage: false,
         }
+    }
+
+    /// Toggle usage sharing. Off by default. When enabled, a [`SequenceElement`]
+    /// is added first and a [`ShareUsageElement`] with default settings last,
+    /// as for the on-premise builder. The element
+    /// only transmits if the
+    /// `fiftyone-pipeline-engines-fiftyone/share-usage-transport` feature is
+    /// also enabled.
+    pub fn share_usage(mut self, enabled: bool) -> Self {
+        self.share_usage = enabled;
+        self
     }
 
     /// Override the base cloud endpoint. When unset the cloud request engine
@@ -146,9 +162,18 @@ impl CloudIpIntelligencePipelineBuilder {
             .cloud_request_engine(Arc::clone(&request_engine))
             .build()?;
 
-        Pipeline::builder()
+        let mut pipeline_builder = Pipeline::builder();
+        if self.share_usage {
+            pipeline_builder = pipeline_builder.add_element(Arc::new(SequenceElement::new()));
+        }
+        pipeline_builder = pipeline_builder
             .add_element(request_engine)
-            .add_element(Arc::new(ipi_engine))
+            .add_element(Arc::new(ipi_engine));
+        if self.share_usage {
+            pipeline_builder =
+                pipeline_builder.add_element(Arc::new(ShareUsageElement::with_defaults()));
+        }
+        pipeline_builder
             .suppress_process_exceptions(self.suppress_process_exceptions)
             .build()
     }
@@ -292,5 +317,31 @@ mod tests {
             .set_state(fiftyone_cloud_request_engine::CloudEngineState::default())
             .build();
         assert!(pipeline.is_ok(), "a configured cloud builder should build");
+    }
+
+    #[cfg(feature = "reqwest-client")]
+    #[test]
+    fn usage_sharing_puts_the_sequence_element_first_and_itself_last() {
+        // Built but never processed, so nothing is queued or sent.
+        let pipeline = IpIntelligencePipelineBuilder::cloud("test-key")
+            .set_state(fiftyone_cloud_request_engine::CloudEngineState::default())
+            .share_usage(true)
+            .build()
+            .expect("a cloud pipeline should build offline from an injected state");
+
+        let names: Vec<&str> = pipeline
+            .flow_elements()
+            .iter()
+            .map(|element| element.type_name())
+            .collect();
+        assert_eq!(names.len(), 4, "{names:?}");
+        assert_eq!(
+            names.first().copied(),
+            Some("fiftyone_pipeline_engines_fiftyone::sequence_element::SequenceElement")
+        );
+        assert_eq!(
+            names.last().copied(),
+            Some("fiftyone_pipeline_engines_fiftyone::share_usage_element::ShareUsageElement")
+        );
     }
 }

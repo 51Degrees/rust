@@ -48,6 +48,9 @@
 //!     and yields an [`OnPremiseIpIntelligencePipelineBuilder`] that assembles a
 //!     single [`IpIntelligenceOnPremiseEngine`].
 //!
+//!   Calling `share_usage(true)` on either builder adds a sequence element
+//!   before the engines and a usage-sharing element after them.
+//!
 //! Both deployments populate the same [`IpIntelligenceDataBase`] under the same
 //! [`IP_DATA_KEY`], so an application can swap one for the other without touching
 //! its read code.
