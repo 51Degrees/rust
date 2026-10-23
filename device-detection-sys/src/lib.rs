@@ -374,19 +374,15 @@ extern "C" {
     /// Allocates a results structure referencing the data set in `manager`. The
     /// returned pointer must be freed with [`fiftyoneDegreesResultsHashFree`].
     ///
-    /// The device-detection-cxx sources on main take `userAgentCapacity` and
-    /// `overridesCapacity` as two separate `uint32_t` parameters (see
-    /// `hash.h`). `userAgentCapacity` is accepted only for source
-    /// compatibility and is ignored, because results are sized by the number of
-    /// components in the data set. `overridesCapacity` sizes the
-    /// property-override array and MUST be passed explicitly: omitting it
-    /// leaves the C function reading the argument from an uninitialised
-    /// register, which sizes the override allocation from garbage and crashes.
+    /// `user_agent_capacity` is accepted for source compatibility and ignored,
+    /// because results are sized by the number of components in the data set.
+    /// `overrides_capacity` sizes the property-override array. Zero turns
+    /// overrides off, so values the client-side JavaScript sends back are
+    /// ignored.
     ///
-    /// The copy of those sources vendored in this crate is older and takes
-    /// `overridesCapacity` alone, as its second parameter. A caller that wants
-    /// the same behaviour from both builds passes the same value in both
-    /// capacity positions, as `fiftyone-native` does.
+    /// This declaration must match `fiftyoneDegreesResultsHashCreate` in the
+    /// vendored `src/hash/hash.h`. Rust cannot check that, so
+    /// `native/tests/smoke.rs` checks that an override reaches the results.
     ///
     /// # Safety
     /// `manager` must be an initialized Hash manager.
