@@ -452,7 +452,7 @@ impl Results {
     /// carrying a confidence weighting. This reads the native weighted value
     /// collection for the property and returns one `(value, weighting)` pair per
     /// candidate, sorted by descending weighting so the most confident value is
-    /// first. The weighting is the native raw weighting saturated into a `u16`,
+    /// first. The weighting is the native raw weighting scaled into a `u16`,
     /// matching the [`fiftyone_pipeline_core::WeightedValue`] raw weighting width
     /// the Phase 3 on-premise engine surfaces as
     /// `AspectPropertyValue<Vec<WeightedValue<T>>>`.
@@ -624,7 +624,7 @@ pub(crate) fn parse_bool(text: &str) -> Option<bool> {
 ///
 /// Each item is a pointer to a [`sys::WeightedValueHeader`] that may be
 /// reinterpreted as the concrete `Weighted*` structure its `value_type`
-/// selects. The raw weighting is a native `u32`, saturated into a `u16` for the
+/// selects. The raw weighting is a native `u32`, scaled into a `u16` for the
 /// pipeline weighted value width. Items whose value type is not one of the
 /// supported weighted leaf types are skipped.
 ///
@@ -648,7 +648,7 @@ unsafe fn collect_weighted(
             continue;
         }
         let value_type = (*header).value_type;
-        let weighting = saturate_weighting((*header).raw_weighting);
+        let weighting = scale_weighting((*header).raw_weighting);
         // Safety: the header is non-null and its `value_type` selects which
         // concrete structure the pointer may be cast to.
         let rendered = match value_type {
@@ -710,15 +710,14 @@ fn is_weighted_type(value_type: sys::PropertyValueType) -> bool {
     )
 }
 
-/// Saturate a native raw weighting into the `u16` width the pipeline
+/// Scale a native raw weighting into the `u16` width the pipeline
 /// [`fiftyone_pipeline_core::WeightedValue`] uses.
 ///
-/// The native raw weighting is a `u32` (out of a maximum of `65535 * 65535`),
-/// whereas the pipeline weighted value stores a `u16` raw weighting. A value
-/// above [`u16::MAX`] is clamped to [`u16::MAX`] so the most confident values
-/// stay distinguishable at the top of the sorted list.
-fn saturate_weighting(raw: u32) -> u16 {
-    raw.min(u16::MAX as u32) as u16
+/// The native raw weighting is a `u32` out of a maximum of `65535 * 65535`, so
+/// dividing it by 65535 gives the same proportion out of 65535, as the .NET and
+/// Java bindings do.
+fn scale_weighting(raw: u32) -> u16 {
+    (raw / u32::from(u16::MAX)) as u16
 }
 
 impl Drop for Results {
@@ -882,6 +881,51 @@ mod tests {
             total_pairs > 0,
             "at least one candidate property should return a weighted (value, weighting) pair"
         );
+    }
+
+    #[test]
+    fn a_native_weighting_keeps_its_proportion() {
+        const NATIVE_MAX: u32 = 65535 * 65535;
+        assert_eq!(scale_weighting(NATIVE_MAX), u16::MAX);
+        assert_eq!(scale_weighting(65535 * 32768), 32768);
+        assert_eq!(scale_weighting(65535), 1);
+        assert_eq!(scale_weighting(0), 0);
+    }
+
+    /// The weightings of a property's values are proportions of one, so
+    /// together they come to no more than 65535.
+    #[test]
+    fn a_propertys_weightings_add_up_to_no_more_than_one() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping the weighting total");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::Default);
+        let mut results = manager.create_results().expect("results should allocate");
+        let mut checked = 0;
+        for ip in [
+            "185.28.167.77",
+            "81.2.69.142",
+            "102.89.32.1",
+            "2a00:23c5:a1a6:a01::1",
+        ] {
+            results.process_ip(ip).expect("the lookup should run");
+            for name in manager.available_property_names() {
+                let weighted = results
+                    .values_weighted(&name)
+                    .expect("weighted values should read");
+                if weighted.is_empty() {
+                    continue;
+                }
+                let total: u32 = weighted.iter().map(|(_, w)| u32::from(*w)).sum();
+                assert!(
+                    total <= u32::from(u16::MAX),
+                    "{name} for {ip} has weightings totalling {total}: {weighted:?}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "some property should have weighted values");
     }
 
     /// Drive the same lookup from pipeline evidence carrying the client IP, then
