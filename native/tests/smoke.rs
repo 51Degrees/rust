@@ -280,6 +280,50 @@ mod device_detection {
         }
     }
 
+    /// A screen size the client-side JavaScript measured replaces the one
+    /// matched from the headers. That needs results created with room for
+    /// overrides. A property is only overridable when the data file has the
+    /// JavaScript property that measures it, which the Lite file does not, so
+    /// this runs with a licensed file such as Enterprise.
+    #[test]
+    fn browser_measured_values_override_the_data_file() {
+        let Some(data_file) = dd_lite_data_file() else {
+            eprintln!("no Hash data file found; skipping override test");
+            return;
+        };
+        let manager = open_loaded(&data_file);
+        for name in [
+            "ScreenPixelsWidth",
+            "ScreenPixelsHeight",
+            "ScreenPixelsWidthJavaScript",
+            "ScreenPixelsHeightJavaScript",
+        ] {
+            if manager.required_property_index(name).is_none() {
+                eprintln!("data file has no {name}; skipping override test");
+                return;
+            }
+        }
+        let mut results = manager.create_results().expect("results should allocate");
+        let evidence = Evidence::builder()
+            .add("header.user-agent", MOBILE_USER_AGENT)
+            .add("query.51d_screenpixelswidth", "1234")
+            .add("cookie.51d_screenpixelsheight", "567")
+            .build();
+        results
+            .process_evidence(&evidence)
+            .expect("processing evidence should not raise an exception");
+        for (name, measured) in [("ScreenPixelsWidth", "1234"), ("ScreenPixelsHeight", "567")] {
+            assert_eq!(
+                results
+                    .value_as_string(name, ",")
+                    .expect("reading a screen size should not error")
+                    .as_deref(),
+                Some(measured),
+                "{name} should be the value the browser measured"
+            );
+        }
+    }
+
     /// With the property value index built (the in-memory profiles build it),
     /// a property the matched profile holds no value for reads back empty,
     /// not as the values of the properties stored before it. The index used
