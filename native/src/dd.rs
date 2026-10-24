@@ -45,7 +45,7 @@ use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::Path;
 use std::ptr::NonNull;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock};
 
 use fiftyone_device_detection_sys as sys;
 use fiftyone_pipeline_core::{Error, Result};
@@ -161,16 +161,17 @@ pub struct Manager {
     /// native handle bookkeeping. Boxed and leaked into a raw pointer, freed in
     /// [`Drop`].
     manager: NonNull<sys::ResourceManager>,
-    /// Lazily resolved property name to required-property-index map. Resolved
-    /// once on first lookup and cached behind a read-write lock so concurrent
-    /// readers share the result.
-    property_index: RwLock<Option<HashMap<String, c_int>>>,
+    /// Property name to required-property-index map, built on the first
+    /// lookup. Every later lookup reads it with no lock, so concurrent readers
+    /// never contend.
+    property_index: OnceLock<HashMap<String, c_int>>,
 }
 
 // Safety: the native resource manager is internally reference counted and
 // lock protected per `common-cxx/resource.h`, so concurrent access from several
 // threads through a shared `&Manager` is sound. The cached property index is
-// guarded by an `RwLock`. Therefore the manager is both `Send` and `Sync`.
+// set once through a `OnceLock` and only read after that. Therefore the
+// manager is both `Send` and `Sync`.
 unsafe impl Send for Manager {}
 unsafe impl Sync for Manager {}
 
@@ -283,7 +284,7 @@ impl Manager {
         let manager = NonNull::new(manager_ptr).expect("init produced a non-null manager");
         Ok(Arc::new(Manager {
             manager,
-            property_index: RwLock::new(None),
+            property_index: OnceLock::new(),
         }))
     }
 
@@ -356,19 +357,12 @@ impl Manager {
     /// The lookup is case sensitive, matching the native data set, so callers
     /// should pass the canonical property spelling.
     pub fn required_property_index(&self, property_name: &str) -> Option<c_int> {
-        // Fast path: a populated cache only needs a read lock.
-        {
-            let guard = self.property_index.read().unwrap();
-            if let Some(map) = guard.as_ref() {
-                return map.get(property_name).copied();
-            }
-        }
-        // Build the cache under the write lock. A racing thread may have built
-        // it first, in which case the second build is discarded.
-        let map = self.build_property_index();
-        let mut guard = self.property_index.write().unwrap();
-        let map = guard.get_or_insert(map);
-        map.get(property_name).copied()
+        // The first caller builds the map and racing callers wait for it. Once
+        // it is set, a lookup takes no lock and writes no shared memory.
+        self.property_index
+            .get_or_init(|| self.build_property_index())
+            .get(property_name)
+            .copied()
     }
 
     /// Build the property name to index map by enumerating the data set.

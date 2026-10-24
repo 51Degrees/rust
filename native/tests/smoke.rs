@@ -314,6 +314,75 @@ mod device_detection {
         );
     }
 
+    /// Every property's value for each User-Agent, in property order.
+    fn read_every_property(
+        manager: &Arc<dd::Manager>,
+        names: &[String],
+        user_agents: &[&str],
+    ) -> Vec<Vec<Option<String>>> {
+        user_agents
+            .iter()
+            .map(|user_agent| {
+                let mut results = manager.create_results().expect("results should allocate");
+                results
+                    .process_user_agent(user_agent)
+                    .expect("processing a user agent should not raise an exception");
+                names
+                    .iter()
+                    .map(|name| {
+                        results
+                            .value_as_string(name, ",")
+                            .expect("reading a listed property should not error")
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Threads that read every property at once, starting together before
+    /// the manager has built its property index, get exactly the values a
+    /// single thread gets.
+    #[test]
+    fn concurrent_reads_match_a_single_thread() {
+        const THREADS: usize = 8;
+        const ROUNDS: usize = 25;
+        let Some(data_file) = dd_lite_data_file() else {
+            eprintln!("no Lite Hash data file found; skipping concurrent read test");
+            return;
+        };
+        let user_agents = [DESKTOP_USER_AGENT, MOBILE_USER_AGENT];
+        let expected = {
+            let manager = open_loaded(&data_file);
+            let names = manager.property_names();
+            read_every_property(&manager, &names, &user_agents)
+        };
+        assert!(
+            expected.iter().flatten().any(Option::is_some),
+            "the single-threaded reads should find values"
+        );
+
+        let manager = open_loaded(&data_file);
+        let names = Arc::new(manager.property_names());
+        let start = Arc::new(std::sync::Barrier::new(THREADS));
+        let readers: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let (manager, names, start) =
+                    (Arc::clone(&manager), Arc::clone(&names), Arc::clone(&start));
+                std::thread::spawn(move || {
+                    start.wait();
+                    (0..ROUNDS)
+                        .map(|_| read_every_property(&manager, &names, &user_agents))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for reader in readers {
+            for values in reader.join().expect("a reader thread should not panic") {
+                assert_eq!(values, expected);
+            }
+        }
+    }
+
     /// An unknown property reads back as no value rather than an error, the
     /// contract the safe API promises.
     #[test]
