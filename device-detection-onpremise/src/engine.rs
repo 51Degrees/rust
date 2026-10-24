@@ -28,6 +28,7 @@
 //! populate) into the flow data under
 //! [`DEVICE_DATA_KEY`](fiftyone_device_detection_shared::DEVICE_DATA_KEY).
 
+use std::ffi::CStr;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -54,6 +55,9 @@ use fiftyone_pipeline_engines::{
 /// vertical bar between values, which the shared device-data list accessor then
 /// splits back out if needed.
 const VALUE_SEPARATOR: &str = "|";
+
+/// [`VALUE_SEPARATOR`] as the C string the native reader takes.
+const NATIVE_VALUE_SEPARATOR: &CStr = c"|";
 
 /// The data-source tier reported when the native tier could not be read from the
 /// data set. The Lite data file is the free tier, so this is the safe default
@@ -257,10 +261,16 @@ impl DeviceDetectionOnPremiseEngine {
 
         // Read each available property as a string and store it, converting to
         // the natural value type so the typed accessors (is_mobile, screen
-        // dimensions, the integer match metrics) read back correctly.
+        // dimensions, the integer match metrics) read back correctly. Each is
+        // read by its index in the snapshot taken above, so a refresh between
+        // detections cannot pair an index with another data set. The match
+        // metrics have no index and are read further down.
         for meta in &self.aspect_properties {
             let name = meta.name();
-            match results.value_as_string(name, VALUE_SEPARATOR)? {
+            let Some(index) = manager.required_property_index(name) else {
+                continue;
+            };
+            match results.value_as_string_by_index(index, NATIVE_VALUE_SEPARATOR)? {
                 Some(raw) => {
                     let raw = if name.eq_ignore_ascii_case(JAVASCRIPT_HARDWARE_PROFILE) {
                         wrap_hardware_profile(raw)
@@ -734,6 +744,11 @@ mod tests {
                 "iPhone 15".to_owned()
             ]))
         );
+    }
+
+    #[test]
+    fn the_native_separator_is_the_value_separator() {
+        assert_eq!(NATIVE_VALUE_SEPARATOR.to_str(), Ok(VALUE_SEPARATOR));
     }
 
     #[test]
