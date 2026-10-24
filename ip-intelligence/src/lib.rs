@@ -99,9 +99,11 @@ pub use fiftyone_ip_intelligence_cloud::{
     IpIntelligenceCloudEngine, IpIntelligenceCloudEngineBuilder,
 };
 #[cfg(feature = "on-premise")]
+#[allow(deprecated)]
+pub use fiftyone_ip_intelligence_onpremise::IP_EVIDENCE_KEYS;
+#[cfg(feature = "on-premise")]
 pub use fiftyone_ip_intelligence_onpremise::{
     IpIntelligenceOnPremiseEngine, IpIntelligenceOnPremiseEngineBuilder, DEFAULT_DATA_SOURCE_TIER,
-    IP_EVIDENCE_KEYS,
 };
 
 #[cfg(feature = "cloud")]

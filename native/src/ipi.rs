@@ -28,14 +28,15 @@
 //! [`Arc`] to the manager so the data set stays loaded, and frees the results
 //! on drop.
 //!
-//! IP Intelligence is processed from an IP address rather than from a native
-//! evidence array. The engine links its own copy of the shared `common-cxx`
-//! sources built with wide file offsets, which is ABI incompatible with the copy
-//! `fiftyone-common-sys` builds, so this wrapper does not construct a native
-//! `common-cxx` evidence array. Instead it extracts the client IP from the
-//! pipeline evidence (see [`crate::evidence::client_ip_from_evidence`]) and
-//! feeds the native string entry point. Values are read by name into the same
-//! reusable per-thread buffer the Device Detection wrapper uses.
+//! [`Results::process_evidence`] looks up the client IP through the native
+//! evidence entry point. It reads the evidence keys the data file defines, in
+//! the order the native lookup tries them, and passes on every value it can
+//! read as an IP address. The engine links its own copy of the shared
+//! `common-cxx` sources built with wide file offsets, which is ABI incompatible
+//! with the copy `fiftyone-common-sys` builds, so the native evidence array is
+//! made with that copy's functions in `fiftyone-ip-intelligence-sys`. Values are
+//! read by name into the same reusable per-thread buffer the Device Detection
+//! wrapper uses.
 //!
 //! IP Intelligence values are inherently weighted: a property may resolve to
 //! several candidate values, each with a confidence weighting.
@@ -57,10 +58,10 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 use fiftyone_ip_intelligence_sys as sys;
-use fiftyone_pipeline_core::{Error, Evidence, Result};
+use fiftyone_pipeline_core::{constants, Error, Evidence, Result};
 
 use crate::buffer::with_value_string;
-use crate::evidence::client_ip_from_evidence;
+use crate::evidence::parse_client_ip;
 use crate::profile::PerformanceProfile;
 use crate::status::{status_name, status_to_result, NativeException, NativeStatus};
 
@@ -138,6 +139,20 @@ fn config_for(profile: PerformanceProfile) -> *mut sys::ConfigIpi {
 /// have been dropped.
 pub struct Manager {
     manager: NonNull<sys::ResourceManager>,
+    /// The evidence keys the data file defines, in the order the native lookup
+    /// tries them, read once when the file is opened.
+    evidence_keys: Vec<EvidenceKey>,
+}
+
+/// One evidence key the data file defines, split into the parts the native
+/// evidence array takes.
+struct EvidenceKey {
+    /// The pipeline key, for example `query.client-ip-51d`.
+    key: String,
+    /// The native category of the key's prefix.
+    prefix: sys::EvidencePrefix,
+    /// The header name after the prefix, as the native key.
+    field: CString,
 }
 
 // Safety: the native resource manager is internally reference counted and lock
@@ -216,11 +231,27 @@ impl Manager {
         }
 
         let manager = NonNull::new(manager_ptr).expect("init produced a non-null manager");
-        Ok(Arc::new(Manager { manager }))
+        // Safety: the manager was initialized above.
+        let evidence_keys = unsafe { read_evidence_keys(manager.as_ptr()) };
+        Ok(Arc::new(Manager {
+            manager,
+            evidence_keys,
+        }))
     }
 
     fn as_ptr(&self) -> *mut sys::ResourceManager {
         self.manager.as_ptr()
+    }
+
+    /// The evidence keys the data file defines, in the order the native lookup
+    /// tries them, lowercased.
+    ///
+    /// Each header the data file names is accepted as a query value and as a
+    /// server value, as in the other 51Degrees languages. The native lookup
+    /// tries every query value, in the data file's order, before any server
+    /// value, so the query keys come first.
+    pub fn evidence_keys(&self) -> impl ExactSizeIterator<Item = &str> + '_ {
+        self.evidence_keys.iter().map(|key| key.key.as_str())
     }
 
     /// The data set's name, which is the data file's tier (for example `Lite`,
@@ -338,6 +369,50 @@ impl Drop for Manager {
     }
 }
 
+/// Read the evidence keys the data set behind `manager` defines, being every
+/// header it names under the query prefix and then under the server prefix,
+/// in the data set's order. That is the order the native lookup tries them.
+///
+/// # Safety
+/// `manager` must be initialized.
+unsafe fn read_evidence_keys(manager: *mut sys::ResourceManager) -> Vec<EvidenceKey> {
+    let count = sys::fiftyoneDegreesShimIpiGetUniqueHeaderCount(manager);
+    let mut headers = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let mut buffer = [0u8; 256];
+        let written = sys::fiftyoneDegreesShimIpiGetUniqueHeaderName(
+            manager,
+            index,
+            buffer.as_mut_ptr() as *mut c_char,
+            buffer.len(),
+        );
+        let name = String::from_utf8_lossy(&buffer[..written.min(buffer.len())]).to_lowercase();
+        if !name.is_empty() {
+            headers.push(name);
+        }
+    }
+
+    let prefixes = [
+        (constants::EVIDENCE_QUERY_PREFIX, sys::EvidencePrefix::Query),
+        (
+            constants::EVIDENCE_SERVER_PREFIX,
+            sys::EvidencePrefix::Server,
+        ),
+    ];
+    let mut keys = Vec::with_capacity(headers.len() * prefixes.len());
+    for (prefix, native_prefix) in prefixes {
+        for header in &headers {
+            keys.push(EvidenceKey {
+                key: format!("{prefix}{}{header}", constants::EVIDENCE_SEPARATOR),
+                prefix: native_prefix,
+                // The name came from a C string, so it holds no nul byte.
+                field: CString::new(header.as_str()).expect("a header name has no nul"),
+            });
+        }
+    }
+    keys
+}
+
 // ---------------------------------------------------------------------------
 // Results
 // ---------------------------------------------------------------------------
@@ -395,16 +470,57 @@ impl Results {
         exception.check()
     }
 
-    /// Run a lookup from pipeline evidence, using the client IP it carries.
+    /// Run a lookup from the client IP evidence the data file defines.
+    ///
+    /// Takes the values of [`Manager::evidence_keys`] from `evidence` and passes
+    /// each one that reads as an IP address, in its canonical form, to the
+    /// native evidence lookup, which uses the first in its order. A value that
+    /// does not read as an IP address is left out, as the .NET engine does,
+    /// because the native lookup would stop at it rather than try the next key.
+    /// The accepted forms are those of [`crate::evidence::parse_client_ip`].
     ///
     /// Returns an [`Error::Native`] with status `InvalidInput` when the evidence
-    /// holds no client IP address.
+    /// holds no client IP address that can be read.
     pub fn process_evidence(&mut self, evidence: &Evidence) -> Result<()> {
-        let ip = client_ip_from_evidence(evidence).ok_or_else(|| Error::Native {
-            status: String::from("InvalidInput"),
-            message: String::from("evidence contains no client IP address to look up"),
-        })?;
-        self.process_ip(&ip)
+        let mut pairs = Vec::new();
+        for key in &self.manager.evidence_keys {
+            let Some(address) = evidence.get(&key.key).and_then(parse_client_ip) else {
+                continue;
+            };
+            // A formatted address never holds a nul byte.
+            let value = CString::new(address.to_string()).expect("an IP address has no nul");
+            pairs.push((key, value));
+        }
+        if pairs.is_empty() {
+            return Err(Error::Native {
+                status: String::from("InvalidInput"),
+                message: String::from("evidence contains no client IP address to look up"),
+            });
+        }
+
+        // Safety: the array is created, filled and freed here. The keys belong
+        // to the manager, and the values to `pairs`, so both outlive the call.
+        unsafe {
+            let array = sys::common::fiftyoneDegreesEvidenceCreate(pairs.len() as u32);
+            if array.is_null() {
+                return Err(Error::Native {
+                    status: String::from("InsufficientMemory"),
+                    message: String::from("failed to allocate IP Intelligence evidence"),
+                });
+            }
+            for (key, value) in &pairs {
+                sys::common::fiftyoneDegreesEvidenceAddString(
+                    array,
+                    key.prefix,
+                    key.field.as_ptr(),
+                    value.as_ptr(),
+                );
+            }
+            let mut exception = sys::Exception::cleared();
+            sys::fiftyoneDegreesResultsIpiFromEvidence(self.as_ptr(), array, &mut exception);
+            sys::common::fiftyoneDegreesEvidenceFree(array);
+            exception.check()
+        }
     }
 
     /// Read the value(s) for the named property as a single string, joining
@@ -951,5 +1067,132 @@ mod tests {
             results.process_evidence(&without_ip).is_err(),
             "evidence with no client IP should be an error"
         );
+    }
+
+    /// Every header the data file names is a key under both prefixes, with
+    /// every query key before any server key, each group in the same order.
+    #[test]
+    fn the_evidence_keys_are_the_data_files_headers_query_first() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping evidence keys");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::Default);
+        let keys: Vec<&str> = manager.evidence_keys().collect();
+        let (query, server) = keys.split_at(keys.len() / 2);
+        let query: Vec<&str> = query
+            .iter()
+            .filter_map(|k| k.strip_prefix("query."))
+            .collect();
+        let server: Vec<&str> = server
+            .iter()
+            .filter_map(|k| k.strip_prefix("server."))
+            .collect();
+        assert!(
+            !query.is_empty(),
+            "the data file should define headers: {keys:?}"
+        );
+        assert_eq!(
+            query.len() * 2,
+            keys.len(),
+            "query keys come first: {keys:?}"
+        );
+        assert_eq!(
+            query, server,
+            "both prefixes take the same headers: {keys:?}"
+        );
+        for key in ["query.client-ip-51d", "server.client-ip"] {
+            assert!(keys.contains(&key), "{key} should be accepted: {keys:?}");
+        }
+    }
+
+    /// Run a lookup from `evidence` and read back the autonomous system.
+    fn asn_from(manager: &Arc<Manager>, evidence: &[(&str, &str)]) -> Result<Option<String>> {
+        let mut builder = Evidence::builder();
+        for (key, value) in evidence {
+            builder = builder.add(*key, *value);
+        }
+        let mut results = manager.create_results()?;
+        results.process_evidence(&builder.build())?;
+        results.value_as_string("Asn", ",")
+    }
+
+    /// A Cloudflare address, which the data files give as AS13335.
+    const CLOUDFLARE: &str = "1.1.1.1";
+    /// A Quad9 address, which the data files give as AS19281.
+    const QUAD9: &str = "9.9.9.9";
+
+    #[test]
+    fn a_query_value_is_used_before_a_server_value() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping evidence order");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::HighPerformance);
+        let asn = asn_from(
+            &manager,
+            &[("server.client-ip", CLOUDFLARE), ("query.client-ip", QUAD9)],
+        )
+        .expect("the lookup should succeed");
+        assert!(
+            asn.as_deref().unwrap_or_default().contains("AS19281"),
+            "got {asn:?}"
+        );
+    }
+
+    #[test]
+    fn a_value_that_is_not_an_address_gives_way_to_the_next_key() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping evidence fall through");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::HighPerformance);
+        // The native lookup stops at a value it cannot read, so without the
+        // values being read first this fails with an incorrect format error.
+        let asn = asn_from(
+            &manager,
+            &[
+                ("query.client-ip-51d", "unknown"),
+                ("server.client-ip", CLOUDFLARE),
+            ],
+        )
+        .expect("the lookup should succeed");
+        assert!(
+            asn.as_deref().unwrap_or_default().contains("AS13335"),
+            "got {asn:?}"
+        );
+    }
+
+    #[test]
+    fn a_51d_key_and_an_address_with_a_port_are_read() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping 51d keys");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::HighPerformance);
+        for value in [
+            "1.1.1.1:443",
+            "[2606:4700:4700::1111]:443",
+            "1.1.1.1, 10.0.0.1",
+        ] {
+            let asn = asn_from(&manager, &[("query.client-ip-51d", value)])
+                .unwrap_or_else(|err| panic!("{value} should be looked up: {err}"));
+            assert!(
+                asn.as_deref().unwrap_or_default().contains("AS13335"),
+                "{value} gave {asn:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_with_no_readable_address_is_an_error() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping unreadable evidence");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::HighPerformance);
+        let err = asn_from(&manager, &[("server.client-ip", "unknown")])
+            .expect_err("evidence with no readable address should be an error");
+        assert!(matches!(err, Error::Native { ref status, .. } if status == "InvalidInput"));
     }
 }
