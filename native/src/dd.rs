@@ -693,9 +693,9 @@ impl Results {
     ///
     /// The native results hold one result for each component, such as the
     /// hardware or the browser, each from the header that matched it. As in
-    /// the C++ results the other languages use, the method is the highest of
-    /// any result and the other metrics are summed across them. With no
-    /// results every metric is zero, which is the method `NONE`.
+    /// the C++ results, the method is the highest of any result and the other
+    /// metrics are summed across them. With no results every metric is zero,
+    /// which is the method `NONE`.
     ///
     /// These are computed during detection and live on the native results, not
     /// in the data file's property values, so they are read directly here
