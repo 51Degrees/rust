@@ -291,7 +291,7 @@ pub(crate) unsafe fn with_native_evidence<R>(
 /// `query.client-ip`, then the first value under any `server.` prefix. Returns
 /// [`None`] when none is present.
 ///
-/// IP Intelligence no longer uses this, because its data file defines the keys
+/// IP Intelligence does not use this, because its data file defines the keys
 /// and the order to try them in. The IP Intelligence `Results::process_evidence`
 /// reads those keys, and [`parse_client_ip`] reads one value.
 #[deprecated(note = "IP Intelligence reads the keys its data file defines. Use \
