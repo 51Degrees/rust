@@ -25,9 +25,9 @@
 //! On-premise IP Intelligence metadata console example.
 //!
 //! Inspects an on-premise engine and prints its available properties (with
-//! value types and any descriptions/tiers), the evidence keys it accepts and a
-//! summary of the data file in use. The descriptive block the documentation
-//! tooling renders lives at the bottom of the file.
+//! value types and any descriptions/tiers), the evidence keys its data file
+//! defines and a summary of the data file in use. The descriptive block the
+//! documentation tooling renders lives at the bottom of the file.
 //!
 //! @snippet ipi-onprem-metadata.rs example
 
@@ -35,7 +35,7 @@ use std::io::Write;
 
 use anyhow::Context;
 use fiftyone_ip_intelligence::{IpIntelligenceOnPremiseEngine, PerformanceProfile};
-use fiftyone_pipeline_core::{EvidenceKeyFilter, FlowElement};
+use fiftyone_pipeline_core::FlowElement;
 use fiftyone_pipeline_engines::AspectEngine;
 
 /// The options that drive a run of this example.
@@ -58,21 +58,6 @@ impl ExampleOptions {
         })
     }
 }
-
-/// The candidate evidence keys to probe when reporting what the engine accepts.
-///
-/// IP Intelligence accepts the client IP under several keys (see the IP
-/// Intelligence specification). The engine advertises its set through an
-/// evidence-key filter, which is queried with each of these.
-const CANDIDATE_EVIDENCE_KEYS: &[&str] = &[
-    "server.client-ip",
-    "query.client-ip",
-    "query.client-ip-51d",
-    "server.client-ip-51d",
-    "query.true-client-ip-51d",
-    "server.true-client-ip-51d",
-    "header.user-agent",
-];
 
 // [example]
 /// Run the metadata example, writing all output to `out`.
@@ -161,21 +146,16 @@ fn output_property_details(
     Ok(())
 }
 
-/// Print the evidence keys the engine accepts, probing the advertised filter.
+/// Print the evidence keys the engine accepts, which its data file defines, in
+/// the order the engine tries them.
 fn output_evidence_key_details(
     engine: &IpIntelligenceOnPremiseEngine,
     out: &mut dyn Write,
 ) -> anyhow::Result<()> {
-    let filter: &dyn EvidenceKeyFilter = engine.evidence_key_filter();
     writeln!(out)?;
-    writeln!(out, "Accepted evidence keys (probed):")?;
-    for key in CANDIDATE_EVIDENCE_KEYS {
-        let accepted = filter.include(key);
-        writeln!(
-            out,
-            "\t{key}: {}",
-            if accepted { "accepted" } else { "not accepted" }
-        )?;
+    writeln!(out, "Accepted evidence keys, in the order they are tried:")?;
+    for key in engine.evidence_keys() {
+        writeln!(out, "\t{key}")?;
     }
     Ok(())
 }
@@ -243,9 +223,13 @@ mod tests {
         assert!(printed.contains("Available properties"));
         assert!(printed.contains("Accepted evidence keys"));
         assert!(printed.contains("Asn"));
-        // The canonical client-IP key is always accepted; an unrelated key is not.
-        assert!(printed.contains("server.client-ip: accepted"));
-        assert!(printed.contains("header.user-agent: not accepted"));
+        // The data file's keys are listed, every query key before any server
+        // key, and nothing else is.
+        let query = printed.find("\tquery.client-ip-51d\n");
+        let server = printed.find("\tserver.client-ip\n");
+        assert!(query.is_some() && server.is_some(), "{printed}");
+        assert!(query < server, "query keys are tried first: {printed}");
+        assert!(!printed.contains("header.user-agent"));
     }
 }
 
@@ -263,9 +247,10 @@ mod tests {
  *    (the weighted IP Intelligence properties are surfaced as a key-value list
  *    of value/weight records) and, where the metadata carries them, a
  *    description and the data tiers in which the property has a value.
- * 3. The evidence keys the engine accepts, by probing its advertised
- *    `EvidenceKeyFilter`. IP Intelligence accepts the client IP under several
- *    keys (server/query, plus the 51Degrees-prefixed forms).
+ * 3. The evidence keys the engine accepts, which its data file defines, in
+ *    the order the engine tries them. Each header the data file names is
+ *    accepted as a query value and as a server value, and every query value
+ *    is tried before any server value.
  *
  * It also prints the standard data-file warnings (for an out-of-date or
  * Lite-tier file) via the shared `check_data_file` helper.

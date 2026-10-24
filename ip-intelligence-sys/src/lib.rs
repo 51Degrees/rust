@@ -60,14 +60,21 @@
 //!   [`fiftyoneDegreesDataSetIpiRelease`] and
 //!   [`fiftyoneDegreesResourceManagerFree`], which is declared against this
 //!   crate's own `common-cxx` build).
-//! - **Property enumeration shim**
+//! - **Property and header enumeration shim**
 //!   ([`fiftyoneDegreesShimIpiGetRequiredPropertyCount`],
-//!   [`fiftyoneDegreesShimIpiGetRequiredPropertyName`] and
-//!   [`fiftyoneDegreesShimIpiGetRequiredPropertyIndexFromName`]). These flat
-//!   helpers are compiled from this crate's own `src/shim.c` (not the upstream
-//!   library) and read the `available` property set buried deep inside the data
-//!   set structures, so the Rust side does not mirror those private C layouts.
-//!   They mirror the equivalent shim in `fiftyone-device-detection-sys`.
+//!   [`fiftyoneDegreesShimIpiGetRequiredPropertyName`],
+//!   [`fiftyoneDegreesShimIpiGetRequiredPropertyIndexFromName`],
+//!   [`fiftyoneDegreesShimIpiGetUniqueHeaderCount`] and
+//!   [`fiftyoneDegreesShimIpiGetUniqueHeaderName`]). These flat helpers are
+//!   compiled from this crate's own `src/shim.c` (not the upstream library) and
+//!   read the `available` property set and the `uniqueHeaders` buried deep
+//!   inside the data set structures, so the Rust side does not mirror those
+//!   private C layouts. They mirror the equivalent shim in
+//!   `fiftyone-device-detection-sys`.
+//! - **Evidence** ([`common::fiftyoneDegreesEvidenceCreate`],
+//!   [`common::fiftyoneDegreesEvidenceAddString`] and
+//!   [`common::fiftyoneDegreesEvidenceFree`]), bound to this crate's own
+//!   `common-cxx` build for [`fiftyoneDegreesResultsIpiFromEvidence`].
 //!
 //! Internals such as collections, data sets, graphs and headers are exposed as
 //! opaque pointer types. Only the structures that genuinely cross the boundary
@@ -90,8 +97,8 @@
 use std::os::raw::{c_char, c_int, c_void};
 
 pub use common::{
-    EvidenceKeyValuePairArray, Exception, PropertiesAvailable, PropertiesRequired, ResourceHandle,
-    ResourceManager, StatusCode,
+    EvidenceKeyValuePair, EvidenceKeyValuePairArray, EvidencePrefix, Exception,
+    PropertiesAvailable, PropertiesRequired, ResourceHandle, ResourceManager, StatusCode,
 };
 
 /// Shared `common-cxx` ABI types needed by the IP Intelligence surface.
@@ -277,11 +284,43 @@ pub mod common {
     ///
     /// Only ever passed by pointer to
     /// [`fiftyoneDegreesResultsIpiFromEvidence`](crate::fiftyoneDegreesResultsIpiFromEvidence),
-    /// so it is exposed as an opaque pointer type here. Construct and populate
-    /// it through the evidence helpers in the common FFI surface.
+    /// so it is exposed as an opaque pointer type here. Create and fill it with
+    /// [`fiftyoneDegreesEvidenceCreate`] and [`fiftyoneDegreesEvidenceAddString`]
+    /// below, which belong to this crate's own `common-cxx` build, and never with
+    /// the evidence functions of `fiftyone-common-sys`.
     #[repr(C)]
     pub struct EvidenceKeyValuePairArray {
         _private: [u8; 0],
+    }
+
+    /// One pair in an evidence array, mirroring
+    /// `fiftyoneDegreesEvidenceKeyValuePair`. Returned by
+    /// [`fiftyoneDegreesEvidenceAddString`] and exposed as an opaque pointer
+    /// type only.
+    #[repr(C)]
+    pub struct EvidenceKeyValuePair {
+        _private: [u8; 0],
+    }
+
+    /// The category of an evidence value, mirroring
+    /// `fiftyoneDegreesEvidencePrefix`. The values are bit flags. The IP
+    /// Intelligence lookup reads only [`EvidencePrefix::Query`] and
+    /// [`EvidencePrefix::Server`] values.
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum EvidencePrefix {
+        /// An HTTP header value.
+        HttpHeaderString = 1 << 0,
+        /// A list of IP addresses as a string to be parsed.
+        HttpHeaderIpAddresses = 1 << 1,
+        /// A server value, for example the client IP.
+        Server = 1 << 2,
+        /// A query string parameter.
+        Query = 1 << 3,
+        /// A cookie value.
+        Cookie = 1 << 4,
+        /// The evidence is invalid and should be ignored.
+        Ignore = 1 << 7,
     }
 
     /// Defines the set of properties required by a caller, mirroring
@@ -340,6 +379,42 @@ pub mod common {
         /// `ptr` must be a pointer the library allocated, or null.
         #[link_name = "ipi_fiftyoneDegreesMemoryStandardFree"]
         pub fn fiftyoneDegreesMemoryStandardFree(ptr: *mut std::os::raw::c_void);
+
+        /// Creates an evidence array with room for `capacity` pairs, or returns
+        /// null when the allocation fails. Free it with
+        /// [`fiftyoneDegreesEvidenceFree`].
+        ///
+        /// The native symbol is `ipi_`-prefixed for the same reason as
+        /// [`fiftyoneDegreesExceptionGetMessage`] above.
+        ///
+        /// # Safety
+        /// The returned array must be freed exactly once.
+        #[link_name = "ipi_fiftyoneDegreesEvidenceCreate"]
+        pub fn fiftyoneDegreesEvidenceCreate(capacity: u32) -> *mut EvidenceKeyValuePairArray;
+
+        /// Adds a string value under `prefix` and `key`, chaining a further
+        /// array when this one is full. The array points at the key and value
+        /// rather than copying them.
+        ///
+        /// # Safety
+        /// `evidence` must come from [`fiftyoneDegreesEvidenceCreate`]. `key`
+        /// and `value` must be null terminated and outlive every use of the
+        /// array.
+        #[link_name = "ipi_fiftyoneDegreesEvidenceAddString"]
+        pub fn fiftyoneDegreesEvidenceAddString(
+            evidence: *mut EvidenceKeyValuePairArray,
+            prefix: EvidencePrefix,
+            key: *const c_char,
+            value: *const c_char,
+        ) -> *mut EvidenceKeyValuePair;
+
+        /// Frees an evidence array and every array chained to it.
+        ///
+        /// # Safety
+        /// `evidence` must come from [`fiftyoneDegreesEvidenceCreate`], or be
+        /// null.
+        #[link_name = "ipi_fiftyoneDegreesEvidenceFree"]
+        pub fn fiftyoneDegreesEvidenceFree(evidence: *mut EvidenceKeyValuePairArray);
     }
 }
 
@@ -1124,6 +1199,31 @@ extern "C" {
         month: *mut c_int,
         day: *mut c_int,
     ) -> c_int;
+
+    /// Returns the number of headers the data set reads the client IP from, or
+    /// zero when no data set is available. Defined by this crate's
+    /// `src/shim.c`, reading the data set's `uniqueHeaders`.
+    ///
+    /// # Safety
+    /// `manager` must be initialized.
+    pub fn fiftyoneDegreesShimIpiGetUniqueHeaderCount(manager: *mut ResourceManager) -> u32;
+
+    /// Writes the name of the header at `header_index`, in the data set's
+    /// priority order, into `buffer` as a null terminated string and returns
+    /// the number of characters written, excluding the terminator. Returns zero
+    /// when the index is out of range or no data set is available, and cuts the
+    /// name short when the buffer is too small. Defined by this crate's
+    /// `src/shim.c`.
+    ///
+    /// # Safety
+    /// `manager` must be initialized. `buffer` must point to `length` writable
+    /// bytes.
+    pub fn fiftyoneDegreesShimIpiGetUniqueHeaderName(
+        manager: *mut ResourceManager,
+        header_index: u32,
+        buffer: *mut c_char,
+        length: usize,
+    ) -> usize;
 }
 
 #[cfg(test)]
