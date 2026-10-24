@@ -28,14 +28,15 @@
 //! [`Arc`] to the manager so the data set stays loaded, and frees the results
 //! on drop.
 //!
-//! IP Intelligence is processed from an IP address rather than from a native
-//! evidence array. The engine links its own copy of the shared `common-cxx`
-//! sources built with wide file offsets, which is ABI incompatible with the copy
-//! `fiftyone-common-sys` builds, so this wrapper does not construct a native
-//! `common-cxx` evidence array. Instead it extracts the client IP from the
-//! pipeline evidence (see [`crate::evidence::client_ip_from_evidence`]) and
-//! feeds the native string entry point. Values are read by name into the same
-//! reusable per-thread buffer the Device Detection wrapper uses.
+//! [`Results::process_evidence`] looks up the client IP through the native
+//! evidence entry point. It reads the evidence keys the data file defines, in
+//! the order the native lookup tries them, and passes on every value it can
+//! read as an IP address. The engine links its own copy of the shared
+//! `common-cxx` sources built with wide file offsets, which is ABI incompatible
+//! with the copy `fiftyone-common-sys` builds, so the native evidence array is
+//! made with that copy's functions in `fiftyone-ip-intelligence-sys`. Values are
+//! read by name into the same reusable per-thread buffer the Device Detection
+//! wrapper uses.
 //!
 //! IP Intelligence values are inherently weighted: a property may resolve to
 //! several candidate values, each with a confidence weighting.
@@ -57,10 +58,10 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 use fiftyone_ip_intelligence_sys as sys;
-use fiftyone_pipeline_core::{Error, Evidence, Result};
+use fiftyone_pipeline_core::{constants, Error, Evidence, Result};
 
 use crate::buffer::with_value_string;
-use crate::evidence::client_ip_from_evidence;
+use crate::evidence::parse_client_ip;
 use crate::profile::PerformanceProfile;
 use crate::status::{status_name, status_to_result, NativeException, NativeStatus};
 
@@ -138,6 +139,20 @@ fn config_for(profile: PerformanceProfile) -> *mut sys::ConfigIpi {
 /// have been dropped.
 pub struct Manager {
     manager: NonNull<sys::ResourceManager>,
+    /// The evidence keys the data file defines, in the order the native lookup
+    /// tries them, read once when the file is opened.
+    evidence_keys: Vec<EvidenceKey>,
+}
+
+/// One evidence key the data file defines, split into the parts the native
+/// evidence array takes.
+struct EvidenceKey {
+    /// The pipeline key, for example `query.client-ip-51d`.
+    key: String,
+    /// The native category of the key's prefix.
+    prefix: sys::EvidencePrefix,
+    /// The header name after the prefix, as the native key.
+    field: CString,
 }
 
 // Safety: the native resource manager is internally reference counted and lock
@@ -216,11 +231,27 @@ impl Manager {
         }
 
         let manager = NonNull::new(manager_ptr).expect("init produced a non-null manager");
-        Ok(Arc::new(Manager { manager }))
+        // Safety: the manager was initialized above.
+        let evidence_keys = unsafe { read_evidence_keys(manager.as_ptr()) };
+        Ok(Arc::new(Manager {
+            manager,
+            evidence_keys,
+        }))
     }
 
     fn as_ptr(&self) -> *mut sys::ResourceManager {
         self.manager.as_ptr()
+    }
+
+    /// The evidence keys the data file defines, in the order the native lookup
+    /// tries them, lowercased.
+    ///
+    /// Each header the data file names is accepted as a query value and as a
+    /// server value, as in the other 51Degrees languages. The native lookup
+    /// tries every query value, in the data file's order, before any server
+    /// value, so the query keys come first.
+    pub fn evidence_keys(&self) -> impl ExactSizeIterator<Item = &str> + '_ {
+        self.evidence_keys.iter().map(|key| key.key.as_str())
     }
 
     /// The data set's name, which is the data file's tier (for example `Lite`,
@@ -338,6 +369,50 @@ impl Drop for Manager {
     }
 }
 
+/// Read the evidence keys the data set behind `manager` defines, being every
+/// header it names under the query prefix and then under the server prefix,
+/// in the data set's order. That is the order the native lookup tries them.
+///
+/// # Safety
+/// `manager` must be initialized.
+unsafe fn read_evidence_keys(manager: *mut sys::ResourceManager) -> Vec<EvidenceKey> {
+    let count = sys::fiftyoneDegreesShimIpiGetUniqueHeaderCount(manager);
+    let mut headers = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let mut buffer = [0u8; 256];
+        let written = sys::fiftyoneDegreesShimIpiGetUniqueHeaderName(
+            manager,
+            index,
+            buffer.as_mut_ptr() as *mut c_char,
+            buffer.len(),
+        );
+        let name = String::from_utf8_lossy(&buffer[..written.min(buffer.len())]).to_lowercase();
+        if !name.is_empty() {
+            headers.push(name);
+        }
+    }
+
+    let prefixes = [
+        (constants::EVIDENCE_QUERY_PREFIX, sys::EvidencePrefix::Query),
+        (
+            constants::EVIDENCE_SERVER_PREFIX,
+            sys::EvidencePrefix::Server,
+        ),
+    ];
+    let mut keys = Vec::with_capacity(headers.len() * prefixes.len());
+    for (prefix, native_prefix) in prefixes {
+        for header in &headers {
+            keys.push(EvidenceKey {
+                key: format!("{prefix}{}{header}", constants::EVIDENCE_SEPARATOR),
+                prefix: native_prefix,
+                // The name came from a C string, so it holds no nul byte.
+                field: CString::new(header.as_str()).expect("a header name has no nul"),
+            });
+        }
+    }
+    keys
+}
+
 // ---------------------------------------------------------------------------
 // Results
 // ---------------------------------------------------------------------------
@@ -395,16 +470,57 @@ impl Results {
         exception.check()
     }
 
-    /// Run a lookup from pipeline evidence, using the client IP it carries.
+    /// Run a lookup from the client IP evidence the data file defines.
+    ///
+    /// Takes the values of [`Manager::evidence_keys`] from `evidence` and passes
+    /// each one that reads as an IP address, in its canonical form, to the
+    /// native evidence lookup, which uses the first in its order. A value that
+    /// does not read as an IP address is left out, as the .NET engine does,
+    /// because the native lookup would stop at it rather than try the next key.
+    /// The accepted forms are those of [`crate::evidence::parse_client_ip`].
     ///
     /// Returns an [`Error::Native`] with status `InvalidInput` when the evidence
-    /// holds no client IP address.
+    /// holds no client IP address that can be read.
     pub fn process_evidence(&mut self, evidence: &Evidence) -> Result<()> {
-        let ip = client_ip_from_evidence(evidence).ok_or_else(|| Error::Native {
-            status: String::from("InvalidInput"),
-            message: String::from("evidence contains no client IP address to look up"),
-        })?;
-        self.process_ip(&ip)
+        let mut pairs = Vec::new();
+        for key in &self.manager.evidence_keys {
+            let Some(address) = evidence.get(&key.key).and_then(parse_client_ip) else {
+                continue;
+            };
+            // A formatted address never holds a nul byte.
+            let value = CString::new(address.to_string()).expect("an IP address has no nul");
+            pairs.push((key, value));
+        }
+        if pairs.is_empty() {
+            return Err(Error::Native {
+                status: String::from("InvalidInput"),
+                message: String::from("evidence contains no client IP address to look up"),
+            });
+        }
+
+        // Safety: the array is created, filled and freed here. The keys belong
+        // to the manager, and the values to `pairs`, so both outlive the call.
+        unsafe {
+            let array = sys::common::fiftyoneDegreesEvidenceCreate(pairs.len() as u32);
+            if array.is_null() {
+                return Err(Error::Native {
+                    status: String::from("InsufficientMemory"),
+                    message: String::from("failed to allocate IP Intelligence evidence"),
+                });
+            }
+            for (key, value) in &pairs {
+                sys::common::fiftyoneDegreesEvidenceAddString(
+                    array,
+                    key.prefix,
+                    key.field.as_ptr(),
+                    value.as_ptr(),
+                );
+            }
+            let mut exception = sys::Exception::cleared();
+            sys::fiftyoneDegreesResultsIpiFromEvidence(self.as_ptr(), array, &mut exception);
+            sys::common::fiftyoneDegreesEvidenceFree(array);
+            exception.check()
+        }
     }
 
     /// Read the value(s) for the named property as a single string, joining
@@ -452,7 +568,7 @@ impl Results {
     /// carrying a confidence weighting. This reads the native weighted value
     /// collection for the property and returns one `(value, weighting)` pair per
     /// candidate, sorted by descending weighting so the most confident value is
-    /// first. The weighting is the native raw weighting saturated into a `u16`,
+    /// first. The weighting is the native raw weighting scaled into a `u16`,
     /// matching the [`fiftyone_pipeline_core::WeightedValue`] raw weighting width
     /// the Phase 3 on-premise engine surfaces as
     /// `AspectPropertyValue<Vec<WeightedValue<T>>>`.
@@ -624,7 +740,7 @@ pub(crate) fn parse_bool(text: &str) -> Option<bool> {
 ///
 /// Each item is a pointer to a [`sys::WeightedValueHeader`] that may be
 /// reinterpreted as the concrete `Weighted*` structure its `value_type`
-/// selects. The raw weighting is a native `u32`, saturated into a `u16` for the
+/// selects. The raw weighting is a native `u32`, scaled into a `u16` for the
 /// pipeline weighted value width. Items whose value type is not one of the
 /// supported weighted leaf types are skipped.
 ///
@@ -648,7 +764,7 @@ unsafe fn collect_weighted(
             continue;
         }
         let value_type = (*header).value_type;
-        let weighting = saturate_weighting((*header).raw_weighting);
+        let weighting = scale_weighting((*header).raw_weighting);
         // Safety: the header is non-null and its `value_type` selects which
         // concrete structure the pointer may be cast to.
         let rendered = match value_type {
@@ -710,15 +826,14 @@ fn is_weighted_type(value_type: sys::PropertyValueType) -> bool {
     )
 }
 
-/// Saturate a native raw weighting into the `u16` width the pipeline
+/// Scale a native raw weighting into the `u16` width the pipeline
 /// [`fiftyone_pipeline_core::WeightedValue`] uses.
 ///
-/// The native raw weighting is a `u32` (out of a maximum of `65535 * 65535`),
-/// whereas the pipeline weighted value stores a `u16` raw weighting. A value
-/// above [`u16::MAX`] is clamped to [`u16::MAX`] so the most confident values
-/// stay distinguishable at the top of the sorted list.
-fn saturate_weighting(raw: u32) -> u16 {
-    raw.min(u16::MAX as u32) as u16
+/// The native raw weighting is a `u32` out of a maximum of `65535 * 65535`, so
+/// dividing it by 65535 gives the same proportion out of 65535, as the .NET and
+/// Java bindings do.
+fn scale_weighting(raw: u32) -> u16 {
+    (raw / u32::from(u16::MAX)) as u16
 }
 
 impl Drop for Results {
@@ -776,25 +891,26 @@ mod tests {
         candidates.into_iter().find(|p| p.is_file())
     }
 
+    /// Open a data file that was found, failing if it does not load, because
+    /// a file the vendored sources cannot read is a fault, not a reason to skip.
+    fn open_found(data_file: &Path, profile: PerformanceProfile) -> Arc<Manager> {
+        Manager::open(data_file, profile).unwrap_or_else(|err| {
+            panic!(
+                "the IP Intelligence data file {} should load: {err}",
+                data_file.display()
+            )
+        })
+    }
+
     /// Open the data file through the safe `Manager`, run a public IP
-    /// lookup and read a value back. A data file that does not load is reported
-    /// as a clean skip after the safe init path has executed.
+    /// lookup and read a value back.
     #[test]
     fn lite_lookup_via_safe_api() {
         let Some(data_file) = ipi_data_file() else {
             eprintln!("no IP Intelligence data file found; skipping safe-API lookup");
             return;
         };
-        let manager = match Manager::open(&data_file, PerformanceProfile::Default) {
-            Ok(manager) => manager,
-            Err(err) => {
-                eprintln!(
-                    "IP Intelligence data file did not load ({err}); init path executed, \
-                     skipping"
-                );
-                return;
-            }
-        };
+        let manager = open_found(&data_file, PerformanceProfile::Default);
 
         let mut results = manager.create_results().expect("results should allocate");
         results
@@ -825,26 +941,14 @@ mod tests {
     /// Look up a public IP and read a weighted property through
     /// [`Results::values_weighted`], asserting at least one `(value, weighting)`
     /// pair is returned and that the pairs are sorted by descending weighting.
-    ///
-    /// When the data file is absent or does not load the manager does not open,
-    /// so the test reports a clean skip after the safe init path has executed.
-    /// The weighted binding is still compiled and linked on every run.
+    /// The candidates cover the ASN file CI uses as well as the larger files.
     #[test]
     fn lite_weighted_lookup() {
         let Some(data_file) = ipi_data_file() else {
             eprintln!("no IP Intelligence data file found; skipping weighted lookup");
             return;
         };
-        let manager = match Manager::open(&data_file, PerformanceProfile::Default) {
-            Ok(manager) => manager,
-            Err(err) => {
-                eprintln!(
-                    "IP Intelligence data file did not load ({err}); init path executed, \
-                     skipping"
-                );
-                return;
-            }
-        };
+        let manager = open_found(&data_file, PerformanceProfile::Default);
 
         let mut results = manager.create_results().expect("results should allocate");
         results
@@ -861,6 +965,8 @@ mod tests {
         );
 
         let candidates = [
+            "Asn",
+            "AsnName",
             "RegisteredCountry",
             "RegisteredName",
             "RegisteredOwner",
@@ -893,6 +999,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_native_weighting_keeps_its_proportion() {
+        const NATIVE_MAX: u32 = 65535 * 65535;
+        assert_eq!(scale_weighting(NATIVE_MAX), u16::MAX);
+        assert_eq!(scale_weighting(65535 * 32768), 32768);
+        assert_eq!(scale_weighting(65535), 1);
+        assert_eq!(scale_weighting(0), 0);
+    }
+
+    /// The weightings of a property's values are proportions of one, so
+    /// together they come to no more than 65535.
+    #[test]
+    fn a_propertys_weightings_add_up_to_no_more_than_one() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping the weighting total");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::Default);
+        let mut results = manager.create_results().expect("results should allocate");
+        let mut checked = 0;
+        for ip in [
+            "185.28.167.77",
+            "81.2.69.142",
+            "102.89.32.1",
+            "2a00:23c5:a1a6:a01::1",
+        ] {
+            results.process_ip(ip).expect("the lookup should run");
+            for name in manager.available_property_names() {
+                let weighted = results
+                    .values_weighted(&name)
+                    .expect("weighted values should read");
+                if weighted.is_empty() {
+                    continue;
+                }
+                let total: u32 = weighted.iter().map(|(_, w)| u32::from(*w)).sum();
+                assert!(
+                    total <= u32::from(u16::MAX),
+                    "{name} for {ip} has weightings totalling {total}: {weighted:?}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "some property should have weighted values");
+    }
+
     /// Drive the same lookup from pipeline evidence carrying the client IP, then
     /// confirm evidence without an IP is a clean error.
     #[test]
@@ -901,13 +1052,7 @@ mod tests {
             eprintln!("no IP Intelligence data file found; skipping evidence lookup");
             return;
         };
-        let manager = match Manager::open(&data_file, PerformanceProfile::HighPerformance) {
-            Ok(manager) => manager,
-            Err(err) => {
-                eprintln!("IP Intelligence data file did not load ({err}); skipping");
-                return;
-            }
-        };
+        let manager = open_found(&data_file, PerformanceProfile::HighPerformance);
         let mut results = manager.create_results().expect("results should allocate");
 
         let with_ip = Evidence::builder()
@@ -922,5 +1067,132 @@ mod tests {
             results.process_evidence(&without_ip).is_err(),
             "evidence with no client IP should be an error"
         );
+    }
+
+    /// Every header the data file names is a key under both prefixes, with
+    /// every query key before any server key, each group in the same order.
+    #[test]
+    fn the_evidence_keys_are_the_data_files_headers_query_first() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping evidence keys");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::Default);
+        let keys: Vec<&str> = manager.evidence_keys().collect();
+        let (query, server) = keys.split_at(keys.len() / 2);
+        let query: Vec<&str> = query
+            .iter()
+            .filter_map(|k| k.strip_prefix("query."))
+            .collect();
+        let server: Vec<&str> = server
+            .iter()
+            .filter_map(|k| k.strip_prefix("server."))
+            .collect();
+        assert!(
+            !query.is_empty(),
+            "the data file should define headers: {keys:?}"
+        );
+        assert_eq!(
+            query.len() * 2,
+            keys.len(),
+            "query keys come first: {keys:?}"
+        );
+        assert_eq!(
+            query, server,
+            "both prefixes take the same headers: {keys:?}"
+        );
+        for key in ["query.client-ip-51d", "server.client-ip"] {
+            assert!(keys.contains(&key), "{key} should be accepted: {keys:?}");
+        }
+    }
+
+    /// Run a lookup from `evidence` and read back the autonomous system.
+    fn asn_from(manager: &Arc<Manager>, evidence: &[(&str, &str)]) -> Result<Option<String>> {
+        let mut builder = Evidence::builder();
+        for (key, value) in evidence {
+            builder = builder.add(*key, *value);
+        }
+        let mut results = manager.create_results()?;
+        results.process_evidence(&builder.build())?;
+        results.value_as_string("Asn", ",")
+    }
+
+    /// A Cloudflare address, which the data files give as AS13335.
+    const CLOUDFLARE: &str = "1.1.1.1";
+    /// A Quad9 address, which the data files give as AS19281.
+    const QUAD9: &str = "9.9.9.9";
+
+    #[test]
+    fn a_query_value_is_used_before_a_server_value() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping evidence order");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::HighPerformance);
+        let asn = asn_from(
+            &manager,
+            &[("server.client-ip", CLOUDFLARE), ("query.client-ip", QUAD9)],
+        )
+        .expect("the lookup should succeed");
+        assert!(
+            asn.as_deref().unwrap_or_default().contains("AS19281"),
+            "got {asn:?}"
+        );
+    }
+
+    #[test]
+    fn a_value_that_is_not_an_address_gives_way_to_the_next_key() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping evidence fall through");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::HighPerformance);
+        // The native lookup stops at a value it cannot read, so without the
+        // values being read first this fails with an incorrect format error.
+        let asn = asn_from(
+            &manager,
+            &[
+                ("query.client-ip-51d", "unknown"),
+                ("server.client-ip", CLOUDFLARE),
+            ],
+        )
+        .expect("the lookup should succeed");
+        assert!(
+            asn.as_deref().unwrap_or_default().contains("AS13335"),
+            "got {asn:?}"
+        );
+    }
+
+    #[test]
+    fn a_51d_key_and_an_address_with_a_port_are_read() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping 51d keys");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::HighPerformance);
+        for value in [
+            "1.1.1.1:443",
+            "[2606:4700:4700::1111]:443",
+            "1.1.1.1, 10.0.0.1",
+        ] {
+            let asn = asn_from(&manager, &[("query.client-ip-51d", value)])
+                .unwrap_or_else(|err| panic!("{value} should be looked up: {err}"));
+            assert!(
+                asn.as_deref().unwrap_or_default().contains("AS13335"),
+                "{value} gave {asn:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_with_no_readable_address_is_an_error() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping unreadable evidence");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::HighPerformance);
+        let err = asn_from(&manager, &[("server.client-ip", "unknown")])
+            .expect_err("evidence with no readable address should be an error");
+        assert!(matches!(err, Error::Native { ref status, .. } if status == "InvalidInput"));
     }
 }

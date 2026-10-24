@@ -318,6 +318,7 @@ MAP_TYPE(WeightedItemList)
 #define EvidenceAddString fiftyoneDegreesEvidenceAddString /**< Synonym for #fiftyoneDegreesEvidenceAddString function. */
 #define PropertiesGetRequiredPropertyIndexFromName fiftyoneDegreesPropertiesGetRequiredPropertyIndexFromName /**< Synonym for #fiftyoneDegreesPropertiesGetRequiredPropertyIndexFromName function. */
 #define PropertiesGetNameFromRequiredIndex fiftyoneDegreesPropertiesGetNameFromRequiredIndex /**< Synonym for #fiftyoneDegreesPropertiesGetNameFromRequiredIndex function. */
+#define PropertiesGetComponentMask fiftyoneDegreesPropertiesGetComponentMask /**< Synonym for #fiftyoneDegreesPropertiesGetComponentMask function. */
 #define PropertiesIsSetHeaderAvailable fiftyoneDegreesPropertiesIsSetHeaderAvailable /**< Synonym for #fiftyoneDegreesPropertiesIsSetHeaderAvailable */
 #define CollectionHeaderFromFile fiftyoneDegreesCollectionHeaderFromFile /**< Synonym for #fiftyoneDegreesCollectionHeaderFromFile function. */
 #define CollectionCreateFromFile fiftyoneDegreesCollectionCreateFromFile /**< Synonym for #fiftyoneDegreesCollectionCreateFromFile function. */
@@ -429,6 +430,9 @@ MAP_TYPE(WeightedItemList)
 #define EXCEPTION_THROW FIFTYONE_DEGREES_EXCEPTION_THROW /**< Synonym for #FIFTYONE_DEGREES_EXCEPTION_THROW macro. */
 #define EXCEPTION_CHECK FIFTYONE_DEGREES_EXCEPTION_CHECK /**< Synonym for #FIFTYONE_DEGREES_EXCEPTION_CHECK macro. */
 #define STRING FIFTYONE_DEGREES_STRING /**< Synonym for #FIFTYONE_DEGREES_STRING macro. */
+#define COMPONENT_MASK_ALL FIFTYONE_DEGREES_COMPONENT_MASK_ALL /**< Synonym for #FIFTYONE_DEGREES_COMPONENT_MASK_ALL macro. */
+#define COMPONENT_MASK_BITS FIFTYONE_DEGREES_COMPONENT_MASK_BITS /**< Synonym for #FIFTYONE_DEGREES_COMPONENT_MASK_BITS macro. */
+#define COMPONENT_MASK_ENABLED FIFTYONE_DEGREES_COMPONENT_MASK_ENABLED /**< Synonym for #FIFTYONE_DEGREES_COMPONENT_MASK_ENABLED macro. */
 #define COLLECTION_RELEASE FIFTYONE_DEGREES_COLLECTION_RELEASE /**< Synonym for #FIFTYONE_DEGREES_COLLECTION_RELEASE macro. */
 #define FILE_MAX_PATH FIFTYONE_DEGREES_FILE_MAX_PATH /**< Synonym for #FIFTYONE_DEGREES_FILE_MAX_PATH macro. */
 #define THREAD_CREATE FIFTYONE_DEGREES_THREAD_CREATE /**< Synonym for #FIFTYONE_DEGREES_THREAD_CREATE macro. */

@@ -5,20 +5,15 @@ name: Pull Request
 # for every pull request and every push to main. It replaces the earlier ci.yml.
 #
 # The workspace links the 51Degrees C/C++ sources through three -sys crates
-# (common-sys, device-detection-sys, ip-intelligence-sys). Their build.rs scripts
-# compile the sibling *-cxx checkouts directly with the cc crate, resolving the
-# directory from an override environment variable when set, otherwise from a
-# sibling ../../<repo>-cxx directory next to the workspace.
+# (common-sys, device-detection-sys, ip-intelligence-sys). This workflow builds
+# them from the copies vendored under <crate>/vendor, because those are what the
+# published crates compile. Building against the current upstream checkouts is
+# the job of vendored-c-drift.yml.
 #
-# The *-cxx repositories are NOT submodules of this repository, so CI checks them
-# out separately and points each -sys build at its checkout:
-#   FIFTYONE_COMMON_CXX_DIR           -> common-cxx           (needs fiftyone.h)
-#   FIFTYONE_DEVICE_DETECTION_CXX_DIR -> device-detection-cxx (needs src/hash/hash.h)
-#   FIFTYONE_IP_INTELLIGENCE_CXX_DIR  -> ip-intelligence-cxx  (needs src/ipi.h)
-# The device-detection-cxx and ip-intelligence-cxx checkouts are recursive so
-# their own src/common-cxx, src/ip-graph-cxx and the *-data submodules come down
-# with them. The data submodules supply the on-premise data files and the
-# offline/performance evidence the examples read.
+# The device-detection-cxx and ip-intelligence-cxx checkouts below supply only
+# the on-premise data files and the evidence the examples read. They are taken
+# at the commits recorded in each vendor/UPSTREAM.txt, so the data is always in
+# a format the vendored sources read.
 
 on:
   push:
@@ -64,62 +59,58 @@ jobs:
         with:
           submodules: recursive
 
-      # 2. The sibling C/C++ source repositories the -sys crates compile. Each is
-      #    placed beside the workspace and pointed at through an override env var
-      #    (set in the Configure step), so the build does not rely on the local
-      #    ../../<repo>-cxx sibling layout used on developer machines.
-      - name: Checkout common-cxx
-        uses: actions/checkout@v4
-        with:
-          repository: 51Degrees/common-cxx
-          path: cxx/common-cxx
-          submodules: recursive
+      # 2. The commits the vendored C sources were taken from.
+      - name: Read the vendored C commits
+        id: vendored
+        shell: bash
+        run: |
+          echo "device-detection=$(sed -n 's/^commit=//p' device-detection-sys/vendor/UPSTREAM.txt)" >> "$GITHUB_OUTPUT"
+          echo "ip-intelligence=$(sed -n 's/^commit=//p' ip-intelligence-sys/vendor/UPSTREAM.txt)" >> "$GITHUB_OUTPUT"
 
+      # 2a. The C repositories at those commits, for their data submodules (the
+      #     Lite .hash file, the ASN .ipi file and the evidence records the
+      #     examples read). The -sys crates still compile their vendored copies,
+      #     because no override variable points them anywhere else.
       - name: Checkout device-detection-cxx
         uses: actions/checkout@v4
         with:
           repository: 51Degrees/device-detection-cxx
+          ref: ${{ steps.vendored.outputs.device-detection }}
           path: cxx/device-detection-cxx
-          # Recursive brings down src/common-cxx and the device-detection-data
-          # submodule (the Lite .hash file plus the evidence records used by the
-          # offline and performance examples).
           submodules: recursive
 
       - name: Checkout ip-intelligence-cxx
         uses: actions/checkout@v4
         with:
           repository: 51Degrees/ip-intelligence-cxx
+          ref: ${{ steps.vendored.outputs.ip-intelligence }}
           path: cxx/ip-intelligence-cxx
-          # Recursive brings down src/common-cxx, src/ip-graph-cxx and the
-          # ip-intelligence-data submodule (the .ipi data files and evidence.yml).
           submodules: recursive
 
-      # 2a. The on-premise data files (.hash, .ipi) and evidence records are
-      #     stored in Git LFS inside the *-data submodules of the cxx checkouts.
+      # 2b. The data files are stored in Git LFS inside the *-data submodules.
       #     actions/checkout brings the submodule pointers down but not their LFS
-      #     content, so fetch it explicitly, recursing into the submodules. Without
-      #     the real files the native loader reads a pointer and reports
-      #     CorruptData (the -sys smoke tests then skip a real detection rather
-      #     than fail, but the on-premise tests need the real data to run).
+      #     content, so fetch it explicitly, recursing into the submodules.
+      #     Without the real files the native loader reads a pointer and reports
+      #     CorruptData.
       - name: Fetch LFS data for the cxx checkouts
         shell: bash
         run: |
-          for d in cxx/common-cxx cxx/device-detection-cxx cxx/ip-intelligence-cxx; do
+          for d in cxx/device-detection-cxx cxx/ip-intelligence-cxx; do
             git -C "$d" lfs install --local
             git -C "$d" lfs pull
             git -C "$d" submodule foreach --recursive 'git lfs install --local && git lfs pull'
           done
 
-      # 3. Point each -sys build script at its checkout. GITHUB_WORKSPACE is the
-      #    absolute path the actions/checkout paths above are relative to, so the
-      #    build never depends on the working directory. Setting these in
+      # 3. Point the on-premise tests at the data files the checkouts carry,
+      #    which they otherwise look for beside the workspace and skip when they
+      #    do not find them. GITHUB_WORKSPACE is the absolute path the
+      #    actions/checkout paths above are relative to. Setting these in
       #    GITHUB_ENV makes them available to every later step in this job.
-      - name: Configure native source directories
+      - name: Configure data files
         shell: bash
         run: |
-          echo "FIFTYONE_COMMON_CXX_DIR=${GITHUB_WORKSPACE}/cxx/common-cxx" >> "$GITHUB_ENV"
-          echo "FIFTYONE_DEVICE_DETECTION_CXX_DIR=${GITHUB_WORKSPACE}/cxx/device-detection-cxx" >> "$GITHUB_ENV"
-          echo "FIFTYONE_IP_INTELLIGENCE_CXX_DIR=${GITHUB_WORKSPACE}/cxx/ip-intelligence-cxx" >> "$GITHUB_ENV"
+          echo "51DEGREES_DD_PATH=${GITHUB_WORKSPACE}/cxx/device-detection-cxx/device-detection-data/51Degrees-LiteV4.1.hash" >> "$GITHUB_ENV"
+          echo "51DEGREES_IPI_PATH=${GITHUB_WORKSPACE}/cxx/ip-intelligence-cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi" >> "$GITHUB_ENV"
 
       # 4. The native build toolchain. ubuntu-latest and windows-latest both ship
       #    a C/C++ compiler and CMake preinstalled, but install CMake explicitly so
@@ -166,8 +157,21 @@ jobs:
       - name: cargo build
         run: cargo build --workspace --all-targets
 
+      # Device Detection and IP Intelligence each compile a copy of common-cxx.
+      # A common-cxx function the IP Intelligence renaming header misses would
+      # be defined by both libraries and bound to one of them.
+      - name: Check the two common-cxx copies share no symbol
+        shell: pwsh
+        run: ./ci/check-native-symbols.ps1
+
       - name: cargo test
         run: cargo test --workspace
+
+      # Property name lookups must add up across threads. The test only tells
+      # a shared lock apart from none in an optimised build, so it runs here
+      # on its own and skips in the debug run above.
+      - name: cargo test (property lookup scaling, release)
+        run: cargo test --release -p fiftyone-native --test lookup_scaling -- --nocapture
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

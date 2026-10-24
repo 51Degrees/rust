@@ -55,6 +55,9 @@ MAP_TYPE(WeightedValuesCollection)
 #define ResultsIpiFromIpAddress fiftyoneDegreesResultsIpiFromIpAddress /**< Synonym for #fiftyoneDegreesResultsIpiFromIpAddress function. */
 #define ResultsIpiFromIpAddressString fiftyoneDegreesResultsIpiFromIpAddressString /**< Synonym for #fiftyoneDegreesResultsIpiFromIpAddressString function. */
 #define ResultsIpiFromEvidence fiftyoneDegreesResultsIpiFromEvidence /**< Synonym for #fiftyoneDegreesResultsIpiFromEvidence function. */
+#define ResultsIpiFromIpAddressForProperties fiftyoneDegreesResultsIpiFromIpAddressForProperties /**< Synonym for #fiftyoneDegreesResultsIpiFromIpAddressForProperties function. */
+#define ResultsIpiFromIpAddressStringForProperties fiftyoneDegreesResultsIpiFromIpAddressStringForProperties /**< Synonym for #fiftyoneDegreesResultsIpiFromIpAddressStringForProperties function. */
+#define ResultsIpiFromEvidenceForProperties fiftyoneDegreesResultsIpiFromEvidenceForProperties /**< Synonym for #fiftyoneDegreesResultsIpiFromEvidenceForProperties function. */
 #define ResultsIpiGetValues fiftyoneDegreesResultsIpiGetValues /**< Synonym for #fiftyoneDegreesResultsIpiGetValues function. */
 #define ResultsIpiAddValuesString fiftyoneDegreesResultsIpiAddValuesString /**< Synonym for #fiftyoneDegreesResultsIpiAddValuesString function. */
 #define ResultsIpiGetValuesString fiftyoneDegreesResultsIpiGetValuesString /**< Synonym for #fiftyoneDegreesResultsIpiGetValuesString function. */

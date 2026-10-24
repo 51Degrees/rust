@@ -273,6 +273,7 @@ fiftyoneDegreesStatusCode fiftyoneDegreesDataSetReloadManagerFromMemory(
 	FileOffset length,
 	size_t dataSetSize,
 	fiftyoneDegreesDataSetInitFromMemoryMethod initDataSet,
+	void(*freeDataSet)(void*),
 	fiftyoneDegreesException *exception) {
 	DataSetBase *replacement = NULL;
 	const void *config;
@@ -303,7 +304,14 @@ fiftyoneDegreesStatusCode fiftyoneDegreesDataSetReloadManagerFromMemory(
 		length,
 		exception);
 	if (status != SUCCESS) {
-		Free(replacement);
+		// The engine's free method releases everything the partial
+		// initialisation allocated, the file pool's open handles
+		// included, where a plain free of the structure, or returning
+		// without freeing, leaked it on every failed reload. Every init
+		// method resets the data set's pointers before anything can
+		// fail, so the free method is safe on a partially initialised
+		// data set.
+		freeDataSet(replacement);
 		return status;
 	}
 	
@@ -315,6 +323,7 @@ fiftyoneDegreesStatusCode fiftyoneDegreesDataSetReloadManagerFromFile(
 	const char *fileName,
 	size_t dataSetSize,
 	fiftyoneDegreesDataSetInitFromFileMethod initDataSet,
+	void(*freeDataSet)(void*),
 	fiftyoneDegreesException *exception) {
 	DataSetBase *replacement = NULL;
 	const void *config;
@@ -339,6 +348,14 @@ fiftyoneDegreesStatusCode fiftyoneDegreesDataSetReloadManagerFromFile(
 		fileName,
 		exception);
 	if (status != SUCCESS) {
+		// The engine's free method releases everything the partial
+		// initialisation allocated, the file pool's open handles
+		// included, where a plain free of the structure, or returning
+		// without freeing, leaked it on every failed reload. Every init
+		// method resets the data set's pointers before anything can
+		// fail, so the free method is safe on a partially initialised
+		// data set.
+		freeDataSet(replacement);
 		return status;
 	}
 	

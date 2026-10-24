@@ -36,6 +36,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          # The test step versions the crates from the release tags.
+          fetch-depth: 0
       # The examples reach the 51Degrees crates through crates.io, and
       # source.toml is the one route to this tree. The script fails on a path
       # dependency into the workspace, a crate missing from source.toml or a
@@ -53,10 +55,16 @@ jobs:
         shell: pwsh
         working-directory: .
         run: ./ci/copy-owid-source.ps1
-      # Build and test the examples against the local crates via the patch file.
-      # Data-file and resource-key gated tests skip cleanly when those are
-      # absent, so this validates the build and the offline tests.
-      - run: cargo test --config source.toml
+      # Build and test the examples against this tree's crates. The script gives
+      # the crates the next patch above the latest release, so Cargo takes them
+      # through source.toml in place of the published ones, and fails if any
+      # example still takes one from crates.io. Data-file and resource-key gated
+      # tests skip cleanly when those are absent, so this validates the build
+      # and the offline tests.
+      - name: Test the examples against this tree's crates
+        shell: pwsh
+        working-directory: .
+        run: ./ci/test-examples-against-source.ps1
 
   # The check publish.yml runs after a release, here so that it can be run by
   # hand on a branch before one: gh workflow run Examples --ref <branch>. It

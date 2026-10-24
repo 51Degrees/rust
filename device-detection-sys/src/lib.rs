@@ -374,19 +374,15 @@ extern "C" {
     /// Allocates a results structure referencing the data set in `manager`. The
     /// returned pointer must be freed with [`fiftyoneDegreesResultsHashFree`].
     ///
-    /// The device-detection-cxx sources on main take `userAgentCapacity` and
-    /// `overridesCapacity` as two separate `uint32_t` parameters (see
-    /// `hash.h`). `userAgentCapacity` is accepted only for source
-    /// compatibility and is ignored, because results are sized by the number of
-    /// components in the data set. `overridesCapacity` sizes the
-    /// property-override array and MUST be passed explicitly: omitting it
-    /// leaves the C function reading the argument from an uninitialised
-    /// register, which sizes the override allocation from garbage and crashes.
+    /// `user_agent_capacity` is accepted for source compatibility and ignored,
+    /// because results are sized by the number of components in the data set.
+    /// `overrides_capacity` sizes the property-override array. Zero turns
+    /// overrides off, so values the client-side JavaScript sends back are
+    /// ignored.
     ///
-    /// The copy of those sources vendored in this crate is older and takes
-    /// `overridesCapacity` alone, as its second parameter. A caller that wants
-    /// the same behaviour from both builds passes the same value in both
-    /// capacity positions, as `fiftyone-native` does.
+    /// This declaration must match `fiftyoneDegreesResultsHashCreate` in the
+    /// vendored `src/hash/hash.h`. Rust cannot check that, so
+    /// `native/tests/smoke.rs` checks that an override reaches the results.
     ///
     /// # Safety
     /// `manager` must be an initialized Hash manager.
@@ -612,11 +608,14 @@ extern "C" {
         length: usize,
     ) -> usize;
 
-    /// Reads the match metrics (method, difference, drift, iterations and
-    /// matched-node count) from the primary result into the output pointers and
-    /// returns 1, or returns 0 when there is no result. `method` receives the
-    /// match-method enum value (0 None, 1 Performance, 2 Combined, 3 Predictive).
-    /// Any output pointer may be null to skip that metric. See `src/shim.c`.
+    /// Reads the match metrics of the results into the output pointers and
+    /// returns 1, or returns 0 when `results` is null. The results hold one
+    /// result for each component, each from the header that matched it. As in
+    /// the C++ results, `method` receives the highest match-method enum value
+    /// of any result (0 None, 1 Performance, 2 Combined, 3 Predictive), and the
+    /// difference, drift, iterations and matched-node count are summed across
+    /// the results. With no results every metric is zero. Any output pointer
+    /// may be null to skip that metric. See `src/shim.c`.
     ///
     /// # Safety
     /// `results` must be an initialized Hash results structure. Each non-null
@@ -629,6 +628,47 @@ extern "C" {
         iterations: *mut i32,
         matched_nodes: *mut i32,
     ) -> c_int;
+
+    /// Returns the number of results, one for each component, or zero when
+    /// `results` is null. See `src/shim.c`.
+    ///
+    /// # Safety
+    /// `results` must be an initialized Hash results structure or null.
+    pub fn fiftyoneDegreesShimHashGetResultCount(results: *mut ResultsHash) -> u32;
+
+    /// Reads the match metrics of the single result at `result_index` into the
+    /// output pointers and returns 1, or returns 0 when the index is out of
+    /// range. Any output pointer may be null to skip that metric. See
+    /// `src/shim.c`.
+    ///
+    /// # Safety
+    /// `results` must be an initialized Hash results structure or null. Each
+    /// non-null output pointer must be writable.
+    pub fn fiftyoneDegreesShimHashGetResultMetricsAt(
+        results: *mut ResultsHash,
+        result_index: u32,
+        method: *mut i32,
+        difference: *mut i32,
+        drift: *mut i32,
+        iterations: *mut i32,
+        matched_nodes: *mut i32,
+    ) -> c_int;
+
+    /// Writes the matched User-Agent of the result at `result_index` into
+    /// `buffer` as a null terminated string and returns the number of
+    /// characters written, excluding the terminator. Returns zero when the
+    /// index is out of range or the result records no matched User-Agent, and
+    /// cuts the value short when the buffer is too small. See `src/shim.c`.
+    ///
+    /// # Safety
+    /// `results` must be an initialized Hash results structure. `buffer` must
+    /// point to `length` writable bytes.
+    pub fn fiftyoneDegreesShimHashGetMatchedUserAgent(
+        results: *mut ResultsHash,
+        result_index: u32,
+        buffer: *mut c_char,
+        length: usize,
+    ) -> usize;
 }
 
 #[cfg(test)]

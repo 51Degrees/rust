@@ -35,7 +35,6 @@ use fiftyone_ip_intelligence_shared::{
     declared_property_value_type, generated_property_names, IpIntelligenceDataBase, IP_DATA_KEY,
     IP_DATA_KEY_NAME, WEIGHTED_PROPERTY_VALUE_TYPE,
 };
-use fiftyone_native::evidence::client_ip_from_evidence;
 use fiftyone_native::ipi::{Manager, PropertyRead, Results};
 use fiftyone_native::PerformanceProfile;
 use fiftyone_pipeline_core::{
@@ -57,13 +56,13 @@ use crate::builder::IpIntelligenceOnPremiseEngineBuilder;
 /// workspace bundles for tests.
 pub const DEFAULT_DATA_SOURCE_TIER: &str = "Lite";
 
-/// The evidence keys this engine accepts, all carrying the client IP address.
+/// A fixed list of client IP keys, which the engine no longer uses.
 ///
-/// IP Intelligence is looked up from the client IP string (see
-/// [`client_ip_from_evidence`]), so the engine advertises the canonical
-/// [`constants::EVIDENCE_CLIENT_IP_KEY`] (`server.client-ip`) together with the
-/// `query` off-line variant and the 51Degrees-prefixed forms the other ports
-/// also accept. Keys are matched case-insensitively by the whitelist.
+/// The engine accepts the keys its data file defines, which
+/// [`IpIntelligenceOnPremiseEngine::evidence_keys`] lists. This list leaves
+/// out most of those and names keys no data file defines.
+#[deprecated(note = "The engine reads its evidence keys from its data file. Use \
+            `IpIntelligenceOnPremiseEngine::evidence_keys`.")]
 pub const IP_EVIDENCE_KEYS: &[&str] = &[
     constants::EVIDENCE_CLIENT_IP_KEY,
     "query.client-ip",
@@ -96,8 +95,8 @@ pub struct IpIntelligenceOnPremiseEngine {
     requested_properties: Vec<String>,
     /// The names of the properties actually populated, in declaration order.
     populated_property_names: Vec<String>,
-    /// The evidence key filter advertising the accepted IP keys.
-    evidence_key_filter: EvidenceKeyFilterWhitelist,
+    /// The evidence keys of the loaded data file, replaced on refresh.
+    evidence_key_filter: DataFileEvidenceKeys,
     /// Core property metadata for the populated properties.
     properties: Vec<PropertyMetaData>,
     /// Aspect property metadata for the populated properties.
@@ -134,16 +133,30 @@ impl IpIntelligenceOnPremiseEngine {
 
         IpIntelligenceOnPremiseEngine {
             base: AspectEngineBase::new(),
+            evidence_key_filter: DataFileEvidenceKeys::new(&manager),
             manager: Arc::new(ArcSwap::from(manager)),
             profile,
             requested_properties,
             populated_property_names,
-            evidence_key_filter: EvidenceKeyFilterWhitelist::new(IP_EVIDENCE_KEYS),
             properties,
             aspect_properties,
             data_source_tier,
             data_files: vec![data_file],
         }
+    }
+
+    /// The evidence keys the loaded data file defines, in the order the native
+    /// lookup tries them, lowercased.
+    ///
+    /// Each header the data file names is accepted as a query value and as a
+    /// server value. Every query value is tried before any server value, and
+    /// the first that reads as an IP address is looked up.
+    pub fn evidence_keys(&self) -> Vec<String> {
+        self.manager
+            .load()
+            .evidence_keys()
+            .map(str::to_owned)
+            .collect()
     }
 
     /// The names of the properties this engine populates, in declaration order.
@@ -171,22 +184,18 @@ impl IpIntelligenceOnPremiseEngine {
         self.manager.load().available_property_names()
     }
 
-    /// Read the client IP from `data` and run a native lookup into a fresh
-    /// [`IpIntelligenceDataBase`].
+    /// Look up the client IP in `data`'s evidence into a fresh
+    /// [`IpIntelligenceDataBase`], through
+    /// [`Results::process_evidence`](fiftyone_native::ipi::Results::process_evidence).
     ///
-    /// Returns a no-IP error when the evidence carries no client IP address,
-    /// mirroring the native wrapper's behavior. Native results are created and
-    /// dropped within this call, so nothing native escapes or is cached.
+    /// Returns an error when the evidence carries no client IP address that
+    /// reads as one. Native results are created and dropped within this call,
+    /// so nothing native escapes or is cached.
     fn lookup(&self, data: &FlowData) -> Result<IpIntelligenceDataBase> {
-        let ip = client_ip_from_evidence(data.evidence()).ok_or_else(|| Error::Native {
-            status: String::from("InvalidInput"),
-            message: String::from("evidence contains no client IP address to look up"),
-        })?;
-
         // Load the current data set without blocking a concurrent refresh.
         let manager = self.manager.load_full();
         let mut results = manager.create_results()?;
-        results.process_ip(&ip)?;
+        results.process_evidence(data.evidence())?;
 
         let mut ip_data = IpIntelligenceDataBase::new(IP_DATA_KEY_NAME);
         for name in &self.populated_property_names {
@@ -221,8 +230,40 @@ impl IpIntelligenceOnPremiseEngine {
             )
         };
         let manager = Manager::open_with_properties(&path, self.profile, property_refs.as_deref())?;
+        let evidence_keys = DataFileEvidenceKeys::whitelist(&manager);
         self.manager.store(manager);
+        self.evidence_key_filter.keys.store(Arc::new(evidence_keys));
         Ok(())
+    }
+}
+
+/// The evidence keys of the loaded data file, as the engine's evidence key
+/// filter. A refresh replaces them, because a new data file can define
+/// different keys. Each key's order is its place in the native lookup's order,
+/// so a lower order is tried first.
+struct DataFileEvidenceKeys {
+    keys: ArcSwap<EvidenceKeyFilterWhitelist>,
+}
+
+impl DataFileEvidenceKeys {
+    fn new(manager: &Manager) -> Self {
+        DataFileEvidenceKeys {
+            keys: ArcSwap::from_pointee(Self::whitelist(manager)),
+        }
+    }
+
+    fn whitelist(manager: &Manager) -> EvidenceKeyFilterWhitelist {
+        EvidenceKeyFilterWhitelist::with_orders(manager.evidence_keys().zip(0..))
+    }
+}
+
+impl EvidenceKeyFilter for DataFileEvidenceKeys {
+    fn include(&self, key: &str) -> bool {
+        self.keys.load().include(key)
+    }
+
+    fn order(&self, key: &str) -> Option<i32> {
+        self.keys.load().order(key)
     }
 }
 
@@ -512,15 +553,55 @@ mod tests {
     }
 
     #[test]
-    fn data_key_and_evidence_keys() {
-        // These do not need a data file, so they always run.
-        let filter = EvidenceKeyFilterWhitelist::new(IP_EVIDENCE_KEYS);
-        assert!(filter.include("server.client-ip"));
-        assert!(filter.include("query.client-ip"));
-        // Case-insensitive matching of the canonical key.
-        assert!(filter.include("Server.Client-IP"));
-        assert!(!filter.include("header.user-agent"));
+    fn data_key_name() {
         assert_eq!(IP_DATA_KEY_NAME, "ip");
+    }
+
+    /// The engine accepts the keys its data file defines, ignoring case, in
+    /// the order the native lookup tries them.
+    #[test]
+    fn evidence_keys_come_from_the_data_file() {
+        let Some(engine) = asn_engine() else {
+            eprintln!("no usable IP-intelligence data file; skipping evidence keys");
+            return;
+        };
+        let keys = engine.evidence_keys();
+        assert!(
+            keys.contains(&String::from("query.client-ip-51d")),
+            "{keys:?}"
+        );
+        let filter = engine.evidence_key_filter();
+        for (order, key) in keys.iter().enumerate() {
+            assert!(filter.include(key), "{key} should be accepted");
+            assert_eq!(filter.order(key), Some(order as i32), "{key}");
+        }
+        assert!(filter.include("Query.Client-IP-51d"));
+        assert!(!filter.include("header.user-agent"));
+        // No data file defines this key.
+        assert!(!filter.include("query.51d.client-ip"));
+    }
+
+    /// A client IP under a key the old fixed list left out is looked up.
+    #[test]
+    fn a_client_ip_under_a_51d_key_alone_is_looked_up() {
+        let Some(engine) = asn_engine() else {
+            eprintln!("no usable IP-intelligence data file; skipping 51d key");
+            return;
+        };
+        let pipeline = Pipeline::builder()
+            .add_element(Arc::new(engine))
+            .build()
+            .expect("pipeline should build");
+        let mut data = pipeline.create_flow_data_with(
+            Evidence::builder()
+                .add("query.client-ip-51d", "1.1.1.1")
+                .build(),
+        );
+        data.process().expect("processing should not error");
+        let ip = data.get(IP_DATA_KEY).expect("ip data should be present");
+        let asn = ip.string("Asn");
+        let value = asn.value().expect("Asn should resolve to a value");
+        assert!(value.contains("AS13335"), "got {value}");
     }
 
     #[test]
@@ -637,6 +718,10 @@ mod tests {
         engine
             .refresh(None)
             .expect("refresh should reload the file");
+        assert!(
+            engine.evidence_key_filter().include("query.client-ip-51d"),
+            "the reloaded file's keys should be accepted"
+        );
 
         // The engine still resolves after the swap.
         let pipeline = Pipeline::builder()

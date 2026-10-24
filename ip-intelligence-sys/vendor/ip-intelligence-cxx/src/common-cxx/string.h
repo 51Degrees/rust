@@ -86,12 +86,12 @@
  *
  * @example
  * String:
- * 			Short – length – 10
+ * 			Unsigned short – length – 10
  * 			Byte value – first character of string – '5'
  */
 #pragma pack(push, 1)
 typedef struct fiftyone_degrees_string_t {
-	int16_t size; /**< Size of the string in memory (starting from 'value') */
+	uint16_t size; /**< Size of the string in memory (starting from 'value') */
 	char value; /**< The first character of the string */
 } fiftyoneDegreesString;
 #pragma pack(pop)
