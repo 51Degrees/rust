@@ -84,11 +84,16 @@ published crates while the library workspace builds from source.
 
 - **Default (crates.io):** `cd examples && cargo run --bin <name>` resolves the
   released `fiftyone-*` packages from crates.io.
-- **Local source:** `cd examples && cargo test --config source.toml` applies a
-  `[patch.crates-io]` mapping every `fiftyone-*` crate to its local path, so
-  the examples build against the working tree. The patch paths in
-  `examples/source.toml` are relative to the **repository root**, not to
-  `examples/`.
+- **Local source:** `pwsh ci/test-examples-against-source.ps1` builds and tests
+  the examples against the working tree, which is what the examples workflow
+  runs. `examples/source.toml` maps every `fiftyone-*` crate to its local path
+  through `[patch.crates-io]`, but Cargo only takes a patch whose version is the
+  one it would pick, so a plain `cargo test --config source.toml` builds the
+  published crates, which are newer than the 4.5.2 in the manifests. The script
+  gives the crates a version above the published ones for the run, moves the
+  examples' lock to the local copies, fails if any still comes from crates.io,
+  and puts the files back afterwards. The patch paths in `examples/source.toml`
+  are relative to the **repository root**, not to `examples/`.
 
 Example binaries live in `<crate>/src/bin/*.rs` (run with `--bin`), not in an
 `examples/` directory.
