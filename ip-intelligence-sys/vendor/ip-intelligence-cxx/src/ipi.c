@@ -111,6 +111,15 @@ typedef struct state_with_unique_header_index_t {
 } stateWithUniqueHeaderIndex;
 
 /**
+ * Used to pass the results being populated together with the mask of
+ * components whose graphs are evaluated. See COMPONENT_MASK_ENABLED.
+ */
+typedef struct results_with_component_mask_t {
+	ResultsIpi* results; /* Results being populated */
+	uint32_t componentMask; /* Components whose graphs are evaluated */
+} resultsWithComponentMask;
+
+/**
  * Used to represent the structure within a profile groups item
  */
 #pragma pack(push, 2)
@@ -138,14 +147,31 @@ static const uint16_t FULL_RAW_WEIGHTING = 0xFFFFU;
  * PRESET IP INTELLIGENCE CONFIGURATIONS
  */
 
-/* The expected version of the data file */
+/**
+ * The expected version of the data file. Version 4.6 files store profile
+ * offsets, and the profiles collection length in the header, in the unit
+ * declared by the header's profilesOffsetShift field, with profile records
+ * aligned to unit boundaries relative to the start of the collection. The
+ * 32 bit stored offsets can then address profile data beyond 4GB. All
+ * property values, including IpRangeStart and IpRangeEnd, are stored in
+ * profiles exactly as in version 4.5. Version 4.6 is otherwise identical
+ * to 4.5, but the API and the data file move together as a single version
+ * transition, so earlier versions are not supported.
+ */
 #define FIFTYONE_DEGREES_IPI_TARGET_VERSION_MAJOR 4
-#define FIFTYONE_DEGREES_IPI_TARGET_VERSION_MINOR 5
+#define FIFTYONE_DEGREES_IPI_TARGET_VERSION_MINOR 6
+
+/**
+ * The largest profiles offset shift the header can declare. A shift of 8
+ * gives 256 byte units addressing 1TB, well beyond any expected file, so
+ * larger values indicate a corrupt header.
+ */
+#define FIFTYONE_DEGREES_IPI_MAX_PROFILES_OFFSET_SHIFT 8
 
 #undef FIFTYONE_DEGREES_CONFIG_ALL_IN_MEMORY
 #define FIFTYONE_DEGREES_CONFIG_ALL_IN_MEMORY true
 fiftyoneDegreesConfigIpi fiftyoneDegreesIpiInMemoryConfig = {
-	{FIFTYONE_DEGREES_CONFIG_DEFAULT_WITH_INDEX},
+	{FIFTYONE_DEGREES_CONFIG_DEFAULT_NO_INDEX},
 	{0,0,0}, // Strings
 	{0,0,0}, // Components
 	{0,0,0}, // Maps
@@ -163,7 +189,7 @@ fiftyoneDegreesConfigIpi fiftyoneDegreesIpiInMemoryConfig = {
 FIFTYONE_DEGREES_CONFIG_ALL_IN_MEMORY_DEFAULT
 
 fiftyoneDegreesConfigIpi fiftyoneDegreesIpiHighPerformanceConfig = {
-	{ FIFTYONE_DEGREES_CONFIG_DEFAULT_WITH_INDEX },
+	{ FIFTYONE_DEGREES_CONFIG_DEFAULT_NO_INDEX },
 	{ true, 0, FIFTYONE_DEGREES_CACHE_CONCURRENCY }, // Strings
 	{ true, 0, FIFTYONE_DEGREES_CACHE_CONCURRENCY }, // Components
 	{ true, 0, FIFTYONE_DEGREES_CACHE_CONCURRENCY }, // Maps
@@ -193,7 +219,7 @@ fiftyoneDegreesConfigIpi fiftyoneDegreesIpiLowMemoryConfig = {
 };
 
 #define FIFTYONE_DEGREES_IPI_CONFIG_BALANCED \
-{ FIFTYONE_DEGREES_CONFIG_DEFAULT_WITH_INDEX }, \
+{ FIFTYONE_DEGREES_CONFIG_DEFAULT_NO_INDEX }, \
 { FIFTYONE_DEGREES_STRING_LOADED, FIFTYONE_DEGREES_STRING_CACHE_SIZE, FIFTYONE_DEGREES_CACHE_CONCURRENCY }, /* Strings */ \
 { true, 0, FIFTYONE_DEGREES_CACHE_CONCURRENCY }, /* Components */ \
 { true, 0, FIFTYONE_DEGREES_CACHE_CONCURRENCY }, /* Maps */ \
@@ -229,7 +255,7 @@ fiftyoneDegreesConfigIpi fiftyoneDegreesIpiBalancedTempConfig = {
 		true, /* reuseTempFile - ENABLED for better performance */
 		NULL, /* tempDirs */
 		0, /* tempDirCount */
-		true /* propertyValueIndex */
+		false /* propertyValueIndex */
 	},
 	{ FIFTYONE_DEGREES_STRING_LOADED, FIFTYONE_DEGREES_STRING_CACHE_SIZE, FIFTYONE_DEGREES_CACHE_CONCURRENCY }, /* Strings */
 	{ true, 0, FIFTYONE_DEGREES_CACHE_CONCURRENCY }, /* Components */
@@ -516,6 +542,10 @@ static StatusCode initComponentsAvailable(
 			return COLLECTION_FAILURE;
 		}
 		dataSet->componentsAvailable[property->componentIndex] = true;
+		// Record the component so required property indexes can be turned
+		// into a component mask without reading the property again.
+		dataSet->b.b.available->items[i].componentIndex =
+			property->componentIndex;
 		COLLECTION_RELEASE(dataSet->properties, &item);
 	}
 
@@ -700,8 +730,35 @@ static StatusCode checkVersion(DataSetIpi* dataSet) {
 		FIFTYONE_DEGREES_IPI_TARGET_VERSION_MINOR)) {
 		return INCORRECT_VERSION;
 	}
+
+	// The shift used to convert stored profile offsets to byte positions is
+	// declared in the header and validated rather than assumed.
+	if (dataSet->header.profilesOffsetShift < 0 ||
+		dataSet->header.profilesOffsetShift >
+		FIFTYONE_DEGREES_IPI_MAX_PROFILES_OFFSET_SHIFT) {
+		return CORRUPT_DATA;
+	}
+#ifndef FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT
+	// Converting shifted offsets to byte positions requires the 64 bit
+	// arithmetic of large data file support.
+	if (dataSet->header.profilesOffsetShift != 0) {
+		return INCORRECT_VERSION;
+	}
+#endif
 	return SUCCESS;
 }
+
+/**
+ * @return the number of bits to shift a stored profile offset left to
+ * convert it to a byte position within the profiles collection. Declared by
+ * the data file in the header, and zero where profile offsets are byte
+ * positions.
+ */
+#ifdef FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT
+static byte getProfilesOffsetShift(const DataSetIpi* dataSet) {
+	return (byte)dataSet->header.profilesOffsetShift;
+}
+#endif
 
 static void initDataSetPost(
 	DataSetIpi* dataSet,
@@ -776,7 +833,19 @@ static StatusCode initWithMemory(
 
 	const uint32_t profileCount = dataSet->header.profiles.count;
 	*(uint32_t*)(&dataSet->header.profiles.count) = 0;
+#ifdef FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT
+	// The profiles collection stores offsets in the unit declared by the
+	// header. No other collection uses shifted offsets.
+	dataSet->profiles = fiftyoneDegreesCollectionCreateFromMemoryWithOffsetShift(
+		reader,
+		dataSet->header.profiles,
+		getProfilesOffsetShift(dataSet));
+	if (dataSet->profiles == NULL) {
+		return INVALID_COLLECTION_CONFIG;
+	}
+#else
 	COLLECTION_CREATE_MEMORY(profiles)
+#endif
 	*(uint32_t*)(&dataSet->header.profiles.count) = profileCount;
 
 	COLLECTION_CREATE_MEMORY(graphs);
@@ -805,23 +874,21 @@ static StatusCode initInMemory(
 	Exception* exception) {
 	MemoryReader reader;
 
-	// Read the data from the source file into memory using the reader to 
+	// The data set is freed by the caller on failure rather than here, so
+	// that the caller can still read the file name from it to delete a temp
+	// file, and so the file path frees it too.
+	//
+	// Read the data from the source file into memory using the reader to
 	// store the pointer to the first and last bytes.
 	StatusCode status = DataSetInitInMemory(
 		&dataSet->b.b,
 		&reader);
 	if (status != SUCCESS) {
-		freeDataSet(dataSet);
 		return status;
 	}
 
 	// Use the memory reader to initialize the IP Intelligence data set.
-	status = initWithMemory(dataSet, &reader, exception);
-	if (status != SUCCESS || EXCEPTION_FAILED) {
-		freeDataSet(dataSet);
-		return status;
-	}
-	return status;
+	return initWithMemory(dataSet, &reader, exception);
 }
 
 static void initDataSet(DataSetIpi* dataSet, ConfigIpi** config) {
@@ -894,7 +961,22 @@ static StatusCode readDataSetFromFile(
 
 	const uint32_t profileCount = dataSet->header.profiles.count;
 	*(uint32_t*)(&dataSet->header.profiles.count) = 0;
+#ifdef FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT
+	// The profiles collection stores offsets in the unit declared by the
+	// header. No other collection uses shifted offsets.
+	dataSet->profiles = fiftyoneDegreesCollectionCreateFromFileWithOffsetShift(
+		file,
+		&dataSet->b.b.filePool,
+		&dataSet->config.profiles,
+		dataSet->header.profiles,
+		fiftyoneDegreesProfileReadFromFile,
+		getProfilesOffsetShift(dataSet));
+	if (dataSet->profiles == NULL) {
+		return INVALID_COLLECTION_CONFIG;
+	}
+#else
 	COLLECTION_CREATE_FILE(profiles, fiftyoneDegreesProfileReadFromFile);
+#endif
 	*(uint32_t*)(&dataSet->header.profiles.count) = profileCount;
 
 	COLLECTION_CREATE_FILE(graphs, CollectionReadFileFixed);
@@ -1091,6 +1173,11 @@ fiftyoneDegreesStatusCode fiftyoneDegreesIpiInitManagerFromFile(
 		fileName,
 		exception);
 	if (status != SUCCESS || EXCEPTION_FAILED) {
+		// Nothing below has taken ownership of the data set, so it is freed
+		// here on every failure. Without this the file path leaks it along
+		// with the file pool's open handles, which is the path every data
+		// file of an earlier version now takes.
+		freeDataSet(dataSet);
 		return status;
 	}
 	ResourceManagerInit(manager, dataSet, &dataSet->b.b.handle, freeDataSet);
@@ -1375,6 +1462,7 @@ static bool addResultsFromIpAddressNoChecks(
 	ResultsIpi* results,
 	const unsigned char* ipAddress,
 	fiftyoneDegreesIpType type,
+	uint32_t componentMask,
 	fiftyoneDegreesException* exception) {
 	const DataSetIpi * const dataSet = (DataSetIpi*)results->b.dataSet;
 	for (uint32_t componentIndex = 0;
@@ -1406,23 +1494,30 @@ static bool addResultsFromIpAddressNoChecks(
 			memcpy(nextResult->targetIpAddress.value, ipAddress, IPV6_LENGTH);
 		}
 
-		setResultFromIpAddress(
-			nextResult,
-			dataSet,
-			component->componentId,
-			exception);
-		if (EXCEPTION_FAILED) {
-			return false;
+		// Only evaluate the graph for a component the caller will read. The
+		// result slot is kept so the positional mapping to components is
+		// unchanged, and the slot reads as a null profile.
+		if (COMPONENT_MASK_ENABLED(componentMask, componentIndex)) {
+			setResultFromIpAddress(
+				nextResult,
+				dataSet,
+				component->componentId,
+				exception);
+			if (EXCEPTION_FAILED) {
+				return false;
+			}
 		}
 	}
 	return true;
 }
 
-void fiftyoneDegreesResultsIpiFromIpAddress(
+void fiftyoneDegreesResultsIpiFromIpAddressForProperties(
 	fiftyoneDegreesResultsIpi* results,
 	const unsigned char* ipAddress,
 	size_t ipAddressLength,
 	fiftyoneDegreesIpType type,
+	const int *requiredPropertyIndexes,
+	int requiredPropertyIndexesCount,
 	fiftyoneDegreesException* exception) {
 
 	// Make sure the input is always in the correct format
@@ -1442,13 +1537,35 @@ void fiftyoneDegreesResultsIpiFromIpAddress(
 		results,
 		ipAddress,
 		type,
+		PropertiesGetComponentMask(
+			((DataSetIpi*)results->b.dataSet)->b.b.available,
+			requiredPropertyIndexes,
+			requiredPropertyIndexesCount),
 		exception);
 }
 
-void fiftyoneDegreesResultsIpiFromIpAddressString(
+void fiftyoneDegreesResultsIpiFromIpAddress(
+	fiftyoneDegreesResultsIpi* results,
+	const unsigned char* ipAddress,
+	size_t ipAddressLength,
+	fiftyoneDegreesIpType type,
+	fiftyoneDegreesException* exception) {
+	fiftyoneDegreesResultsIpiFromIpAddressForProperties(
+		results,
+		ipAddress,
+		ipAddressLength,
+		type,
+		NULL,
+		-1,
+		exception);
+}
+
+void fiftyoneDegreesResultsIpiFromIpAddressStringForProperties(
 	fiftyoneDegreesResultsIpi* results,
 	const char* ipAddress,
 	size_t ipLength,
+	const int *requiredPropertyIndexes,
+	int requiredPropertyIndexesCount,
 	fiftyoneDegreesException* exception) {
 	IpAddress ip;
 	const bool parsed =
@@ -1462,19 +1579,23 @@ void fiftyoneDegreesResultsIpiFromIpAddressString(
 	// Perform the search on the IP address byte array
 	switch(ip.type) {
 	case IP_TYPE_IPV4:
-		fiftyoneDegreesResultsIpiFromIpAddress(
+		fiftyoneDegreesResultsIpiFromIpAddressForProperties(
 			results,
 			ip.value,
 			IPV4_LENGTH,
 			IP_TYPE_IPV4,
+			requiredPropertyIndexes,
+			requiredPropertyIndexesCount,
 			exception);
 		break;
 	case IP_TYPE_IPV6:
-		fiftyoneDegreesResultsIpiFromIpAddress(
+		fiftyoneDegreesResultsIpiFromIpAddressForProperties(
 			results,
 			ip.value,
 			IPV6_LENGTH,
 			IP_TYPE_IPV6,
+			requiredPropertyIndexes,
+			requiredPropertyIndexesCount,
 			exception);
 		break;
 	case IP_TYPE_INVALID:
@@ -1484,12 +1605,28 @@ void fiftyoneDegreesResultsIpiFromIpAddressString(
 	}
 }
 
+void fiftyoneDegreesResultsIpiFromIpAddressString(
+	fiftyoneDegreesResultsIpi* results,
+	const char* ipAddress,
+	size_t ipLength,
+	fiftyoneDegreesException* exception) {
+	fiftyoneDegreesResultsIpiFromIpAddressStringForProperties(
+		results,
+		ipAddress,
+		ipLength,
+		NULL,
+		-1,
+		exception);
+}
+
 static bool setResultsFromEvidence(
 	void* state,
 	EvidenceKeyValuePair* pair) {
 	const stateWithUniqueHeaderIndex* indexState = (stateWithUniqueHeaderIndex*)state;
 	const stateWithException* exceptionState = (stateWithException*)indexState->subState;
-	ResultsIpi* results = (ResultsIpi*)exceptionState->state;
+	const resultsWithComponentMask* masked =
+		(resultsWithComponentMask*)exceptionState->state;
+	ResultsIpi* results = masked->results;
 	Exception* exception = exceptionState->exception;
 	// We should not look further if a 
 	// result has already been found
@@ -1519,6 +1656,7 @@ static bool setResultsFromEvidence(
 				results,
 				ipAddress.value,
 				ipAddress.type,
+				masked->componentMask,
 				exception);
 		}
 	}
@@ -1550,13 +1688,21 @@ static void fiftyoneDegreesIterateHeadersWithEvidence(
 	}
 }
 
-void fiftyoneDegreesResultsIpiFromEvidence(
+void fiftyoneDegreesResultsIpiFromEvidenceForProperties(
 	fiftyoneDegreesResultsIpi* results,
 	fiftyoneDegreesEvidenceKeyValuePairArray* evidence,
+	const int *requiredPropertyIndexes,
+	int requiredPropertyIndexesCount,
 	fiftyoneDegreesException* exception) {
 	stateWithException subState;
 	stateWithUniqueHeaderIndex state;
-	subState.state = results;
+	resultsWithComponentMask masked;
+	masked.results = results;
+	masked.componentMask = PropertiesGetComponentMask(
+		((DataSetIpi*)results->b.dataSet)->b.b.available,
+		requiredPropertyIndexes,
+		requiredPropertyIndexesCount);
+	subState.state = &masked;
 	subState.exception = exception;
 	state.subState = &subState;
 
@@ -1586,6 +1732,18 @@ void fiftyoneDegreesResultsIpiFromEvidence(
 			}
 		}
 	}
+}
+
+void fiftyoneDegreesResultsIpiFromEvidence(
+	fiftyoneDegreesResultsIpi* results,
+	fiftyoneDegreesEvidenceKeyValuePairArray* evidence,
+	fiftyoneDegreesException* exception) {
+	fiftyoneDegreesResultsIpiFromEvidenceForProperties(
+		results,
+		evidence,
+		NULL,
+		-1,
+		exception);
 }
 
 static bool addWeightedValue(

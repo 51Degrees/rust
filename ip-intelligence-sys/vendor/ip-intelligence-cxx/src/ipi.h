@@ -197,8 +197,11 @@ typedef struct fiftyone_degrees_ipi_dataset_header_t {
 	const int32_t copyrightOffset; /**< Offset of the copyright string in the 
 								   strings collection */
 	const int16_t age; /**< Age of the data set format */
-	const int32_t minUserAgentCount; /**< This is a place holder. Not
-									 applicable to IP Intelligence. */
+	const int32_t profilesOffsetShift; /**< Number of bits to shift a stored
+							profile offset, or the profiles collection length,
+							left to convert it to bytes. Zero where profile
+							offsets are byte positions. Occupies a previously
+							reserved field always written as zero. */
 	const int32_t nameOffset; /**< Offset of the data file name in the strings 
 							  collection */
 	const int32_t formatOffset; /**< Offset of the data file format in the 
@@ -326,7 +329,7 @@ typedef fiftyoneDegreesWeightedItem fiftyoneDegreesProfilePercentage;
 typedef fiftyoneDegreesWeightedItemList fiftyoneDegreesIpiList;
 
 /**
- * Singular IP address result returned by a detection process method.
+ * Singular IP address result returned by an IP address lookup method.
  */
 typedef struct fiftyone_degrees_result_ipi_t {
 	fiftyoneDegreesIpType type; /**< The version of the IP */
@@ -438,7 +441,7 @@ EXTERNAL_VAR fiftyoneDegreesConfigIpi fiftyoneDegreesIpiBalancedConfig;
 EXTERNAL_VAR fiftyoneDegreesConfigIpi fiftyoneDegreesIpiBalancedTempConfig;
 
 /**
- * Default detection configuration. This configures the data set to not create
+ * Default configuration. This configures the data set to not create
  * a temp file.
  */
 EXTERNAL_VAR fiftyoneDegreesConfigIpi fiftyoneDegreesIpiDefaultConfig;
@@ -495,7 +498,7 @@ EXTERNAL size_t fiftyoneDegreesIpiSizeManagerFromFile(
 /**
  * Initialises the resource manager with an IP intelligence data set resource populated
  * from the IP Intelligence data file referred to by fileName. Configures the data set
- * to operate using the configuration set in detection, collection and
+ * to operate using the configuration set in the config, collection and
  * properties.
  * @param manager the resource manager to manager the share data set resource
  * @param config configuration for the operation of the data set, or NULL if
@@ -545,7 +548,7 @@ EXTERNAL size_t fiftyoneDegreesIpiSizeManagerFromMemory(
 /**
  * Initialises the resource manager with a IP Intelligence data set resource populated
  * from the IP intelligence data set pointed to by the memory parameter. Configures the
- * data set to operate using the configuration set in detection and properties.
+ * data set to operate using the configuration set in the config and properties.
  * @param manager the resource manager to manager the share data set resource
  * @param config configuration for the operation of the data set, or NULL if
  * default configuration is required
@@ -722,6 +725,94 @@ EXTERNAL void fiftyoneDegreesResultsIpiFromIpAddressString(
 EXTERNAL void fiftyoneDegreesResultsIpiFromEvidence(
 	fiftyoneDegreesResultsIpi* results,
 	fiftyoneDegreesEvidenceKeyValuePairArray* evidence,
+	fiftyoneDegreesException* exception);
+
+/**
+ * Processes the IP address exactly as #fiftyoneDegreesResultsIpiFromIpAddress,
+ * but evaluates only the graphs needed by the required properties whose
+ * indexes are supplied. It is meant for a service that knows, for every
+ * request, which properties it will read. Other callers should use
+ * #fiftyoneDegreesResultsIpiFromIpAddress.
+ *
+ * The result shape is unchanged, one item per available component in
+ * component order. A component whose graph was not evaluated keeps a null
+ * profile offset, so its properties report no value with the NULL_PROFILE
+ * reason. A property that is mandatory with a default value reads as that
+ * default instead, as it does for a component that produced no profile.
+ *
+ * The indexes are turned into a 32 bit mask, bit i meaning the graph for
+ * component i in componentsList. Components at index 32 and above are beyond
+ * the mask and are always evaluated, so a data file with more than 32
+ * components is filtered for the first 32 only.
+ *
+ * An index is a position in the required properties of the data set the
+ * results use, which are sorted by name. A reloaded data file that gains or
+ * loses a required property moves the indexes of the properties after it, so
+ * look them up again after a reload, for example with
+ * #fiftyoneDegreesPropertiesGetRequiredPropertyIndexFromName.
+ * @param results preallocated results structure to populate
+ * @param ipAddress byte array to process
+ * @param ipAddressLength of the IP address byte array
+ * @param type of the ip
+ * @param requiredPropertyIndexes array of required property indexes the
+ * caller will read, or NULL to evaluate every graph
+ * @param requiredPropertyIndexesCount number of entries in the array. A
+ * negative count evaluates every graph. A count of zero with a non NULL array
+ * evaluates no graph. Indexes outside the required properties are ignored.
+ * @param exception pointer to an exception data structure to be used if an
+ * exception occurs. See exceptions.h.
+ */
+EXTERNAL void fiftyoneDegreesResultsIpiFromIpAddressForProperties(
+	fiftyoneDegreesResultsIpi* results,
+	const unsigned char* ipAddress,
+	size_t ipAddressLength,
+	fiftyoneDegreesIpType type,
+	const int *requiredPropertyIndexes,
+	int requiredPropertyIndexesCount,
+	fiftyoneDegreesException* exception);
+
+/**
+ * Processes the IP address string exactly as
+ * #fiftyoneDegreesResultsIpiFromIpAddressString, but evaluates only the
+ * graphs needed by the required properties whose indexes are supplied. See
+ * #fiftyoneDegreesResultsIpiFromIpAddressForProperties for the rules that
+ * apply to the indexes.
+ * @param results preallocated results structure to populate
+ * @param ipAddress string to process
+ * @param ipAddressLength of the ipAddress string
+ * @param requiredPropertyIndexes array of required property indexes the
+ * caller will read, or NULL to evaluate every graph
+ * @param requiredPropertyIndexesCount number of entries in the array
+ * @param exception pointer to an exception data structure to be used if an
+ * exception occurs. See exceptions.h.
+ */
+EXTERNAL void fiftyoneDegreesResultsIpiFromIpAddressStringForProperties(
+	fiftyoneDegreesResultsIpi* results,
+	const char* ipAddress,
+	size_t ipAddressLength,
+	const int *requiredPropertyIndexes,
+	int requiredPropertyIndexesCount,
+	fiftyoneDegreesException* exception);
+
+/**
+ * Processes the evidence exactly as #fiftyoneDegreesResultsIpiFromEvidence,
+ * but evaluates only the graphs needed by the required properties whose
+ * indexes are supplied. See #fiftyoneDegreesResultsIpiFromIpAddressForProperties
+ * for the rules that apply to the indexes.
+ * @param results preallocated results structure to populate containing a
+ *                pointer to an initialised resource manager
+ * @param evidence to process containing parsed or unparsed values
+ * @param requiredPropertyIndexes array of required property indexes the
+ * caller will read, or NULL to evaluate every graph
+ * @param requiredPropertyIndexesCount number of entries in the array
+ * @param exception pointer to an exception data structure to be used if an
+ * exception occurs. See exceptions.h.
+ */
+EXTERNAL void fiftyoneDegreesResultsIpiFromEvidenceForProperties(
+	fiftyoneDegreesResultsIpi* results,
+	fiftyoneDegreesEvidenceKeyValuePairArray* evidence,
+	const int *requiredPropertyIndexes,
+	int requiredPropertyIndexesCount,
 	fiftyoneDegreesException* exception);
 
 /**

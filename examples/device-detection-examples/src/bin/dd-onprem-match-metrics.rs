@@ -124,7 +124,7 @@ fn print_match_metrics(pipeline: &Arc<Pipeline>, pairs: &[(&str, &str)]) -> Resu
     output_value("Drift", &device.drift(), &mut message);
     // Iterations: how many graph nodes were visited to find the match.
     output_value("Iterations", &device.iterations(), &mut message);
-    // Method: the algorithm used, for example Exact or Performance.
+    // Method: the algorithm used, for example PERFORMANCE or PREDICTIVE.
     output_value("Method", &device.method(), &mut message);
     let _ = writeln!(message);
 
@@ -341,7 +341,7 @@ mod tests {
  * - `Drift`        - the total difference in character positions where substring
  *                    hashes were found versus expected,
  * - `Iterations`   - the number of graph nodes visited to find the match,
- * - `Method`       - the algorithm used, for example Exact or Performance.
+ * - `Method`       - the algorithm used, for example PERFORMANCE or PREDICTIVE.
  *
  * Each metric is an `AspectPropertyValue<T>`, so the example prints the value
  * when present and the engine's no-value explanation otherwise. The match metrics

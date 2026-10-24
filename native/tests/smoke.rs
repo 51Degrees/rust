@@ -280,6 +280,50 @@ mod device_detection {
         }
     }
 
+    /// A screen size the client-side JavaScript measured replaces the one
+    /// matched from the headers. That needs results created with room for
+    /// overrides. A property is only overridable when the data file has the
+    /// JavaScript property that measures it, which the Lite file does not, so
+    /// this runs with a licensed file such as Enterprise.
+    #[test]
+    fn browser_measured_values_override_the_data_file() {
+        let Some(data_file) = dd_lite_data_file() else {
+            eprintln!("no Hash data file found; skipping override test");
+            return;
+        };
+        let manager = open_loaded(&data_file);
+        for name in [
+            "ScreenPixelsWidth",
+            "ScreenPixelsHeight",
+            "ScreenPixelsWidthJavaScript",
+            "ScreenPixelsHeightJavaScript",
+        ] {
+            if manager.required_property_index(name).is_none() {
+                eprintln!("data file has no {name}; skipping override test");
+                return;
+            }
+        }
+        let mut results = manager.create_results().expect("results should allocate");
+        let evidence = Evidence::builder()
+            .add("header.user-agent", MOBILE_USER_AGENT)
+            .add("query.51d_screenpixelswidth", "1234")
+            .add("cookie.51d_screenpixelsheight", "567")
+            .build();
+        results
+            .process_evidence(&evidence)
+            .expect("processing evidence should not raise an exception");
+        for (name, measured) in [("ScreenPixelsWidth", "1234"), ("ScreenPixelsHeight", "567")] {
+            assert_eq!(
+                results
+                    .value_as_string(name, ",")
+                    .expect("reading a screen size should not error")
+                    .as_deref(),
+                Some(measured),
+                "{name} should be the value the browser measured"
+            );
+        }
+    }
+
     /// With the property value index built (the in-memory profiles build it),
     /// a property the matched profile holds no value for reads back empty,
     /// not as the values of the properties stored before it. The index used
@@ -312,6 +356,75 @@ mod device_detection {
             !value.contains('|'),
             "Safari needs no high-entropy values script, got '{value}'"
         );
+    }
+
+    /// Every property's value for each User-Agent, in property order.
+    fn read_every_property(
+        manager: &Arc<dd::Manager>,
+        names: &[String],
+        user_agents: &[&str],
+    ) -> Vec<Vec<Option<String>>> {
+        user_agents
+            .iter()
+            .map(|user_agent| {
+                let mut results = manager.create_results().expect("results should allocate");
+                results
+                    .process_user_agent(user_agent)
+                    .expect("processing a user agent should not raise an exception");
+                names
+                    .iter()
+                    .map(|name| {
+                        results
+                            .value_as_string(name, ",")
+                            .expect("reading a listed property should not error")
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Threads that read every property at once, starting together before
+    /// the manager has built its property index, get exactly the values a
+    /// single thread gets.
+    #[test]
+    fn concurrent_reads_match_a_single_thread() {
+        const THREADS: usize = 8;
+        const ROUNDS: usize = 25;
+        let Some(data_file) = dd_lite_data_file() else {
+            eprintln!("no Lite Hash data file found; skipping concurrent read test");
+            return;
+        };
+        let user_agents = [DESKTOP_USER_AGENT, MOBILE_USER_AGENT];
+        let expected = {
+            let manager = open_loaded(&data_file);
+            let names = manager.property_names();
+            read_every_property(&manager, &names, &user_agents)
+        };
+        assert!(
+            expected.iter().flatten().any(Option::is_some),
+            "the single-threaded reads should find values"
+        );
+
+        let manager = open_loaded(&data_file);
+        let names = Arc::new(manager.property_names());
+        let start = Arc::new(std::sync::Barrier::new(THREADS));
+        let readers: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let (manager, names, start) =
+                    (Arc::clone(&manager), Arc::clone(&names), Arc::clone(&start));
+                std::thread::spawn(move || {
+                    start.wait();
+                    (0..ROUNDS)
+                        .map(|_| read_every_property(&manager, &names, &user_agents))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for reader in readers {
+            for values in reader.join().expect("a reader thread should not panic") {
+                assert_eq!(values, expected);
+            }
+        }
     }
 
     /// An unknown property reads back as no value rather than an error, the

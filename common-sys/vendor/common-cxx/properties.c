@@ -73,6 +73,9 @@ static PropertiesAvailable* initRequiredPropertiesMemory(uint32_t count) {
 			available->items[i].evidenceProperties = NULL;
 			// Initialize the delay execution.
 			available->items[i].delayExecution = false;
+			// Initialize the component index. The engine sets the real value
+			// once it knows which component each property belongs to.
+			available->items[i].componentIndex = 0;
 		}
 	}
 	return available;
@@ -527,4 +530,27 @@ void fiftyoneDegreesPropertiesFree(
 		}
 		Free(available);
 	}
+}
+
+uint32_t fiftyoneDegreesPropertiesGetComponentMask(
+	fiftyoneDegreesPropertiesAvailable *available,
+	const int *requiredPropertyIndexes,
+	int requiredPropertyIndexesCount) {
+	uint32_t mask = 0;
+	int i;
+	int count;
+	if (requiredPropertyIndexes == NULL || requiredPropertyIndexesCount < 0) {
+		return FIFTYONE_DEGREES_COMPONENT_MASK_ALL;
+	}
+	count = available == NULL ? 0 : (int)available->count;
+	for (i = 0; i < requiredPropertyIndexesCount; i++) {
+		int index = requiredPropertyIndexes[i];
+		if (index >= 0 && index < count) {
+			byte componentIndex = available->items[index].componentIndex;
+			if (componentIndex < FIFTYONE_DEGREES_COMPONENT_MASK_BITS) {
+				mask |= 1u << componentIndex;
+			}
+		}
+	}
+	return mask;
 }

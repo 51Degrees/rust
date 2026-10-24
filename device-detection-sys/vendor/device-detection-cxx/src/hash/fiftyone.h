@@ -62,11 +62,13 @@ MAP_TYPE(HashMatchMethod)
 #define ResultsHashGetValuesStringByRequiredPropertyIndex fiftyoneDegreesResultsHashGetValuesStringByRequiredPropertyIndex /**< Synonym for #fiftyoneDegreesResultsHashGetValuesStringByRequiredPropertyIndex function. */
 #define HashGetDeviceIdFromResult fiftyoneDegreesHashGetDeviceIdFromResult /**< Synonym for #fiftyoneDegreesHashGetDeviceIdFromResult function. */
 #define HashGetDeviceIdFromResults fiftyoneDegreesHashGetDeviceIdFromResults /**< Synonym for #fiftyoneDegreesHashGetDeviceIdFromResults function. */
-#define ResultsHashCreate fiftyoneDegreesResultsHashCreate /**< Synonym for #fiftyoneDegreesResultsHashCreate function. */
+#define ResultsHashCreate(manager, overridesCapacity) fiftyoneDegreesResultsHashCreate((manager), 0, (overridesCapacity)) /**< Two argument convenience form of #fiftyoneDegreesResultsHashCreate that injects the deprecated userAgentCapacity as 0, so internal callers need not pass it. */
 #define ResultsHashFree fiftyoneDegreesResultsHashFree /**< Synonym for #fiftyoneDegreesResultsHashFree function. */
 #define ResultsHashFromDeviceId fiftyoneDegreesResultsHashFromDeviceId /**< Synonym for #fiftyoneDegreesResultsHashFromDeviceId function. */
 #define ResultsHashFromUserAgent fiftyoneDegreesResultsHashFromUserAgent /**< Synonym for #fiftyoneDegreesResultsHashFromUserAgent function. */
 #define ResultsHashFromEvidence fiftyoneDegreesResultsHashFromEvidence /**< Synonym for #fiftyoneDegreesResultsHashFromEvidence function. */
+#define ResultsHashFromUserAgentForProperties fiftyoneDegreesResultsHashFromUserAgentForProperties /**< Synonym for #fiftyoneDegreesResultsHashFromUserAgentForProperties function. */
+#define ResultsHashFromEvidenceForProperties fiftyoneDegreesResultsHashFromEvidenceForProperties /**< Synonym for #fiftyoneDegreesResultsHashFromEvidenceForProperties function. */
 #define DataSetHashGet fiftyoneDegreesDataSetHashGet /**< Synonym for #fiftyoneDegreesDataSetHashGet function. */
 #define DataSetHashRelease fiftyoneDegreesDataSetHashRelease /**< Synonym for #fiftyoneDegreesDataSetHashRelease function. */
 #define HashSizeManagerFromFile fiftyoneDegreesHashSizeManagerFromFile /**< Synonym for #fiftyoneDegreesHashSizeManagerFromFile function. */
@@ -90,6 +92,7 @@ MAP_TYPE(GraphNode)
 MAP_TYPE(GraphNodeHash)
 MAP_TYPE(GraphTraceNode)
 
+#define GRAPH_NODE_IS_HASH_TABLE FIFTYONE_DEGREES_GRAPH_NODE_IS_HASH_TABLE /**< Synonym for #FIFTYONE_DEGREES_GRAPH_NODE_IS_HASH_TABLE macro. */
 #define GraphNodeReadFromFile fiftyoneDegreesGraphNodeReadFromFile /**< Synonym for #fiftyoneDegreesGraphNodeReadFromFile function. */
 #define GraphGetNode fiftyoneDegreesGraphGetNode /**< Synonym for #fiftyoneDegreesGraphGetNode function. */
 #define GraphGetMatchingHashFromListNodeTable fiftyoneDegreesGraphGetMatchingHashFromListNodeTable /**< Synonym for #fiftyoneDegreesGraphGetMatchingHashFromListNodeTable function. */

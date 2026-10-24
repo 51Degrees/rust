@@ -77,7 +77,13 @@ pub struct Options {
 /// the page, and the very same engine instance is then used as an application
 /// element of the web pipeline. Usage sharing is added first (REQUIRED for a web
 /// example).
-pub fn build_app(data_file: &std::path::Path) -> anyhow::Result<(Router, Vec<String>)> {
+///
+/// `share_usage` is true when the binary serves the page. The tests pass false,
+/// so a test run sends nothing to 51Degrees.
+pub fn build_app(
+    data_file: &std::path::Path,
+    share_usage: bool,
+) -> anyhow::Result<(Router, Vec<String>)> {
     // Build the on-premise engine. The HighPerformance profile suits a
     // long-running web server. Every property the data file supports is loaded by
     // default.
@@ -95,8 +101,10 @@ pub fn build_app(data_file: &std::path::Path) -> anyhow::Result<(Router, Vec<Str
     // Assemble the application's own elements: usage sharing first (REQUIRED for a
     // web example), then the on-premise engine. WebPipeline wraps these with the
     // sequence, set-headers, JSON and JavaScript elements.
-    let elements: Vec<Arc<dyn FlowElement>> =
-        vec![Arc::new(ShareUsageElement::with_defaults()), engine];
+    let mut elements: Vec<Arc<dyn FlowElement>> = vec![engine];
+    if share_usage {
+        elements.insert(0, Arc::new(ShareUsageElement::with_defaults()));
+    }
     let web = WebPipeline::build(elements, WebIntegrationOptions::default())
         .context("assembling the web pipeline")?;
     let state = FiftyOneState::from_web_pipeline(&web);
@@ -120,7 +128,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     // constructed, and tokio forbids dropping a runtime from inside another
     // runtime's async context, so doing this work outside block_on avoids that
     // panic.
-    let (app, warnings) = build_app(&options.data_file)?;
+    let (app, warnings) = build_app(&options.data_file, true)?;
     store_warnings(warnings);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -267,15 +275,15 @@ mod tests {
     /// itself uses `IpiTier::default()` (best available).
     fn test_app() -> Option<Router> {
         let data_file = examples_shared::ipi_data_path(examples_shared::IpiTier::Asn)?;
-        let (app, _warnings) = build_app(&data_file).expect("on-premise app builds");
+        let (app, _warnings) = build_app(&data_file, false).expect("on-premise app builds");
         Some(app)
     }
 
     /// Drive one GET request through a clone of the app and return the response.
     ///
     /// A clone is used (cloning a `Router` is cheap, sharing the same `Arc`
-    /// elements) so the owning `app` the caller holds outlives the request. The
-    /// usage-sharing element wraps a blocking `reqwest` client whose backing
+    /// elements) so the owning `app` the caller holds outlives the request. With
+    /// usage sharing on, the app wraps a blocking `reqwest` client whose backing
     /// runtime must not be dropped from inside an async context, so keeping the
     /// owning `app` in the synchronous test body lets its final drop happen
     /// outside the runtime.
