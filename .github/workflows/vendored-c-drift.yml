@@ -1,0 +1,148 @@
+name: Vendored C Drift Check
+
+# The -sys crates compile the 51Degrees C sources vendored under
+# <crate>/vendor, and each vendor/UPSTREAM.txt records the commits they were
+# taken from. ci/vendor-c-sources.ps1 copies them, and with -Check compares.
+#
+# Push and pull request builds check the vendored files against the recorded
+# commits, so a hand edit or a partial refresh fails. The weekly schedule and a
+# manual run check them against upstream main instead, and build and test the
+# workspace against upstream main, so a change upstream is reported within a
+# week. A failure there is the signal to refresh the vendored copies with the
+# script, not a fault in whatever was pushed.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, 'release/**']
+  workflow_dispatch:
+  schedule:
+    # 04:30 every Monday, so upstream changes are caught even with no PR activity.
+    - cron: '30 4 * * 1'
+
+env:
+  RUSTFLAGS: -D warnings
+  CARGO_TERM_COLOR: always
+
+jobs:
+  vendored-sources:
+    name: Vendored C sources against ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'upstream main' || 'the recorded commits' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+
+      - name: Choose the upstream commits to compare against
+        id: refs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            schedule|workflow_dispatch)
+              echo "device-detection=main" >> "$GITHUB_OUTPUT"
+              echo "ip-intelligence=main" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "device-detection=$(sed -n 's/^commit=//p' device-detection-sys/vendor/UPSTREAM.txt)" >> "$GITHUB_OUTPUT"
+              echo "ip-intelligence=$(sed -n 's/^commit=//p' ip-intelligence-sys/vendor/UPSTREAM.txt)" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Checkout device-detection-cxx
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/device-detection-cxx
+          ref: ${{ steps.refs.outputs.device-detection }}
+          path: cxx/device-detection-cxx
+          submodules: recursive
+          lfs: false
+
+      - name: Checkout ip-intelligence-cxx
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/ip-intelligence-cxx
+          ref: ${{ steps.refs.outputs.ip-intelligence }}
+          path: cxx/ip-intelligence-cxx
+          submodules: recursive
+          lfs: false
+
+      - name: Compare the vendored C sources
+        shell: pwsh
+        run: >-
+          ./ci/vendor-c-sources.ps1 -Check
+          -DeviceDetectionCxx cxx/device-detection-cxx
+          -IpIntelligenceCxx cxx/ip-intelligence-cxx
+
+  upstream-main:
+    name: build and test against upstream main
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout workspace
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Checkout device-detection-cxx
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/device-detection-cxx
+          path: cxx/device-detection-cxx
+          submodules: recursive
+
+      - name: Checkout ip-intelligence-cxx
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/ip-intelligence-cxx
+          path: cxx/ip-intelligence-cxx
+          submodules: recursive
+
+      - name: Fetch LFS data for the cxx checkouts
+        shell: bash
+        run: |
+          for d in cxx/device-detection-cxx cxx/ip-intelligence-cxx; do
+            git -C "$d" lfs install --local
+            git -C "$d" lfs pull
+            git -C "$d" submodule foreach --recursive 'git lfs install --local && git lfs pull'
+          done
+
+      # The override variables make each -sys crate compile the upstream
+      # checkout instead of its vendored copy. common-cxx is the copy
+      # device-detection-cxx pins, as the vendoring script takes it. A data
+      # file that is missing, or is still a Git LFS pointer, fails the job
+      # here, because the tests would skip without it.
+      - name: Point the build at upstream main
+        shell: bash
+        run: |
+          echo "FIFTYONE_COMMON_CXX_DIR=${GITHUB_WORKSPACE}/cxx/device-detection-cxx/src/common-cxx" >> "$GITHUB_ENV"
+          echo "FIFTYONE_DEVICE_DETECTION_CXX_DIR=${GITHUB_WORKSPACE}/cxx/device-detection-cxx" >> "$GITHUB_ENV"
+          echo "FIFTYONE_IP_INTELLIGENCE_CXX_DIR=${GITHUB_WORKSPACE}/cxx/ip-intelligence-cxx" >> "$GITHUB_ENV"
+          echo "51DEGREES_DD_PATH=${GITHUB_WORKSPACE}/cxx/device-detection-cxx/device-detection-data/51Degrees-LiteV4.1.hash" >> "$GITHUB_ENV"
+          echo "51DEGREES_IPI_PATH=${GITHUB_WORKSPACE}/cxx/ip-intelligence-cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi" >> "$GITHUB_ENV"
+          for file in \
+            "${GITHUB_WORKSPACE}/cxx/device-detection-cxx/device-detection-data/51Degrees-LiteV4.1.hash" \
+            "${GITHUB_WORKSPACE}/cxx/ip-intelligence-cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi"; do
+            if [ ! -f "$file" ] || head -c 64 "$file" | grep -q 'git-lfs'; then
+              echo "::error::$file is missing or is a Git LFS pointer, so the on-premise tests would skip"
+              exit 1
+            fi
+          done
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Copy the OWID source into fodid
+        shell: pwsh
+        run: ./ci/copy-owid-source.ps1
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets
+
+      - name: Check the two common-cxx copies share no symbol
+        shell: pwsh
+        run: ./ci/check-native-symbols.ps1
+
+      - name: cargo test
+        run: cargo test --workspace

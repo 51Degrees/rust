@@ -277,7 +277,9 @@ if (c != NULL) { c->freeCollection(c); }
 #pragma pack(push, 1)
 typedef struct fiftyone_degrees_collection_header_t {
 	fiftyoneDegreesFileOffsetUnsigned startPosition; /**< Start position in the data file of the entities */
-	uint32_t length; /**< Length in bytes of all the entities */
+	uint32_t length; /**< Length of all the entities, in bytes, or in
+					 offset units where the collection is created with a non
+					 zero shift */
 	uint32_t count; /**< Number of entities in the collection */
 } fiftyoneDegreesCollectionHeader;
 #pragma pack(pop)
@@ -417,7 +419,19 @@ typedef struct fiftyone_degrees_collection_t {
 	uint32_t count; /**< The number of items, or 0 if not available */
 	uint32_t elementSize; /**< The size of each entry, or 0 if variable length */
 	uint32_t size; /**< Number of bytes in the source data structure containing
-					  the collection's data */
+					  the collection's data, or where offsetShift is non zero
+					  the number of offset units */
+#ifdef FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT
+	byte offsetShift; /**< Number of bits to shift a stored offset, or the
+					  size field, left to convert it to bytes. Zero for all
+					  collections except variable length collections created
+					  with one of the WithOffsetShift methods, where records
+					  are aligned relative to the start of the collection so
+					  that 32 bit stored offsets can address data larger than
+					  4GB. The start of the collection itself need not be
+					  aligned. Only available when compiled with large data
+					  file support. */
+#endif
 	const char *typeName; /**< Name of collection type (vtable). */
 } fiftyoneDegreesCollection;
 
@@ -515,6 +529,62 @@ EXTERNAL fiftyoneDegreesCollection* fiftyoneDegreesCollectionCreateFromFile(
 EXTERNAL fiftyoneDegreesCollection* fiftyoneDegreesCollectionCreateFromMemory(
 	fiftyoneDegreesMemoryReader *reader,
 	fiftyoneDegreesCollectionHeader header);
+
+#ifdef FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT
+
+/**
+ * Creates a collection from the file handle as
+ * #fiftyoneDegreesCollectionCreateFromFile does, but for variable length
+ * collections whose stored offsets, and header length, are recorded in units
+ * of 1 << offsetShift bytes rather than in bytes. Records in such collections
+ * are aligned by the writer to 1 << offsetShift byte boundaries relative to
+ * the start of the collection, which is what the stored offsets are relative
+ * to, so that 32 bit stored offsets can address data larger than 4GB. The
+ * start of the collection itself need not be aligned. Must not be used
+ * for fixed width collections, so NULL is returned for a non zero shift when
+ * the header declares a count, and for a shift the 64 bit conversion cannot
+ * represent. Only available when compiled with large data file support.
+ * @param file a file handle positioned at the start of the collection
+ * @param reader a pool of file handles to use operationally to retrieve data
+ * from the file after the collection has been created
+ * @param config settings for the implementation of the collection to be used
+ * @param header containing collection structure with the length in offset
+ * units
+ * @param read a pointer to a function to read an item into the collection
+ * @param offsetShift number of bits to shift a stored offset left to convert
+ * it to bytes, or zero for byte offsets
+ * @return pointer to the new collection, or NULL if something went wrong
+ */
+EXTERNAL fiftyoneDegreesCollection*
+fiftyoneDegreesCollectionCreateFromFileWithOffsetShift(
+	FILE *file,
+	fiftyoneDegreesFilePool *reader,
+	const fiftyoneDegreesCollectionConfig *config,
+	fiftyoneDegreesCollectionHeader header,
+	fiftyoneDegreesCollectionFileRead read,
+	byte offsetShift);
+
+/**
+ * Creates a collection from a memory reader as
+ * #fiftyoneDegreesCollectionCreateFromMemory does, but for variable length
+ * collections whose stored offsets, and header length, are recorded in units
+ * of 1 << offsetShift bytes rather than in bytes. See
+ * #fiftyoneDegreesCollectionCreateFromFileWithOffsetShift.
+ * @param reader with access to the allocated memory
+ * @param header containing collection structure with the length in offset
+ * units
+ * @param offsetShift number of bits to shift a stored offset left to convert
+ * it to bytes, or zero for byte offsets
+ * @return pointer to the memory collection, or NULL if the collection could
+ * not be created
+ */
+EXTERNAL fiftyoneDegreesCollection*
+fiftyoneDegreesCollectionCreateFromMemoryWithOffsetShift(
+	fiftyoneDegreesMemoryReader *reader,
+	fiftyoneDegreesCollectionHeader header,
+	byte offsetShift);
+
+#endif
 
 /**
  * Get a handle from the file pool associated with the collection and position
