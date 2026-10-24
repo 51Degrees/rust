@@ -64,10 +64,11 @@ const DEFAULT_DATA_SOURCE_TIER: &str = "Lite";
 /// data file's own properties. Each is read from the native results just like a
 /// data-file property and carries the value type used to store it.
 ///
-/// `DeviceId` and `Method` are strings; the remaining metrics are integers. They
-/// are advertised so a caller enumerating [`AspectEngine::aspect_properties`]
-/// sees them, and so the typed match-metric accessors on
-/// [`fiftyone_device_detection_shared::DeviceData`] resolve.
+/// `DeviceId` and `Method` are strings, `UserAgents` is a list of strings and
+/// the remaining metrics are integers. They are advertised so a caller
+/// enumerating [`AspectEngine::aspect_properties`] sees them, and so the typed
+/// match-metric accessors on [`fiftyone_device_detection_shared::DeviceData`]
+/// resolve.
 const METRIC_PROPERTIES: &[(&str, PropertyValueType, &str)] = &[
     (
         "MatchedNodes",
@@ -100,8 +101,13 @@ const METRIC_PROPERTIES: &[(&str, PropertyValueType, &str)] = &[
     (
         "Method",
         PropertyValueType::String,
-        "The method used to determine the match result, for example Exact or \
-         Performance.",
+        "The method used to determine the match result: NONE, PERFORMANCE, \
+         COMBINED or PREDICTIVE.",
+    ),
+    (
+        "UserAgents",
+        PropertyValueType::StringList,
+        "The matched User-Agents.",
     ),
 ];
 
@@ -308,6 +314,10 @@ impl DeviceDetectionOnPremiseEngine {
                 PropertyValue::String(metrics.method_name().to_owned()),
             );
         }
+        device.insert(
+            "UserAgents",
+            PropertyValue::StringList(results.matched_user_agents()),
+        );
 
         Ok(())
     }
