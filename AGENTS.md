@@ -100,11 +100,15 @@ Example binaries live in `<crate>/src/bin/*.rs` (run with `--bin`), not in an
 
 ## Releasing to crates.io
 
-Releases are automated. To cut one: bump the shared version (the literal
-`version = "x.y.z"` in every member `[package]` and on every internal
-path-dependency requirement, so the path-dep versions match) and push to
-`main`. `.github/workflows/publish.yml` and `ci/publish-crates.sh` publish each
-crate to crates.io in dependency order, skipping any version already published.
+Releases are automated, and every push to `main` releases. The version is never
+committed. `.github/workflows/publish.yml` works it out from the release tags
+with GitVersion and common-ci's `GitVersion.yml`, which gives `main` the next
+plain patch, such as 4.5.9 after 4.5.8, and `ci/set-crate-versions.ps1` writes
+it into every manifest on the build machine. The workflow refuses a major or
+minor move unless a person dispatches it with `allow-version-bump`, tests the
+examples against the crates at that version, publishes each crate to crates.io
+in dependency order with `ci/publish-crates.sh`, skipping any version already
+published, and tags the commit.
 
 Authentication uses crates.io **Trusted Publishing**: the publish workflow
 exchanges the run's GitHub OIDC identity for a short-lived token, so no API
