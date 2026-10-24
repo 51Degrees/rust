@@ -87,6 +87,8 @@ fn dd_and_ipi_on_premise_coexist_in_one_binary() {
     if let Some(dd_file) = dd_file.as_ref() {
         let dd_pipeline = DeviceDetectionPipelineBuilder::on_premise(dd_file)
             .performance_profile(PerformanceProfile::HighPerformance)
+            // Off so the test sends nothing to 51Degrees.
+            .share_usage(false)
             .build()
             .expect("device-detection on-premise pipeline builds");
 
@@ -117,6 +119,8 @@ fn dd_and_ipi_on_premise_coexist_in_one_binary() {
         let ipi_pipeline = IpIntelligencePipelineBuilder::on_premise(ipi_file)
             .performance_profile(PerformanceProfile::HighPerformance)
             .property("Asn")
+            // Off so the test sends nothing to 51Degrees.
+            .share_usage(false)
             .build()
             .expect("ip-intelligence on-premise pipeline builds");
 
@@ -182,11 +186,15 @@ fn dd_and_ipi_combined_in_one_pipeline() {
     // Build each facade pipeline, then hand their engines to one shared pipeline.
     let dd_pipeline = DeviceDetectionPipelineBuilder::on_premise(&dd_file)
         .performance_profile(PerformanceProfile::HighPerformance)
+        // Off so the test sends nothing to 51Degrees.
+        .share_usage(false)
         .build()
         .expect("device-detection on-premise pipeline builds");
     let ipi_pipeline = IpIntelligencePipelineBuilder::on_premise(&ipi_file)
         .performance_profile(PerformanceProfile::HighPerformance)
         .property("Asn")
+        // Off so the test sends nothing to 51Degrees.
+        .share_usage(false)
         .build()
         .expect("ip-intelligence on-premise pipeline builds");
 

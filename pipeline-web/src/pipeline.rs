@@ -36,6 +36,9 @@
 //!
 //! 1. [`fiftyone_pipeline_engines_fiftyone::SequenceElement`] first, so the
 //!    session id and sequence number exist before anything else reads them.
+//!    It is only added when the application's elements do not already hold
+//!    one, so the elements of a pipeline builder with usage sharing on keep
+//!    their own.
 //! 2. the application's own elements, in the order they were added.
 //! 3. [`fiftyone_pipeline_engines_fiftyone::SetHeadersElement`] (only when
 //!    [`WebIntegrationOptions::use_set_header_properties`] is set), after the
@@ -225,8 +228,14 @@ fn order_elements(
 ) -> Vec<Arc<dyn FlowElement>> {
     let mut ordered: Vec<Arc<dyn FlowElement>> = Vec::with_capacity(elements.len() + 4);
 
-    // 1. Sequence element first.
-    ordered.push(Arc::new(SequenceElement::new()));
+    // 1. Sequence element first, unless the application's elements already
+    // hold one, as a pipeline builder's elements do with usage sharing on.
+    let has_sequence = elements
+        .iter()
+        .any(|element| element.data_key() == SequenceElement::DEFAULT_ELEMENT_DATA_KEY);
+    if !has_sequence {
+        ordered.push(Arc::new(SequenceElement::new()));
+    }
 
     // 2. The application's own elements, in their given order.
     ordered.extend(elements);

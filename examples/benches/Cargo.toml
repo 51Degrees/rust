@@ -23,7 +23,12 @@ path = "src/lib.rs"
 # The two detection facades the throughput benches build pipelines from. Default
 # features (cloud + on-premise) are kept so the on-premise builders are present.
 fiftyone-device-detection = { version = "4.5.2" }
-fiftyone-ip-intelligence = { version = "4.5.2" }
+# The facade's default `share-usage` feature is left out, so its pipeline
+# builders keep usage sharing off in these examples. Every crate in this
+# workspace leaves it out, because Cargo merges a dependency's features across
+# the workspace. In normal operation keep the default features, which turn
+# usage sharing on.
+fiftyone-ip-intelligence = { version = "4.5.2", default-features = false, features = ["cloud", "on-premise"] }
 
 # Core pipeline plumbing: the JavaScript-builder bench assembles a JSON-builder +
 # JavaScript-builder pipeline by hand through the core Pipeline builder.

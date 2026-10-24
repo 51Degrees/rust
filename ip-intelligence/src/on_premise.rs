@@ -22,9 +22,9 @@
 
 //! The on-premise IP-intelligence pipeline builder.
 //!
-//! It opens a local `.ipi` data file and assembles a pipeline containing a
-//! single [`IpIntelligenceOnPremiseEngine`], which looks IP Intelligence up
-//! from the client IP carried in a request's evidence.
+//! It opens a local `.ipi` data file and assembles a pipeline around an
+//! [`IpIntelligenceOnPremiseEngine`], which looks IP Intelligence up from the
+//! client IP carried in a request's evidence.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,6 +32,7 @@ use std::sync::Arc;
 use fiftyone_ip_intelligence_onpremise::IpIntelligenceOnPremiseEngine;
 use fiftyone_native::PerformanceProfile;
 use fiftyone_pipeline_core::{Pipeline, Result};
+use fiftyone_pipeline_engines_fiftyone::{SequenceElement, ShareUsageElement};
 
 /// A fluent builder that opens an `.ipi` data file and assembles an on-premise
 /// IP-intelligence [`Pipeline`](fiftyone_pipeline_core::Pipeline).
@@ -41,8 +42,10 @@ use fiftyone_pipeline_core::{Pipeline, Result};
 /// [`IpIntelligenceOnPremiseEngineBuilder`](fiftyone_ip_intelligence_onpremise::IpIntelligenceOnPremiseEngineBuilder)),
 /// then call [`build`](OnPremiseIpIntelligencePipelineBuilder::build).
 ///
-/// The built pipeline contains a single on-premise engine. Unlike the cloud
-/// deployment there is no request engine, because the lookup is local.
+/// The built pipeline contains the on-premise engine, with a sequence element
+/// before it and a usage-sharing element after it when usage sharing is on.
+/// Unlike the cloud deployment there is no request engine, because the lookup
+/// is local.
 pub struct OnPremiseIpIntelligencePipelineBuilder {
     data_file_path: PathBuf,
     profile: PerformanceProfile,
@@ -52,6 +55,7 @@ pub struct OnPremiseIpIntelligencePipelineBuilder {
     file_system_watcher: bool,
     data_update_url: Option<String>,
     suppress_process_exceptions: bool,
+    share_usage: bool,
 }
 
 impl OnPremiseIpIntelligencePipelineBuilder {
@@ -67,6 +71,7 @@ impl OnPremiseIpIntelligencePipelineBuilder {
             file_system_watcher: false,
             data_update_url: None,
             suppress_process_exceptions: false,
+            share_usage: cfg!(feature = "share-usage"),
         }
     }
 
@@ -134,6 +139,20 @@ impl OnPremiseIpIntelligencePipelineBuilder {
         self
     }
 
+    /// Toggle usage sharing. On by default with the `share-usage` feature,
+    /// which is a default feature, so evidence from the requests the pipeline
+    /// processes reaches 51Degrees. A console or off-line tool turns it off.
+    ///
+    /// When enabled, a [`SequenceElement`] is added first, so each shared
+    /// record carries its session id and sequence, and a [`ShareUsageElement`]
+    /// with default settings is added last. The element only transmits if the
+    /// `fiftyone-pipeline-engines-fiftyone/share-usage-transport` feature is
+    /// enabled, which the `share-usage` feature does.
+    pub fn share_usage(mut self, enabled: bool) -> Self {
+        self.share_usage = enabled;
+        self
+    }
+
     /// Open the data file, build the engine and assemble the pipeline.
     ///
     /// Returns the native error if the data file fails to load.
@@ -152,8 +171,16 @@ impl OnPremiseIpIntelligencePipelineBuilder {
 
         let engine = engine_builder.build()?;
 
-        Pipeline::builder()
-            .add_element(Arc::new(engine))
+        let mut pipeline_builder = Pipeline::builder();
+        if self.share_usage {
+            pipeline_builder = pipeline_builder.add_element(Arc::new(SequenceElement::new()));
+        }
+        pipeline_builder = pipeline_builder.add_element(Arc::new(engine));
+        if self.share_usage {
+            pipeline_builder =
+                pipeline_builder.add_element(Arc::new(ShareUsageElement::with_defaults()));
+        }
+        pipeline_builder
             .suppress_process_exceptions(self.suppress_process_exceptions)
             .build()
     }
@@ -226,6 +253,8 @@ mod tests {
         let pipeline = IpIntelligencePipelineBuilder::on_premise(&data_file)
             .performance_profile(PerformanceProfile::HighPerformance)
             .properties(ASN_PROPERTIES.iter().copied())
+            // Off so the test sends nothing to 51Degrees.
+            .share_usage(false)
             .build()
             .expect("the ASN data file should build an on-premise pipeline");
 

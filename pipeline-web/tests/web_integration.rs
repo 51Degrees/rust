@@ -196,6 +196,34 @@ fn element_ordering_matches_spec() {
 }
 
 #[test]
+fn a_sequence_element_among_the_elements_is_not_added_again() {
+    let web = WebPipeline::build(
+        vec![
+            Arc::new(fiftyone_pipeline_engines_fiftyone::SequenceElement::new()),
+            Arc::new(TestElement::new(false)),
+        ],
+        WebIntegrationOptions::default(),
+    )
+    .expect("web pipeline builds");
+    let keys: Vec<&str> = web
+        .pipeline()
+        .flow_elements()
+        .iter()
+        .map(|e| e.data_key())
+        .collect();
+    assert_eq!(
+        keys,
+        vec![
+            "sequence",
+            "device",
+            "set-headers",
+            "json-builder",
+            "javascriptbuilderelement",
+        ]
+    );
+}
+
+#[test]
 fn element_ordering_without_client_side_drops_builders() {
     let options = WebIntegrationOptions {
         client_side_evidence_enabled: false,

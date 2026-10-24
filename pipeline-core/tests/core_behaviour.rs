@@ -639,3 +639,26 @@ fn get_or_add_inserts_once_and_is_idempotent() {
         Some("manual")
     );
 }
+
+#[test]
+fn type_name_names_the_concrete_element_through_the_pipeline() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(OrderElement::new("order", log, &[])))
+        .add_element(Arc::new(FailingElement::new()))
+        .build()
+        .unwrap();
+
+    let names: Vec<&str> = pipeline
+        .flow_elements()
+        .iter()
+        .map(|element| element.type_name())
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            "core_behaviour::OrderElement",
+            "core_behaviour::FailingElement"
+        ]
+    );
+}

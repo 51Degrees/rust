@@ -51,45 +51,37 @@
 //!
 //! - `cloud` (default): the cloud engine and its request engine.
 //! - `on-premise` (default): the native Hash engine.
+//! - `share-usage` (default): usage sharing on in both builders, and the
+//!   built-in transport it sends with.
 //!
-//! The default `["cloud", "on-premise"]` builds the full SDK. A cloud-only
-//! consumer that does not want to link the native library sets
+//! The default `["cloud", "on-premise", "share-usage"]` builds the full SDK. A
+//! cloud-only consumer that does not want to link the native library sets
 //! `default-features = false, features = ["cloud"]`.
 //!
 //! ## A note on the convenience builder
 //!
 //! The device-detection specification recommends building pipelines explicitly
 //! so the element wiring is visible. [`DeviceDetectionPipelineBuilder`] is a
-//! convenience for the common console-style case and the examples. It leaves
-//! share usage off by default, matching the console examples. A production web
-//! deployment should enable share usage (call
-//! [`DeviceDetectionOnPremisePipelineBuilder::share_usage`] or
-//! [`DeviceDetectionCloudPipelineBuilder::share_usage`]) and typically also adds
-//! a [`SequenceElement`](fiftyone_pipeline_engines_fiftyone::SequenceElement),
-//! the JSON and JavaScript builders and a
+//! convenience for the common console-style case and the examples. Usage
+//! sharing is on by default, as it is in the other languages' builders, and
+//! with it on the builder also adds a
+//! [`SequenceElement`](fiftyone_pipeline_engines_fiftyone::SequenceElement). A
+//! web deployment typically adds the JSON and JavaScript builders and a
 //! [`SetHeadersElement`](fiftyone_pipeline_engines_fiftyone::SetHeadersElement)
 //! through the web integration crate rather than this builder.
 //!
-//! ## Usage sharing is off by default, and needs a feature to transmit
+//! ## Usage sharing is on by default
 //!
-//! Usage sharing never happens unless you opt in twice, so a default build (and
-//! every on-premise console build) sends nothing to 51Degrees:
-//!
-//! 1. **Add the element.** `share_usage` is off by default on both sub-builders;
-//!    only calling `.share_usage(true)` adds a
-//!    [`ShareUsageElement`](fiftyone_pipeline_engines_fiftyone::ShareUsageElement).
-//! 2. **Enable the transport.** Even when the element is present, it transmits
-//!    only if the `fiftyone-pipeline-engines-fiftyone/share-usage-transport`
-//!    Cargo feature is enabled (it is off by default). This facade does not turn
-//!    that feature on; a consumer that wants to share usage enables it by taking
-//!    a direct dependency, exactly as the examples do:
-//!    ```toml
-//!    fiftyone-pipeline-engines-fiftyone = { version = "*", features = ["share-usage-transport"] }
-//!    ```
-//!    Without the feature the element still runs but its sender is a no-op, so no
-//!    network connection to 51Degrees is made. To keep usage sharing off, simply
-//!    do neither (or pass `.share_usage(false)`). See the
-//!    [`fiftyone_pipeline_engines_fiftyone`] crate docs for the full detail.
+//! With the default `share-usage` feature, both sub-builders add a
+//! [`ShareUsageElement`](fiftyone_pipeline_engines_fiftyone::ShareUsageElement),
+//! which sends evidence from the requests the pipeline processes to 51Degrees
+//! to improve detection. A console or off-line tool turns it off with
+//! `.share_usage(false)`, because evidence 51Degrees already holds adds
+//! nothing. With the feature off, the builders leave usage sharing off unless
+//! `.share_usage(true)` is called, and the element sends nothing unless the
+//! `fiftyone-pipeline-engines-fiftyone/share-usage-transport` feature is
+//! enabled. See the [`fiftyone_pipeline_engines_fiftyone`] crate docs for what
+//! the element sends and how.
 //!
 //! ## Examples
 //!
@@ -120,6 +112,9 @@ pub use fiftyone_pipeline_core::{
     Error, Evidence, EvidenceBuilder, FlowData, FlowElement, Pipeline, PipelineBuilder, Result,
     TypedKey,
 };
+
+#[cfg(any(feature = "cloud", feature = "on-premise"))]
+use fiftyone_pipeline_engines_fiftyone::{SequenceElement, ShareUsageElement};
 
 // ---------------------------------------------------------------------------
 // Re-exports: the on-premise engine and the native performance profile.
@@ -168,7 +163,7 @@ pub use fiftyone_cloud_request_engine::{
 ///   the `cloud` feature).
 ///
 /// Both sub-builders produce an `Arc<`[`Pipeline`]`>` with sensible defaults
-/// and share usage off (see the crate-level note). Configure performance,
+/// and share usage on (see the crate-level note). Configure performance,
 /// properties or share usage on the sub-builder before calling `build`.
 pub struct DeviceDetectionPipelineBuilder;
 
@@ -178,7 +173,7 @@ impl DeviceDetectionPipelineBuilder {
     ///
     /// The returned [`DeviceDetectionOnPremisePipelineBuilder`] places an
     /// optional UA-CH high-entropy decoder before the Hash engine (on by
-    /// default), with share usage off.
+    /// default), with share usage on.
     ///
     /// # Example
     ///
@@ -219,7 +214,7 @@ impl DeviceDetectionPipelineBuilder {
     /// <https://configure.51degrees.com?utm_source=code&utm_medium=comment&utm_campaign=rust&utm_content=device-detection-src-lib.rs&utm_term=cloud>.
     /// The returned [`DeviceDetectionCloudPipelineBuilder`] assembles a
     /// [`CloudRequestEngine`] followed by a [`DeviceDetectionCloudEngine`], with
-    /// share usage off.
+    /// share usage on.
     ///
     /// # Example
     ///
@@ -252,7 +247,8 @@ impl DeviceDetectionPipelineBuilder {
 ///
 /// Defaults: the [`PerformanceProfile::Default`] profile, every property the
 /// data file supports, the UA-CH high-entropy decoder enabled, and share usage
-/// disabled. Override any of these before [`Self::build`].
+/// enabled with the `share-usage` feature. Override any of these before
+/// [`Self::build`].
 #[cfg(feature = "on-premise")]
 pub struct DeviceDetectionOnPremisePipelineBuilder {
     data_file_path: std::path::PathBuf,
@@ -275,7 +271,7 @@ impl DeviceDetectionOnPremisePipelineBuilder {
             data_source_tier: None,
             concurrency: None,
             use_uach: true,
-            share_usage: false,
+            share_usage: cfg!(feature = "share-usage"),
         }
     }
 
@@ -343,17 +339,16 @@ impl DeviceDetectionOnPremisePipelineBuilder {
         self
     }
 
-    /// Toggle the share-usage element. Off by default. A production web
-    /// deployment should turn this on to contribute anonymous usage data, which
-    /// improves detection for everyone. See the crate-level note.
+    /// Toggle usage sharing. On by default with the `share-usage` feature,
+    /// which is a default feature, so evidence from the requests the pipeline
+    /// processes reaches 51Degrees and improves detection. A console or
+    /// off-line tool turns it off. See the crate-level note.
     ///
-    /// When enabled, a
-    /// [`ShareUsageElement`](fiftyone_pipeline_engines_fiftyone::ShareUsageElement)
-    /// with default settings is added as the first element so it observes the
-    /// raw evidence. The element only transmits if the
-    /// `fiftyone-pipeline-engines-fiftyone/share-usage-transport` feature is also
-    /// enabled (off by default); without it the element collects but sends
-    /// nothing. See the crate-level "Usage sharing" note.
+    /// When enabled, a [`SequenceElement`] is added first, so each shared
+    /// record carries its session id and sequence, and a [`ShareUsageElement`]
+    /// with default settings is added last. The element only transmits if the
+    /// `fiftyone-pipeline-engines-fiftyone/share-usage-transport` feature is
+    /// enabled, which the `share-usage` feature does.
     pub fn share_usage(mut self, enabled: bool) -> Self {
         self.share_usage = enabled;
         self
@@ -361,8 +356,9 @@ impl DeviceDetectionOnPremisePipelineBuilder {
 
     /// Assemble the pipeline.
     ///
-    /// The element order is: optional share usage, optional UA-CH decoder, then
-    /// the Hash engine. Returns the same kind of `Arc<`[`Pipeline`]`>` that
+    /// The element order is: the sequence element when usage sharing is on, the
+    /// optional UA-CH decoder, the Hash engine, then usage sharing when it is
+    /// on. Returns the same kind of `Arc<`[`Pipeline`]`>` that
     /// [`Pipeline::builder`] does, so a caller drives it identically whichever
     /// deployment built it.
     pub fn build(self) -> Result<std::sync::Arc<Pipeline>> {
@@ -381,15 +377,18 @@ impl DeviceDetectionOnPremisePipelineBuilder {
 
         let mut pipeline_builder = Pipeline::builder();
         if self.share_usage {
-            pipeline_builder = pipeline_builder.add_element(Arc::new(
-                fiftyone_pipeline_engines_fiftyone::ShareUsageElement::with_defaults(),
-            ));
+            pipeline_builder = pipeline_builder.add_element(Arc::new(SequenceElement::new()));
         }
         if self.use_uach {
             pipeline_builder =
                 pipeline_builder.add_element(Arc::new(UachJsConversionElement::new()));
         }
-        pipeline_builder.add_element(engine).build()
+        pipeline_builder = pipeline_builder.add_element(engine);
+        if self.share_usage {
+            pipeline_builder =
+                pipeline_builder.add_element(Arc::new(ShareUsageElement::with_defaults()));
+        }
+        pipeline_builder.build()
     }
 }
 
@@ -401,7 +400,8 @@ impl DeviceDetectionOnPremisePipelineBuilder {
 ///
 /// The pipeline is a [`CloudRequestEngine`] (which makes the HTTP call to the
 /// 51Degrees cloud) followed by a [`DeviceDetectionCloudEngine`] (which turns
-/// the response into a [`DeviceDataBase`]). Share usage is disabled by default.
+/// the response into a [`DeviceDataBase`]). Share usage is enabled by default
+/// with the `share-usage` feature.
 #[cfg(feature = "cloud")]
 pub struct DeviceDetectionCloudPipelineBuilder {
     resource_key: String,
@@ -418,7 +418,7 @@ impl DeviceDetectionCloudPipelineBuilder {
         DeviceDetectionCloudPipelineBuilder {
             resource_key: resource_key.into(),
             endpoint: None,
-            share_usage: false,
+            share_usage: cfg!(feature = "share-usage"),
             hardware_profile: false,
             cloud_state: None,
         }
@@ -431,10 +431,12 @@ impl DeviceDetectionCloudPipelineBuilder {
         self
     }
 
-    /// Toggle the share-usage element. Off by default. Transmission also
-    /// requires the `fiftyone-pipeline-engines-fiftyone/share-usage-transport`
-    /// feature (off by default); without it the element collects but sends
-    /// nothing. See the crate-level "Usage sharing" note.
+    /// Toggle usage sharing. On by default with the `share-usage` feature,
+    /// which is a default feature. When enabled, a sequence element is added
+    /// first and a usage-sharing element last, as for the on-premise builder.
+    /// Transmission needs the
+    /// `fiftyone-pipeline-engines-fiftyone/share-usage-transport` feature, which
+    /// the `share-usage` feature enables. See the crate-level note.
     pub fn share_usage(mut self, enabled: bool) -> Self {
         self.share_usage = enabled;
         self
@@ -479,9 +481,10 @@ impl DeviceDetectionCloudPipelineBuilder {
     /// evidence keys and accessible properties from the cloud as it builds, so
     /// this makes a network call and returns an error if the cloud is
     /// unavailable. Supply a cached state to construct the pipeline offline.
-    /// Element order is: optional share usage, the cloud request engine, then the
-    /// cloud device engine (or, in [`hardware_profile`](Self::hardware_profile)
-    /// mode, the hardware-profile engine).
+    /// Element order is: the sequence element when usage sharing is on, the
+    /// cloud request engine, the cloud device engine (or, in
+    /// [`hardware_profile`](Self::hardware_profile) mode, the hardware-profile
+    /// engine), then usage sharing when it is on.
     pub fn build(self) -> Result<std::sync::Arc<Pipeline>> {
         use std::sync::Arc;
 
@@ -495,9 +498,7 @@ impl DeviceDetectionCloudPipelineBuilder {
 
         let mut pipeline_builder = Pipeline::builder();
         if self.share_usage {
-            pipeline_builder = pipeline_builder.add_element(Arc::new(
-                fiftyone_pipeline_engines_fiftyone::ShareUsageElement::with_defaults(),
-            ));
+            pipeline_builder = pipeline_builder.add_element(Arc::new(SequenceElement::new()));
         }
         pipeline_builder = pipeline_builder.add_element(request_engine.clone());
 
@@ -513,6 +514,10 @@ impl DeviceDetectionCloudPipelineBuilder {
                 .cloud_request_engine(request_engine)
                 .try_build()?;
             pipeline_builder = pipeline_builder.add_element(Arc::new(device_engine));
+        }
+        if self.share_usage {
+            pipeline_builder =
+                pipeline_builder.add_element(Arc::new(ShareUsageElement::with_defaults()));
         }
         pipeline_builder.build()
     }
@@ -543,6 +548,49 @@ mod tests {
         let _data = pipeline.create_flow_data();
     }
 
+    #[cfg(all(feature = "reqwest-client", feature = "share-usage"))]
+    #[test]
+    fn usage_sharing_is_on_by_default() {
+        // Built but never processed, so nothing is queued or sent.
+        let pipeline = super::DeviceDetectionPipelineBuilder::cloud("resource-key-placeholder")
+            .set_state(super::CloudEngineState::default())
+            .build()
+            .expect("a cloud pipeline should construct offline from an injected state");
+        assert_eq!(
+            pipeline
+                .flow_elements()
+                .last()
+                .map(|element| element.type_name()),
+            Some("fiftyone_pipeline_engines_fiftyone::share_usage_element::ShareUsageElement")
+        );
+    }
+
+    #[cfg(feature = "reqwest-client")]
+    #[test]
+    fn usage_sharing_puts_the_sequence_element_first_and_itself_last() {
+        // Built but never processed, so nothing is queued or sent.
+        let pipeline = super::DeviceDetectionPipelineBuilder::cloud("resource-key-placeholder")
+            .set_state(super::CloudEngineState::default())
+            .share_usage(true)
+            .build()
+            .expect("a cloud pipeline should construct offline from an injected state");
+
+        let names: Vec<&str> = pipeline
+            .flow_elements()
+            .iter()
+            .map(|element| element.type_name())
+            .collect();
+        assert_eq!(names.len(), 4, "{names:?}");
+        assert_eq!(
+            names.first().copied(),
+            Some("fiftyone_pipeline_engines_fiftyone::sequence_element::SequenceElement")
+        );
+        assert_eq!(
+            names.last().copied(),
+            Some("fiftyone_pipeline_engines_fiftyone::share_usage_element::ShareUsageElement")
+        );
+    }
+
     #[cfg(feature = "on-premise")]
     #[test]
     fn on_premise_detects_mobile_user_agent() {
@@ -564,8 +612,10 @@ mod tests {
             return;
         };
 
+        // Usage sharing is off so the test sends nothing to 51Degrees.
         let pipeline = DeviceDetectionPipelineBuilder::on_premise(&data_file)
             .performance_profile(PerformanceProfile::HighPerformance)
+            .share_usage(false)
             .build()
             .expect("the on-premise pipeline should build against the Lite data file");
 
