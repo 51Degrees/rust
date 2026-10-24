@@ -36,7 +36,7 @@ use anyhow::{Context, Result};
 use fiftyone_device_detection::{
     DeviceDetectionOnPremiseEngineBuilder, FlowElement, PerformanceProfile,
 };
-use fiftyone_pipeline_core::{EvidenceKeyFilter, PropertyValueType};
+use fiftyone_pipeline_core::PropertyValueType;
 use fiftyone_pipeline_engines::{AspectEngine, OnPremiseAspectEngine};
 
 /// Options the example runs with, so `main` and the test share one entry point.
@@ -66,7 +66,7 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     output_data_file_details(engine.as_ref());
     output_properties_by_component(engine.as_ref());
-    output_evidence_keys(engine.evidence_key_filter());
+    output_evidence_keys(&engine.evidence_keys());
 
     // Print the standard data-file warnings last, as the other examples do.
     // The engine is already in hand, so the engine-taking helper prints the same
@@ -167,41 +167,18 @@ fn output_properties_by_component(engine: &impl AspectEngine) {
 /// Print the evidence keys device detection accepts.
 ///
 /// These are the keys that, when added to the evidence of a flow data, could
-/// affect the result. The engine advertises them through its evidence key
-/// filter. The filter is exposed as a trait object, so rather than relying on a
-/// concrete whitelist type the example probes the keys device detection is known
-/// to read.
-fn output_evidence_keys(filter: &dyn EvidenceKeyFilter) {
-    // The keys the Hash engine reads: the User-Agent (header and off-line query
-    // form), the User-Agent Client Hint headers, and the high-entropy blob keys.
-    const CANDIDATE_KEYS: &[&str] = &[
-        "header.user-agent",
-        "query.user-agent",
-        "header.sec-ch-ua",
-        "header.sec-ch-ua-full-version-list",
-        "header.sec-ch-ua-model",
-        "header.sec-ch-ua-mobile",
-        "header.sec-ch-ua-platform",
-        "header.sec-ch-ua-platform-version",
-        "header.sec-ch-ua-arch",
-        "header.sec-ch-ua-bitness",
-        "query.51d_gethighentropyvalues",
-        "cookie.51d_gethighentropyvalues",
-        // A control key that device detection does not read, to show the filter
-        // correctly excludes it.
-        "header.referer",
-    ];
-
+/// affect the result. Each header the data file reads is accepted as a header
+/// and as a query value, the query form being for off-line processing.
+fn output_evidence_keys(keys: &[String]) {
     println!();
     println!("--- Accepted evidence keys ---");
-    for key in CANDIDATE_KEYS {
-        let accepted = if filter.include(key) {
-            "accepted"
-        } else {
-            "not accepted"
-        };
-        println!("\t{key:<38}: {accepted}");
+    for key in keys {
+        println!("\t{key}");
     }
+    println!(
+        "\tand any query or cookie value named 51d_..., which the client-side \
+         JavaScript sends back"
+    );
 }
 
 /// A short display name for a property value type, used in the metadata listing.
@@ -295,10 +272,10 @@ mod tests {
  *   than 20 of the 200-plus properties available in the full data file, so the
  *   description and tier information is sparse for Lite.
  * - The evidence keys device detection accepts. These are the keys that, when
- *   added to a flow data's evidence, could affect the result. The engine
- *   advertises them through its evidence key filter; the example probes the
- *   User-Agent, the User-Agent Client Hint headers and the high-entropy blob keys
- *   against that filter, and a control key it does not read.
+ *   added to a flow data's evidence, could affect the result. Each header the
+ *   data file reads is accepted as a header and as a query value, alongside the
+ *   high-entropy values keys and the `51d_` values the client-side JavaScript
+ *   sends back.
  *
  * Finally the example prints the standard data-file warnings (Lite tier has
  * limited accuracy; a file more than 30 days old may miss the latest devices).

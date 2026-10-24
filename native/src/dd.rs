@@ -48,12 +48,16 @@ use std::ptr::NonNull;
 use std::sync::{Arc, OnceLock};
 
 use fiftyone_device_detection_sys as sys;
-use fiftyone_pipeline_core::{Error, Result};
+use fiftyone_pipeline_core::{constants, Error, Result};
 
 use crate::buffer::with_value_string;
 use crate::evidence::with_native_evidence;
 use crate::profile::PerformanceProfile;
 use crate::status::{status_name, status_to_result, NativeException, NativeStatus};
+
+/// The character a data set puts between the header names it joins into one
+/// pseudo header, for example the User-Agent Client Hints it reads together.
+const PSEUDO_HEADER_SEPARATOR: char = '\x1F';
 
 // ---------------------------------------------------------------------------
 // Status and exception trait wiring for the Device Detection common-cxx build
@@ -320,6 +324,43 @@ impl Manager {
             }
         }
         names
+    }
+
+    /// The header evidence keys the data set reads, lowercased, being each
+    /// header it names as a `header.` key and as a `query.` key, in the data
+    /// set's order.
+    ///
+    /// These are the keys the C++ engine's `getKeys` lists for the headers. A
+    /// pseudo header, which the data set builds by joining several headers, is
+    /// left out, because a request never carries one.
+    pub fn evidence_keys(&self) -> Vec<String> {
+        // Safety: the manager is initialized for the lifetime of `self`.
+        let count = unsafe { sys::fiftyoneDegreesShimHashGetEvidenceKeyCount(self.as_ptr()) };
+        let mut keys = Vec::with_capacity(count as usize * 2);
+        let mut buffer = vec![0u8; 256];
+        for index in 0..count {
+            // Safety: the buffer is writable for its full length.
+            let written = unsafe {
+                sys::fiftyoneDegreesShimHashGetEvidenceKey(
+                    self.as_ptr(),
+                    index,
+                    buffer.as_mut_ptr() as *mut c_char,
+                    buffer.len(),
+                )
+            };
+            let end = written.min(buffer.len());
+            let name = String::from_utf8_lossy(&buffer[..end]).to_lowercase();
+            if name.is_empty() || name.contains(PSEUDO_HEADER_SEPARATOR) {
+                continue;
+            }
+            for prefix in [
+                constants::EVIDENCE_HTTP_HEADER_PREFIX,
+                constants::EVIDENCE_QUERY_PREFIX,
+            ] {
+                keys.push(format!("{prefix}{}{name}", constants::EVIDENCE_SEPARATOR));
+            }
+        }
+        keys
     }
 
     /// The data set's name, which is the data file's tier (for example `Lite`,
