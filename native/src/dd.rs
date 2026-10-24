@@ -638,14 +638,20 @@ impl Results {
         Ok(value)
     }
 
-    /// The match metrics for the primary result: the match method, difference,
+    /// The match metrics of the detection: the match method, difference,
     /// drift, iterations and matched-node count.
     ///
-    /// These are computed during detection and live on the native result, not
+    /// The native results hold one result for each component, such as the
+    /// hardware or the browser, each from the header that matched it. As in
+    /// the C++ results, the method is the highest of any result and the other
+    /// metrics are summed across them. With no results every metric is zero,
+    /// which is the method `NONE`.
+    ///
+    /// These are computed during detection and live on the native results, not
     /// in the data file's property values, so they are read directly here
     /// rather than through [`value_as_string`](Self::value_as_string) (which
-    /// only resolves real data-file properties). Returns [`None`] when the
-    /// results carry no result, for example before any evidence is processed.
+    /// only resolves real data-file properties). Returns [`None`] only when the
+    /// native results cannot be read.
     pub fn match_metrics(&self) -> Option<MatchMetrics> {
         let mut method = 0;
         let mut difference = 0;
@@ -675,22 +681,59 @@ impl Results {
             matched_nodes,
         })
     }
+
+    /// The matched User-Agent of each result, without repeats, in result
+    /// order. Each is the evidence value the component was matched from, with
+    /// the characters the match did not use replaced by underscores. Empty
+    /// when nothing matched.
+    pub fn matched_user_agents(&self) -> Vec<String> {
+        // Safety: the results came from `ResultsHashCreate` and remain valid
+        // for the lifetime of `self`.
+        let count = unsafe { sys::fiftyoneDegreesShimHashGetResultCount(self.as_ptr()) };
+        let mut user_agents: Vec<String> = Vec::new();
+        let mut buffer = vec![0u8; MATCHED_USER_AGENT_BUFFER_LENGTH];
+        for index in 0..count {
+            // Safety: as above, and the buffer is writable for its full length.
+            let written = unsafe {
+                sys::fiftyoneDegreesShimHashGetMatchedUserAgent(
+                    self.as_ptr(),
+                    index,
+                    buffer.as_mut_ptr() as *mut c_char,
+                    buffer.len(),
+                )
+            };
+            if written == 0 {
+                continue;
+            }
+            let user_agent = String::from_utf8_lossy(&buffer[..written.min(buffer.len())]);
+            if !user_agents.iter().any(|known| *known == user_agent) {
+                user_agents.push(user_agent.into_owned());
+            }
+        }
+        user_agents
+    }
 }
 
-/// The Hash match metrics for a single detection, read from the native result.
+/// The buffer a matched User-Agent is read into. The native default records at
+/// most 500 characters of each.
+const MATCHED_USER_AGENT_BUFFER_LENGTH: usize = 4096;
+
+/// The Hash match metrics for a single detection, read from the native results.
 ///
 /// They describe how the match was found rather than the device itself: the
-/// algorithm used and how far the evidence was from a clean match.
+/// algorithm used and how far the evidence was from a clean match. Each is
+/// taken across the results, one for each component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchMetrics {
-    /// The match method enum value (0 None, 1 Performance, 2 Combined,
-    /// 3 Predictive). Use [`method_name`](Self::method_name) for the label.
+    /// The highest match method enum value of any result (0 None,
+    /// 1 Performance, 2 Combined, 3 Predictive). Use
+    /// [`method_name`](Self::method_name) for the label.
     pub method: i32,
     /// The total difference in hash values between the evidence and the match.
     /// The larger the value, the less confident the match.
     pub difference: i32,
-    /// The maximum drift, in character positions, of a matched substring from
-    /// where it was expected.
+    /// The total drift, in character positions, of the matched substrings from
+    /// where they were expected.
     pub drift: i32,
     /// The number of graph nodes visited to find the match.
     pub iterations: i32,
@@ -699,14 +742,14 @@ pub struct MatchMetrics {
 }
 
 impl MatchMetrics {
-    /// The match method as a label: `None`, `Performance`, `Combined` or
-    /// `Predictive`.
+    /// The match method as the specification names it: `NONE`,
+    /// `PERFORMANCE`, `COMBINED` or `PREDICTIVE`.
     pub fn method_name(&self) -> &'static str {
         match self.method {
-            1 => "Performance",
-            2 => "Combined",
-            3 => "Predictive",
-            _ => "None",
+            1 => "PERFORMANCE",
+            2 => "COMBINED",
+            3 => "PREDICTIVE",
+            _ => "NONE",
         }
     }
 }
@@ -729,4 +772,171 @@ fn exception_detail(exception: &mut sys::Exception) -> String {
         return String::from("native initialization reported a non-success status");
     }
     exception.message_or("native initialization failed with no message")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    use fiftyone_pipeline_core::Evidence;
+
+    /// The Hash data file `51DEGREES_DD_PATH` names, or the Lite file in a
+    /// `device-detection-cxx` checkout inside or beside the workspace.
+    fn data_file() -> Option<PathBuf> {
+        if let Ok(path) = std::env::var("51DEGREES_DD_PATH") {
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()?
+            .to_path_buf();
+        let roots = [workspace.clone(), workspace.parent()?.to_path_buf()];
+        roots
+            .into_iter()
+            .map(|root| {
+                root.join("device-detection-cxx")
+                    .join("device-detection-data")
+                    .join("51Degrees-LiteV4.1.hash")
+            })
+            .find(|path| path.is_file())
+    }
+
+    const CHROME_ON_WINDOWS: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+        AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+    fn detect(manager: &Arc<Manager>, key: &str, value: &str) -> Results {
+        let mut results = manager.create_results().expect("results allocate");
+        results
+            .process_evidence(&Evidence::builder().add(key, value).build())
+            .expect("detection succeeds");
+        results
+    }
+
+    /// The metrics of each result, read one at a time.
+    fn metrics_of_each_result(results: &Results) -> Vec<MatchMetrics> {
+        // Safety: the results are valid for the duration of the borrow.
+        let count = unsafe { sys::fiftyoneDegreesShimHashGetResultCount(results.as_ptr()) };
+        (0..count)
+            .map(|index| {
+                let mut metrics = MatchMetrics {
+                    method: -1,
+                    difference: -1,
+                    drift: -1,
+                    iterations: -1,
+                    matched_nodes: -1,
+                };
+                // Safety: as above, and every output pointer is writable.
+                let read = unsafe {
+                    sys::fiftyoneDegreesShimHashGetResultMetricsAt(
+                        results.as_ptr(),
+                        index,
+                        &mut metrics.method,
+                        &mut metrics.difference,
+                        &mut metrics.drift,
+                        &mut metrics.iterations,
+                        &mut metrics.matched_nodes,
+                    )
+                };
+                assert_eq!(read, 1, "result {index} should be readable");
+                metrics
+            })
+            .collect()
+    }
+
+    #[test]
+    fn match_metrics_are_taken_across_every_component() {
+        let Some(path) = data_file() else {
+            eprintln!("no Hash data file found; skipping match metrics");
+            return;
+        };
+        let manager = Manager::open(&path, PerformanceProfile::Default).expect("data file loads");
+        let results = detect(&manager, "header.user-agent", CHROME_ON_WINDOWS);
+        let each = metrics_of_each_result(&results);
+        assert!(each.len() > 1, "a result for each component: {each:?}");
+
+        let metrics = results.match_metrics().expect("metrics are readable");
+        assert_eq!(metrics.method, each.iter().map(|m| m.method).max().unwrap());
+        assert_eq!(
+            metrics.difference,
+            each.iter().map(|m| m.difference).sum::<i32>()
+        );
+        assert_eq!(metrics.drift, each.iter().map(|m| m.drift).sum::<i32>());
+        assert_eq!(
+            metrics.iterations,
+            each.iter().map(|m| m.iterations).sum::<i32>()
+        );
+        assert_eq!(
+            metrics.matched_nodes,
+            each.iter().map(|m| m.matched_nodes).sum::<i32>()
+        );
+        assert!(
+            metrics.iterations > each[0].iterations,
+            "{metrics:?} {each:?}"
+        );
+    }
+
+    #[test]
+    fn no_match_gives_zero_metrics_and_the_method_none() {
+        let Some(path) = data_file() else {
+            eprintln!("no Hash data file found; skipping metrics with no match");
+            return;
+        };
+        let manager = Manager::open(&path, PerformanceProfile::Default).expect("data file loads");
+        let results = detect(&manager, "header.x-not-read", "nothing to match");
+        let metrics = results.match_metrics().expect("metrics are readable");
+        assert_eq!(
+            metrics,
+            MatchMetrics {
+                method: 0,
+                difference: 0,
+                drift: 0,
+                iterations: 0,
+                matched_nodes: 0,
+            }
+        );
+        assert_eq!(metrics.method_name(), "NONE");
+        assert!(results.matched_user_agents().is_empty());
+    }
+
+    #[test]
+    fn methods_are_named_as_the_specification_names_them() {
+        for (method, name) in [
+            (0, "NONE"),
+            (1, "PERFORMANCE"),
+            (2, "COMBINED"),
+            (3, "PREDICTIVE"),
+        ] {
+            let metrics = MatchMetrics {
+                method,
+                difference: 0,
+                drift: 0,
+                iterations: 0,
+                matched_nodes: 0,
+            };
+            assert_eq!(metrics.method_name(), name);
+        }
+    }
+
+    /// Each matched User-Agent is the evidence with the characters its match
+    /// did not use replaced by underscores.
+    #[test]
+    fn each_matched_user_agent_keeps_the_characters_its_match_used() {
+        let Some(path) = data_file() else {
+            eprintln!("no Hash data file found; skipping matched User-Agents");
+            return;
+        };
+        let manager = Manager::open(&path, PerformanceProfile::Default).expect("data file loads");
+        let results = detect(&manager, "header.user-agent", CHROME_ON_WINDOWS);
+        let matched = results.matched_user_agents();
+        assert!(!matched.is_empty());
+        for user_agent in &matched {
+            assert_eq!(user_agent.len(), CHROME_ON_WINDOWS.len(), "{user_agent}");
+            for (kept, original) in user_agent.chars().zip(CHROME_ON_WINDOWS.chars()) {
+                assert!(kept == '_' || kept == original, "{user_agent}");
+            }
+        }
+    }
 }
