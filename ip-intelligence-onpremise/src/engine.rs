@@ -56,11 +56,11 @@ use crate::builder::IpIntelligenceOnPremiseEngineBuilder;
 /// workspace bundles for tests.
 pub const DEFAULT_DATA_SOURCE_TIER: &str = "Lite";
 
-/// A fixed list of client IP keys, which the engine no longer uses.
+/// A fixed list of client IP keys. The engine does not read it.
 ///
 /// The engine accepts the keys its data file defines, which
-/// [`IpIntelligenceOnPremiseEngine::evidence_keys`] lists. This list leaves
-/// out most of those and names keys no data file defines.
+/// [`IpIntelligenceOnPremiseEngine::evidence_keys`] lists. This list holds
+/// two of those and names keys no data file defines.
 #[deprecated(note = "The engine reads its evidence keys from its data file. Use \
             `IpIntelligenceOnPremiseEngine::evidence_keys`.")]
 pub const IP_EVIDENCE_KEYS: &[&str] = &[
@@ -581,7 +581,7 @@ mod tests {
         assert!(!filter.include("query.51d.client-ip"));
     }
 
-    /// A client IP under a key the old fixed list left out is looked up.
+    /// A client IP under a `51d` key alone is looked up.
     #[test]
     fn a_client_ip_under_a_51d_key_alone_is_looked_up() {
         let Some(engine) = asn_engine() else {
