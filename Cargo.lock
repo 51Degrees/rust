@@ -819,6 +819,7 @@ dependencies = [
 name = "fiftyone-json-builder"
 version = "4.5.2"
 dependencies = [
+ "fiftyone-cloud-request-engine",
  "fiftyone-pipeline-core",
  "fiftyone-pipeline-engines",
  "fiftyone-pipeline-engines-fiftyone",
