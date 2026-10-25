@@ -90,9 +90,11 @@ impl IpIntelligenceOnPremiseEngineBuilder {
     ///
     /// The defaults match the other implementations: the engine-default
     /// performance profile, every property populated, and automatic updates
-    /// and the file-system watcher on. Updates take effect once the engine is
-    /// registered with a [`DataUpdateService`], which [`Self::data_update_service`]
-    /// and [`Self::build_shared`] do.
+    /// and the file-system watcher on, so a licence key is needed before the
+    /// engine builds unless [`Self::auto_update`] turns the updates off.
+    /// Updates take effect once the engine is registered with a
+    /// [`DataUpdateService`], which [`Self::data_update_service`] and
+    /// [`Self::build_shared`] do.
     pub fn new(data_file_path: impl Into<PathBuf>) -> Self {
         IpIntelligenceOnPremiseEngineBuilder {
             data_file_path: data_file_path.into(),
@@ -180,8 +182,10 @@ impl IpIntelligenceOnPremiseEngineBuilder {
         self
     }
 
-    /// Set the licence keys the update URL carries. The Distributor refuses a
-    /// poll without one.
+    /// Set the licence keys the update URL carries. The Distributor serves
+    /// nothing without one, so the engine refuses to build with automatic
+    /// updates or update on startup on and none set, as the other
+    /// implementations do.
     pub fn data_update_license_keys<I, S>(mut self, keys: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -218,8 +222,10 @@ impl IpIntelligenceOnPremiseEngineBuilder {
     /// Opens the native IP-intelligence manager with the configured performance
     /// profile and property restriction, then assembles the engine and its
     /// data-file run-time state. Returns the native error if the data file
-    /// fails to load. Registering with a data update service needs the shared
-    /// engine [`Self::build_shared`] returns, so this refuses to build when
+    /// fails to load. Refuses, before opening the file, when automatic updates
+    /// or update on startup are on and no licence key is set. Registering with
+    /// a data update service needs the shared engine [`Self::build_shared`]
+    /// returns, so this also refuses to build when
     /// [`Self::data_update_service`] was set.
     pub fn build(self) -> Result<IpIntelligenceOnPremiseEngine> {
         if self.data_update_service.is_some() {
@@ -236,6 +242,8 @@ impl IpIntelligenceOnPremiseEngineBuilder {
     ///
     /// Registration starts the file-system watcher and schedules the polls the
     /// options configure, and polls once first when update on startup is on.
+    /// Refuses, before opening the file, when automatic updates or update on
+    /// startup are on and no licence key is set.
     pub fn build_shared(mut self) -> Result<Arc<IpIntelligenceOnPremiseEngine>> {
         let service = self.data_update_service.take();
         let engine = Arc::new(self.build_engine()?);
@@ -254,6 +262,9 @@ impl IpIntelligenceOnPremiseEngineBuilder {
     }
 
     fn build_engine(self) -> Result<IpIntelligenceOnPremiseEngine> {
+        let configuration = self.data_file_configuration();
+        configuration.check_license_keys()?;
+
         let property_refs: Option<Vec<&str>> = if self.requested_properties.is_empty() {
             None
         } else {
@@ -279,7 +290,7 @@ impl IpIntelligenceOnPremiseEngineBuilder {
             .or_else(|| manager.data_set_name())
             .unwrap_or_else(|| DEFAULT_DATA_SOURCE_TIER.to_owned());
 
-        let data_file = Arc::new(AspectEngineDataFile::new(self.data_file_configuration()));
+        let data_file = Arc::new(AspectEngineDataFile::new(configuration));
 
         // Record the data file's embedded publish date, read from its header, so
         // the metadata reports it and the update service can use it for the
@@ -347,6 +358,7 @@ mod tests {
             Some(DATA_DOWNLOAD_TYPE)
         );
         assert!(config.data_update_license_keys.is_empty());
+        assert!(config.license_key_required_for_updates);
         assert_eq!(
             config.data_file_path.as_deref(),
             Some(std::path::Path::new("does-not-exist.ipi"))
@@ -399,6 +411,26 @@ mod tests {
             .err()
             .expect("build refuses");
         assert!(error.to_string().contains("build_shared"), "{error}");
+    }
+
+    /// With the default automatic updates and no licence key the build refuses
+    /// before it opens the file, so the error is about the key and not the
+    /// file. With the updates off the file is opened, and the missing file is
+    /// the error.
+    #[test]
+    fn a_missing_licence_key_refuses_before_the_file_is_opened() {
+        let error = IpIntelligenceOnPremiseEngineBuilder::new("does-not-exist.ipi")
+            .build()
+            .err()
+            .expect("the build refuses");
+        assert!(error.to_string().contains("licence key"), "{error}");
+
+        let error = IpIntelligenceOnPremiseEngineBuilder::new("does-not-exist.ipi")
+            .auto_update(false)
+            .build()
+            .err()
+            .expect("the file does not exist");
+        assert!(!error.to_string().contains("licence key"), "{error}");
     }
 
     #[test]

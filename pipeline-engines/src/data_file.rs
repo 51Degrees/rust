@@ -36,6 +36,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
+use fiftyone_pipeline_core::{Error, Result};
 
 /// The default polling interval, 30 minutes.
 pub const DEFAULT_POLLING_INTERVAL_SECONDS: u64 = 30 * 60;
@@ -89,8 +90,9 @@ pub const DEFAULT_IDENTIFIER: &str = "Default";
 ///
 /// Build one with [`DataFileConfiguration::builder`]. The defaults are that
 /// automatic updates and the file-system watcher are on, MD5 verification and
-/// the `If-Modified-Since` header are on, update-on-startup is off, and the
-/// content is assumed gzip-compressed.
+/// the `If-Modified-Since` header are on, update-on-startup is off, the
+/// content is assumed gzip-compressed, and a licence key is required before
+/// automatic updates or update on startup run.
 #[derive(Debug, Clone)]
 pub struct DataFileConfiguration {
     /// Identifier used to tell apart the data files of a multi-file engine.
@@ -132,6 +134,10 @@ pub struct DataFileConfiguration {
     /// The download type the URL formatter sends, which names the data file
     /// format the Distributor should serve, such as `HashV41` or `IPIV41`.
     pub data_download_type: Option<String>,
+    /// Whether an engine refuses to build with automatic updates or update on
+    /// startup on and no licence key, as the Distributor serves nothing
+    /// without one. On unless the update source needs no key.
+    pub license_key_required_for_updates: bool,
 }
 
 impl DataFileConfiguration {
@@ -144,6 +150,43 @@ impl DataFileConfiguration {
     /// disk).
     pub fn memory_builder() -> DataFileConfigurationBuilder {
         DataFileConfigurationBuilder::new(None)
+    }
+
+    /// Checks that the licence key the update source needs is set.
+    ///
+    /// Fails when [`Self::license_key_required_for_updates`] is on, automatic
+    /// updates or update on startup are on, and no key is set or every key is
+    /// blank. The engine builders call this before they open the data file,
+    /// as the other 51Degrees implementations do, so a deployment without a
+    /// key fails at startup instead of being refused at every poll.
+    pub fn check_license_keys(&self) -> Result<()> {
+        if !self.license_key_required_for_updates {
+            return Ok(());
+        }
+        let wanted: Vec<&str> = [
+            (self.automatic_updates_enabled, "automatic updates"),
+            (self.update_on_startup, "update on startup"),
+        ]
+        .into_iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, name)| name)
+        .collect();
+        let has_key = self
+            .data_update_license_keys
+            .iter()
+            .any(|key| !key.trim().is_empty());
+        if wanted.is_empty() || has_key {
+            return Ok(());
+        }
+        Err(Error::configuration(format!(
+            "A licence key is needed for {} and none is set. Set it with \
+             data_update_license_keys, or turn the updates off, with auto_update(false) \
+             and update_on_startup(false) on a pipeline or engine builder or with \
+             automatic_updates_enabled(false) and update_on_startup(false) on a data \
+             file configuration, for a data file no licence serves, such as the free \
+             Lite file.",
+            wanted.join(" and ")
+        )))
     }
 }
 
@@ -171,6 +214,7 @@ impl DataFileConfigurationBuilder {
                 data_update_license_keys: Vec::new(),
                 url_formatter: None,
                 data_download_type: None,
+                license_key_required_for_updates: true,
             },
         }
     }
@@ -255,6 +299,14 @@ impl DataFileConfigurationBuilder {
     /// Set the download type the URL formatter sends.
     pub fn data_download_type(mut self, download_type: impl Into<String>) -> Self {
         self.config.data_download_type = Some(download_type.into());
+        self
+    }
+
+    /// Set whether an engine refuses to build with automatic updates or update
+    /// on startup on and no licence key. On by default. Turn it off for an
+    /// update source that serves the file without one.
+    pub fn license_key_required_for_updates(mut self, required: bool) -> Self {
+        self.config.license_key_required_for_updates = required;
         self
     }
 
@@ -411,10 +463,56 @@ mod tests {
         assert!(cfg.decompress_content);
         assert!(cfg.verify_md5);
         assert!(cfg.verify_modified_since);
+        assert!(cfg.license_key_required_for_updates);
         assert_eq!(
             cfg.data_file_path.as_deref(),
             Some(std::path::Path::new("data.dat"))
         );
+    }
+
+    /// A licence key is required once automatic updates or update on startup
+    /// are on, a blank key counts as none, and a source that needs no key or a
+    /// configuration with both off passes.
+    #[test]
+    fn a_licence_key_is_required_for_updates() {
+        let missing = DataFileConfiguration::builder("d.dat")
+            .build()
+            .check_license_keys()
+            .expect_err("automatic updates need a key")
+            .to_string();
+        assert!(missing.contains("automatic updates"), "{missing}");
+        assert!(missing.contains("auto_update(false)"), "{missing}");
+
+        assert!(DataFileConfiguration::builder("d.dat")
+            .data_update_license_keys([" "])
+            .build()
+            .check_license_keys()
+            .is_err());
+
+        let startup = DataFileConfiguration::builder("d.dat")
+            .automatic_updates_enabled(false)
+            .update_on_startup(true)
+            .build()
+            .check_license_keys()
+            .expect_err("update on startup needs a key")
+            .to_string();
+        assert!(startup.contains("update on startup"), "{startup}");
+
+        assert!(DataFileConfiguration::builder("d.dat")
+            .data_update_license_keys(["KEY1"])
+            .build()
+            .check_license_keys()
+            .is_ok());
+        assert!(DataFileConfiguration::builder("d.dat")
+            .license_key_required_for_updates(false)
+            .build()
+            .check_license_keys()
+            .is_ok());
+        assert!(DataFileConfiguration::builder("d.dat")
+            .automatic_updates_enabled(false)
+            .build()
+            .check_license_keys()
+            .is_ok());
     }
 
     #[test]

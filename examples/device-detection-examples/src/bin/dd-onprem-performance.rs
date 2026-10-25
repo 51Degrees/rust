@@ -191,6 +191,8 @@ fn build_benchmark_pipeline(
         // fastest realistic configuration for a throughput benchmark.
         .property("IsMobile")
         .share_usage(false)
+        // Off so no licence key is needed.
+        .auto_update(false)
         .build()
         .context("failed to build the benchmark pipeline")
 }
