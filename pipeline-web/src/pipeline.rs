@@ -36,6 +36,9 @@
 //!
 //! 1. [`fiftyone_pipeline_engines_fiftyone::SequenceElement`] first, so the
 //!    session id and sequence number exist before anything else reads them.
+//!    It is only added when the application's elements do not already hold
+//!    one, so the elements of a pipeline builder with usage sharing on keep
+//!    their own.
 //! 2. the application's own elements, in the order they were added.
 //! 3. [`fiftyone_pipeline_engines_fiftyone::SetHeadersElement`] (only when
 //!    [`WebIntegrationOptions::use_set_header_properties`] is set), after the
@@ -60,7 +63,9 @@ use std::sync::Arc;
 
 use fiftyone_javascript_builder::JavaScriptBuilderElement;
 use fiftyone_json_builder::JsonBuilderElement;
-use fiftyone_pipeline_core::constants::{DEFAULT_CORE_JS_ENDPOINT, DEFAULT_JSON_ENDPOINT};
+use fiftyone_pipeline_core::constants::{
+    DEFAULT_CORE_JS_ENDPOINT, DEFAULT_JSON_ENDPOINT, EVIDENCE_HTTP_HEADER_PREFIX,
+};
 use fiftyone_pipeline_core::{EvidenceKeyFilterWhitelist, FlowElement, Pipeline, Result};
 use fiftyone_pipeline_engines_fiftyone::{SequenceElement, SetHeadersElement};
 
@@ -152,11 +157,7 @@ impl WebPipeline {
         let ordered = order_elements(elements, &options);
 
         // The Vary whitelist is the union of the header keys every element in
-        // the pipeline accepts. The web layer must supply this explicitly to the
-        // endpoints because the pipeline-wide filter is opaque, so it is
-        // collected here from the elements the builder is given. Only elements
-        // whose filter is an EvidenceKeyFilterWhitelist can be enumerated; that
-        // covers the standard 51Degrees elements, which is what drives Vary.
+        // the pipeline names, collected here and handed to the endpoints.
         let vary_whitelist = collect_vary_whitelist(&ordered);
 
         let mut builder =
@@ -225,8 +226,14 @@ fn order_elements(
 ) -> Vec<Arc<dyn FlowElement>> {
     let mut ordered: Vec<Arc<dyn FlowElement>> = Vec::with_capacity(elements.len() + 4);
 
-    // 1. Sequence element first.
-    ordered.push(Arc::new(SequenceElement::new()));
+    // 1. Sequence element first, unless the application's elements already
+    // hold one, as a pipeline builder's elements do with usage sharing on.
+    let has_sequence = elements
+        .iter()
+        .any(|element| element.data_key() == SequenceElement::DEFAULT_ELEMENT_DATA_KEY);
+    if !has_sequence {
+        ordered.push(Arc::new(SequenceElement::new()));
+    }
 
     // 2. The application's own elements, in their given order.
     ordered.extend(elements);
@@ -246,29 +253,36 @@ fn order_elements(
     ordered
 }
 
-/// Build the union of the `header.*` keys accepted by the elements, for the
-/// `Vary` header.
+/// Build the union of the `header.*` keys the elements accept, for the `Vary`
+/// header, as the specification asks: every header in the pipeline's evidence
+/// key filter.
 ///
-/// Each element advertises its evidence keys through an
-/// [`EvidenceKeyFilterWhitelist`] in the standard 51Degrees elements. Because
-/// the [`fiftyone_pipeline_core::EvidenceKeyFilter`] trait object cannot be
-/// enumerated, the whitelist is rebuilt here from the keys each element's
-/// whitelist exposes, when its filter is a whitelist. An element with an opaque
-/// filter contributes nothing, which only means its headers do not appear in
-/// `Vary`; in practice every HTTP-evidence element uses a whitelist.
-///
-/// The probe is limited to a small, fixed set of candidate header keys the
-/// 51Degrees elements are known to accept, because a filter cannot list its own
-/// keys. This is sufficient for the `Vary` header, whose purpose is to name the
-/// request headers that change the result.
+/// An element's filter lists the keys it names through
+/// [`fiftyone_pipeline_core::EvidenceKeyFilter::named_keys`], so the engines
+/// contribute the headers their data files define and the JavaScript builder
+/// the host and protocol headers. A filter that decides key by key and has no
+/// list is probed with the fixed set of headers the 51Degrees elements are
+/// known to accept, so such an element still names the common headers.
 fn collect_vary_whitelist(elements: &[Arc<dyn FlowElement>]) -> EvidenceKeyFilterWhitelist {
+    let header_prefix = format!("{EVIDENCE_HTTP_HEADER_PREFIX}.");
     let mut keys: Vec<String> = Vec::new();
 
     for element in elements {
         let filter = element.evidence_key_filter();
-        for candidate in CANDIDATE_HEADER_KEYS {
-            if filter.include(candidate) && !keys.iter().any(|k| k == candidate) {
-                keys.push((*candidate).to_owned());
+        let named: Vec<String> = match filter.named_keys() {
+            Some(named) => named
+                .into_iter()
+                .filter(|key| key.starts_with(&header_prefix))
+                .collect(),
+            None => CANDIDATE_HEADER_KEYS
+                .iter()
+                .filter(|candidate| filter.include(candidate))
+                .map(|candidate| (*candidate).to_owned())
+                .collect(),
+        };
+        for key in named {
+            if !keys.iter().any(|k| k == &key) {
+                keys.push(key);
             }
         }
     }
@@ -277,13 +291,10 @@ fn collect_vary_whitelist(elements: &[Arc<dyn FlowElement>]) -> EvidenceKeyFilte
 }
 
 /// The HTTP-header evidence keys the standard 51Degrees elements may accept,
-/// probed when building the `Vary` whitelist.
-///
-/// A filter cannot enumerate the keys it includes, so the web layer probes this
-/// fixed set against each element's filter. It covers the User-Agent and the
-/// User-Agent Client Hint headers device detection consumes, plus the host and
-/// protocol headers the JavaScript builder reads. Extending detection to a new
-/// request header means adding it here so it appears in `Vary`.
+/// probed against a filter that cannot list its own keys when building the
+/// `Vary` whitelist. It covers the User-Agent and the User-Agent Client Hint
+/// headers device detection consumes, plus the host and protocol headers the
+/// JavaScript builder reads.
 const CANDIDATE_HEADER_KEYS: &[&str] = &[
     "header.user-agent",
     "header.host",

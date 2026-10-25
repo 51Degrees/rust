@@ -53,11 +53,13 @@
 //!   coordination notes, only the cloud path may cache). It still embeds an
 //!   `AspectEngineBase` with no cache so its `process` flow matches the rest of
 //!   the engine layer.
-//! - **Driven from the client IP.** IP Intelligence is looked up from the client
-//!   IP string rather than a native evidence array, using
-//!   [`fiftyone_native::evidence::client_ip_from_evidence`]. The accepted
-//!   evidence keys are the IP keys ([`fiftyone_pipeline_core::constants::EVIDENCE_CLIENT_IP_KEY`],
-//!   the `query`/`server` client-ip variants and the 51Degrees-prefixed forms).
+//! - **Evidence keys from the data file.** The engine accepts the client IP
+//!   keys its data file defines, for example `query.client-ip-51d` and
+//!   `server.client-ip`, and reads them again when it refreshes
+//!   ([`IpIntelligenceOnPremiseEngine::evidence_keys`]). Every query value is
+//!   tried before any server value, in the data file's order, and the first
+//!   that reads as an IP address is looked up through the native evidence
+//!   entry point.
 //! - **Refreshable.** The loaded [`fiftyone_native::ipi::Manager`] lives behind
 //!   an [`arc_swap::ArcSwap`] so `OnPremiseAspectEngine::refresh` can hot-swap
 //!   a freshly reloaded data set while concurrent `process` calls keep using the
@@ -100,8 +102,10 @@
 mod builder;
 mod engine;
 
-pub use builder::IpIntelligenceOnPremiseEngineBuilder;
-pub use engine::{IpIntelligenceOnPremiseEngine, DEFAULT_DATA_SOURCE_TIER, IP_EVIDENCE_KEYS};
+pub use builder::{IpIntelligenceOnPremiseEngineBuilder, DATA_DOWNLOAD_TYPE};
+#[allow(deprecated)]
+pub use engine::IP_EVIDENCE_KEYS;
+pub use engine::{IpIntelligenceOnPremiseEngine, DEFAULT_DATA_SOURCE_TIER};
 
 // Re-export the shared data type and key so a downstream application can depend
 // only on this crate and still read the result without importing the shared

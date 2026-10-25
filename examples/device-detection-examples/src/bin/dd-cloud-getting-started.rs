@@ -66,14 +66,15 @@ pub struct ExampleOptions {
 /// strongly-typed `IsMobile`, `HardwareVendor`, `BrowserName` and `PlatformName`
 /// results for each with explicit no-value handling.
 pub fn run(options: ExampleOptions) -> Result<()> {
-    // Build the cloud pipeline. No ShareUsageElement is added: usage sharing is
-    // forbidden for console examples and required only for web examples. A
-    // production web deployment should enable it with `.share_usage(true)`.
+    // Build the cloud pipeline. Usage sharing is off because this is a console
+    // example, whose evidence 51Degrees already holds. In normal operation
+    // leave it on, which is the builder's default.
     let mut builder = DeviceDetectionPipelineBuilder::cloud(options.resource_key);
     if let Some(endpoint) = options.endpoint {
         builder = builder.endpoint(endpoint);
     }
     let pipeline = builder
+        .share_usage(false)
         .build()
         .context("failed to build the cloud device-detection pipeline")?;
 
@@ -263,10 +264,9 @@ mod tests {
  * resource key does not grant it) a pricing message is printed once, pointing to
  * the configurator where a key with more properties can be created.
  *
- * Usage sharing is intentionally not enabled here. Console examples must not add
- * the `ShareUsageElement`. A production web deployment should enable usage
- * sharing (call `.share_usage(true)` on the builder) to contribute anonymous
- * usage data, which improves detection for everyone.
+ * Usage sharing is turned off with `.share_usage(false)`, because this is a
+ * console example. In normal operation leave it on, which is the builder's
+ * default, so 51Degrees receives evidence that improves detection.
  *
  * The resource key is read from the first command-line argument or the
  * `51DEGREES_RESOURCE_KEY` environment variable. Create a free key, or a paid key

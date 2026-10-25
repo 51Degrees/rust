@@ -128,19 +128,21 @@ impl FlowElement for SimpleClientSideElement {
 /// Build the web pipeline: the client-side element plus usage sharing, wrapped by
 /// the web integration so the client-side endpoints are mounted.
 ///
-/// Web examples MUST enable usage sharing, so the usage-sharing element is always
-/// added. It is configured to batch generously here so the example does not
-/// attempt a network send during a short run.
-fn build_web_pipeline() -> Result<WebPipeline> {
-    let share_usage = Arc::new(ShareUsageElement::new(
-        ShareUsageConfig::builder()
-            .minimum_entries_per_message(1000)
-            .maximum_queue_size(10_000)
-            .build(),
-    ));
-
-    let elements: Vec<Arc<dyn FlowElement>> =
-        vec![Arc::new(SimpleClientSideElement::new()), share_usage];
+/// Web examples MUST enable usage sharing, so the binary passes true for
+/// `share_usage`. The element batches generously, so a short run of the binary
+/// sends nothing, because stopping the server ends the process first. The tests
+/// pass false, because they drop the pipeline, and a dropped element sends what
+/// it holds.
+fn build_web_pipeline(share_usage: bool) -> Result<WebPipeline> {
+    let mut elements: Vec<Arc<dyn FlowElement>> = vec![Arc::new(SimpleClientSideElement::new())];
+    if share_usage {
+        elements.push(Arc::new(ShareUsageElement::new(
+            ShareUsageConfig::builder()
+                .minimum_entries_per_message(1000)
+                .maximum_queue_size(10_000)
+                .build(),
+        )));
+    }
 
     // The default web options enable the client-side endpoints (the JSON and
     // JavaScript builders), which is exactly what this example needs.
@@ -231,7 +233,7 @@ pub fn run(options: &ExampleOptions) -> Result<()> {
     // before the async runtime is entered. tokio forbids dropping a runtime from
     // inside another runtime's async context, so building here, rather than
     // inside `block_on`, avoids that panic. This mirrors the test harness below.
-    let web = build_web_pipeline()?;
+    let web = build_web_pipeline(true)?;
     let app = build_app(&web);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -277,13 +279,14 @@ mod tests {
     /// Build a multi-thread runtime, send one request through the app and return
     /// the status and body.
     ///
-    /// The runtime and the web pipeline (which owns the usage-sharing element, and
-    /// through it a `reqwest::blocking` client with its own inner runtime) are
-    /// created and dropped inside this plain, non-async test function, never from
-    /// within an async context. That is what keeps the blocking client's runtime
-    /// from being torn down inside an outer runtime, which would panic. The web
-    /// middleware processes the pipeline on a `spawn_blocking` thread, so a
-    /// multi-thread runtime with a blocking pool is used.
+    /// The web pipeline is built without usage sharing, so the test sends nothing
+    /// to 51Degrees. The runtime and the pipeline are still created and dropped
+    /// inside this plain, non-async test function, as the binary needs them to be
+    /// with usage sharing on, because the usage-sharing element's
+    /// `reqwest::blocking` client must not have its inner runtime torn down inside
+    /// an outer runtime. The web middleware processes the pipeline on a
+    /// `spawn_blocking` thread, so a multi-thread runtime with a blocking pool is
+    /// used.
     fn request(uri: &str) -> (StatusCode, String) {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -291,7 +294,7 @@ mod tests {
             .build()
             .expect("the test runtime builds");
 
-        let web = build_web_pipeline().expect("the web pipeline builds");
+        let web = build_web_pipeline(false).expect("the web pipeline builds");
         let app = build_app(&web);
 
         let result = runtime.block_on(async {
@@ -373,9 +376,10 @@ mod tests {
  *
  * Usage sharing
  * -------------
- * Web examples MUST enable usage sharing, so this pipeline always includes the
- * usage-sharing element. (It is configured to batch generously here so a short
- * demo run does not attempt a network send.)
+ * Web examples MUST enable usage sharing, so the binary's pipeline includes the
+ * usage-sharing element. It batches generously, so a short demo run sends
+ * nothing. The tests leave the element out, because they drop the pipeline and
+ * a dropped element sends what it holds.
  *
  * Running it
  * ----------

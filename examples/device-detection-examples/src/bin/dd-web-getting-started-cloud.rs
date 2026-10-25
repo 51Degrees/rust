@@ -83,17 +83,22 @@ pub struct Options {
 /// that discovery up front so the build does no cloud call, which the integration
 /// test uses to assemble the app offline. Passing `None` lets the builder fetch
 /// the discovery from the cloud, which is the live path the binary takes.
+///
+/// `share_usage` is true when the binary serves the page. The tests pass false,
+/// so a test run sends nothing to 51Degrees.
 pub fn build_app(
     resource_key: &str,
     endpoint: Option<&str>,
     state: Option<CloudEngineState>,
+    share_usage: bool,
 ) -> anyhow::Result<Router> {
-    // Build the cloud device-detection pipeline. Usage sharing is REQUIRED for a
-    // web example (it lets 51Degrees improve detection for everyone), so it is
-    // turned on here, unlike the console examples where it must stay off.
+    // Build the cloud device-detection pipeline. Usage sharing is required for
+    // a web example, because it lets 51Degrees improve detection. It is on by
+    // default, and is set here from the caller so the binary turns it on and
+    // the tests turn it off. The console examples turn it off.
     let mut builder = DeviceDetectionPipelineBuilder::cloud(resource_key)
         .set_state_opt(state)
-        .share_usage(true);
+        .share_usage(share_usage);
     // The cloud endpoint. Unset, the cloud request engine reads
     // 51DEGREES_CLOUD_ENDPOINT itself, and it is passed here as well so the
     // choice is visible. A host other than cloud.51degrees.com is an on premise
@@ -140,7 +145,12 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     // panic.
     // No injected state on the live path: the builder fetches discovery from the
     // cloud as it builds.
-    let app = build_app(&options.resource_key, options.endpoint.as_deref(), None)?;
+    let app = build_app(
+        &options.resource_key,
+        options.endpoint.as_deref(),
+        None,
+        true,
+    )?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -326,6 +336,7 @@ mod tests {
             "resource-key-placeholder",
             None,
             Some(CloudEngineState::default()),
+            false,
         )
         .unwrap();
 
@@ -361,6 +372,7 @@ mod tests {
             "resource-key-placeholder",
             None,
             Some(CloudEngineState::default()),
+            false,
         )
         .unwrap();
         let css = runtime.block_on(async { dispatch(&app, ASSETS_CSS_ROUTE).await });
@@ -394,6 +406,7 @@ mod tests {
             &resource_key,
             examples_shared::cloud_endpoint_from_env().as_deref(),
             None,
+            false,
         )
         .unwrap();
         let (status, has_accept_ch) = runtime.block_on(async {
@@ -457,9 +470,9 @@ mod tests {
  *      the resulting `complete` event and appends a refreshed results table into
  *      `#content`, so Apple models and screen dimensions become available.
  *
- * Usage sharing is enabled (`.share_usage(true)`), which web deployments are
- * expected to do so anonymous evidence improves detection for everyone. The
- * console examples in this crate deliberately leave it off.
+ * Usage sharing is on (`.share_usage(true)`), as web deployments are expected
+ * to have it, so evidence from real requests improves detection. The console
+ * examples in this crate turn it off.
  *
  * The page is written to the shared 51Degrees example design system: it
  * references the vendored `examples-main.min.css` and `examples.min.js`

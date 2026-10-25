@@ -148,7 +148,15 @@ static void trackAllocation(void* pointer, size_t size) {
 
 static void untrackAllocation(void *pointer) {
 	size_t size;
-	int shard = getShardFromPointer(pointer);
+	int shard;
+
+	// The standard free accepts a null pointer, and the API relies on that
+	// throughout its clean up paths, so the tracking free must accept one
+	// too rather than assert on a record it will never find.
+	if (pointer == NULL) {
+		return;
+	}
+	shard = getShardFromPointer(pointer);
 
 	// Get the size of the memory being freed and free the tracking memory.
 #ifndef FIFTYONE_DEGREES_NO_THREADING

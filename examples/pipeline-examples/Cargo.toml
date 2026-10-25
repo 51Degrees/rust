@@ -15,7 +15,12 @@ homepage.workspace = true
 # Device Detection and IP Intelligence results. Default features (cloud +
 # on-premise) are kept.
 fiftyone-device-detection = { version = "4.5.2" }
-fiftyone-ip-intelligence = { version = "4.5.2" }
+# The facade's default `share-usage` feature is left out, so its pipeline
+# builders keep usage sharing off in these examples. Every crate in this
+# workspace leaves it out, because Cargo merges a dependency's features across
+# the workspace. In normal operation keep the default features, which turn
+# usage sharing on.
+fiftyone-ip-intelligence = { version = "4.5.2", default-features = false, features = ["cloud", "on-premise"] }
 
 # Core pipeline plumbing and the engine traits the examples introspect.
 fiftyone-pipeline-core = { version = "4.5.2" }

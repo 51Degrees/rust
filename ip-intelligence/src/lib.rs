@@ -48,9 +48,25 @@
 //!     and yields an [`OnPremiseIpIntelligencePipelineBuilder`] that assembles a
 //!     single [`IpIntelligenceOnPremiseEngine`].
 //!
+//!   Usage sharing is on by default in both builders, which then add a
+//!   sequence element before the engines and a usage-sharing element after
+//!   them. A console or off-line tool turns it off with `share_usage(false)`.
+//!
 //! Both deployments populate the same [`IpIntelligenceDataBase`] under the same
 //! [`IP_DATA_KEY`], so an application can swap one for the other without touching
 //! its read code.
+//!
+//! # Data updates are on by default
+//!
+//! An on-premise pipeline keeps its data file current, as the other languages'
+//! pipelines do. The builder creates a `DataUpdateService` the pipeline owns,
+//! which polls the 51Degrees Distributor every thirty minutes, staggered by up
+//! to ten minutes, and refreshes the engine when the file changes on disk. The
+//! Distributor needs the licence keys set with `.data_update_license_keys(..)`
+//! and refuses a poll without one, so a deployment without a key turns polling
+//! off with `.auto_update(false)`. `.file_system_watcher(false)` turns the
+//! watcher off, and `pipeline.resource::<DataUpdateService>()` reaches the
+//! service for a check on demand.
 //!
 //! # Features
 //!
@@ -59,6 +75,8 @@
 //!
 //! - `cloud` (default): the cloud engine and the cloud request engine.
 //! - `on-premise` (default): the native on-premise engine.
+//! - `share-usage` (default): usage sharing on in both builders, and the
+//!   built-in transport it sends with.
 //!
 //! See [`IpIntelligencePipelineBuilder::cloud`] and
 //! [`IpIntelligencePipelineBuilder::on_premise`] for runnable examples of each
@@ -99,9 +117,11 @@ pub use fiftyone_ip_intelligence_cloud::{
     IpIntelligenceCloudEngine, IpIntelligenceCloudEngineBuilder,
 };
 #[cfg(feature = "on-premise")]
+#[allow(deprecated)]
+pub use fiftyone_ip_intelligence_onpremise::IP_EVIDENCE_KEYS;
+#[cfg(feature = "on-premise")]
 pub use fiftyone_ip_intelligence_onpremise::{
     IpIntelligenceOnPremiseEngine, IpIntelligenceOnPremiseEngineBuilder, DEFAULT_DATA_SOURCE_TIER,
-    IP_EVIDENCE_KEYS,
 };
 
 #[cfg(feature = "cloud")]

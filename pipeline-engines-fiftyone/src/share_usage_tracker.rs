@@ -25,47 +25,46 @@
 //! A user browsing a site generates many requests with identical usage data.
 //! That duplicate data is discarded as early as possible, per the
 //! [session-tracking section](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/pipeline-elements/usage-sharing-element.md#session-tracking).
-//! The tracker keeps a bounded map of recently seen evidence keys. A request
-//! whose evidence matches a recent entry is not shared. The matching entry's
-//! timestamp is refreshed, so the suppression window slides while a session
-//! stays active. Once an entry is older than the configured interval it is
-//! treated as new again.
+//! The tracker remembers recently seen evidence in a bounded, sharded LRU
+//! cache. A request whose evidence matches a recent entry is not shared. The
+//! matching entry's time is refreshed, so the suppression window slides while
+//! a session stays active. Once an entry is older than the configured interval
+//! it is treated as new again. When the cache is full the least recently seen
+//! entry is evicted.
 //!
 //! Session id and sequence are excluded from the dedup key (by the
 //! [`crate::EvidenceKeyFilterShareUsageTracker`]) so they cannot make every
 //! request look unique.
 
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use ahash::AHashMap;
+use fiftyone_caching::{Cache, CacheBuilder, LruCache, PutCache};
 use fiftyone_pipeline_core::{DataKey, EvidenceKeyFilter, FlowData};
 
 /// Tracks recently shared evidence to suppress duplicate usage data.
 ///
 /// `track` returns `true` when the supplied flow data should be shared and
-/// `false` when it duplicates a recently shared request. It is internally
-/// synchronised, so a single tracker is shared across the threads that process
-/// flow data.
+/// `false` when it duplicates a recently shared request. The entries live in a
+/// sharded LRU cache, so concurrent requests mostly take different locks and no
+/// request ever scans the whole set.
 pub struct ShareUsageTracker {
     filter: Box<dyn EvidenceKeyFilter>,
     interval: Duration,
-    max_size: usize,
-    entries: Mutex<AHashMap<DataKey, Instant>>,
+    entries: LruCache<DataKey, Instant>,
 }
 
 impl ShareUsageTracker {
     /// Create a tracker.
     ///
     /// `interval` is the sliding-window length (the repeat-evidence interval).
-    /// `max_size` bounds the number of tracked keys. `filter` selects which
-    /// evidence forms the dedup key.
+    /// `max_size` bounds the number of tracked keys, beyond which the least
+    /// recently seen key is evicted. `filter` selects which evidence forms the
+    /// dedup key.
     pub fn new(interval: Duration, max_size: usize, filter: Box<dyn EvidenceKeyFilter>) -> Self {
         ShareUsageTracker {
             filter,
             interval,
-            max_size: max_size.max(1),
-            entries: Mutex::new(AHashMap::new()),
+            entries: CacheBuilder::new().size(max_size.max(1)).build(),
         }
     }
 
@@ -73,7 +72,7 @@ impl ShareUsageTracker {
     ///
     /// Returns `true` if the evidence has not been seen within the interval (and
     /// records it), or `false` if it matches a recent entry (refreshing that
-    /// entry's timestamp so the window slides).
+    /// entry's time so the window slides).
     pub fn track(&self, data: &FlowData) -> bool {
         let key = data.generate_key(self.filter.as_ref());
         // Evidence that produces an empty key (nothing matched the filter) is
@@ -83,51 +82,119 @@ impl ShareUsageTracker {
         }
 
         let now = Instant::now();
-        let mut entries = match self.entries.lock() {
-            Ok(guard) => guard,
-            // If a previous holder panicked, recover the data and carry on:
-            // usage sharing is expendable and must not poison the pipeline.
-            Err(poisoned) => poisoned.into_inner(),
+        let share = match self.entries.get(&key) {
+            Some(last_seen) => now.duration_since(last_seen) >= self.interval,
+            None => true,
         };
-
-        match entries.get_mut(&key) {
-            Some(last_seen) => {
-                if now.duration_since(*last_seen) >= self.interval {
-                    // The previous sighting has aged out of the window. Treat
-                    // this as new, refresh the timestamp and allow sharing.
-                    *last_seen = now;
-                    true
-                } else {
-                    // Seen recently: refresh the window and suppress.
-                    *last_seen = now;
-                    false
-                }
-            }
-            None => {
-                // Keep the map bounded. When full, drop entries that have
-                // already aged out; if none have, this new entry is still
-                // recorded so the map can briefly exceed the bound rather than
-                // evicting a live entry.
-                if entries.len() >= self.max_size {
-                    let interval = self.interval;
-                    entries.retain(|_, last| now.duration_since(*last) < interval);
-                }
-                entries.insert(key, now);
-                true
-            }
-        }
+        self.entries.put(key, now);
+        share
     }
 
     /// The number of tracked entries. Intended for tests and diagnostics.
     pub fn len(&self) -> usize {
-        match self.entries.lock() {
-            Ok(guard) => guard.len(),
-            Err(poisoned) => poisoned.into_inner().len(),
-        }
+        self.entries.len()
     }
 
     /// True if no entries are tracked.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// The most entries the tracker holds before it evicts. The cache rounds
+    /// the requested size up to a whole number of entries per shard, so this
+    /// can be slightly above the size passed to [`ShareUsageTracker::new`].
+    pub fn capacity(&self) -> usize {
+        self.entries.capacity()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use fiftyone_pipeline_core::{
+        Evidence, EvidenceKeyFilterWhitelist, FlowElement, Pipeline, PropertyMetaData, Result,
+    };
+
+    use super::*;
+
+    /// An element that does nothing, so a pipeline can create flow data.
+    struct Noop {
+        filter: EvidenceKeyFilterWhitelist,
+    }
+
+    impl FlowElement for Noop {
+        fn process(&self, _data: &mut FlowData) -> Result<()> {
+            Ok(())
+        }
+        fn data_key(&self) -> &str {
+            "noop"
+        }
+        fn evidence_key_filter(&self) -> &dyn EvidenceKeyFilter {
+            &self.filter
+        }
+        fn properties(&self) -> &[PropertyMetaData] {
+            &[]
+        }
+    }
+
+    fn pipeline() -> Arc<Pipeline> {
+        Pipeline::builder()
+            .add_element(Arc::new(Noop {
+                filter: EvidenceKeyFilterWhitelist::new(["header.user-agent"]),
+            }))
+            .build()
+            .unwrap()
+    }
+
+    fn tracker(interval: Duration, max_size: usize) -> ShareUsageTracker {
+        ShareUsageTracker::new(
+            interval,
+            max_size,
+            Box::new(EvidenceKeyFilterWhitelist::new(["header.user-agent"])),
+        )
+    }
+
+    fn flow_data(pipeline: &Arc<Pipeline>, agent: &str) -> FlowData {
+        pipeline.create_flow_data_with(Evidence::builder().add("header.user-agent", agent).build())
+    }
+
+    #[test]
+    fn a_repeat_within_the_interval_is_not_shared() {
+        let pipeline = pipeline();
+        let tracker = tracker(Duration::from_secs(60), 100);
+        assert!(tracker.track(&flow_data(&pipeline, "a")));
+        assert!(!tracker.track(&flow_data(&pipeline, "a")));
+        assert!(tracker.track(&flow_data(&pipeline, "b")));
+    }
+
+    #[test]
+    fn a_repeat_after_the_interval_is_shared_again() {
+        let pipeline = pipeline();
+        let tracker = tracker(Duration::ZERO, 100);
+        assert!(tracker.track(&flow_data(&pipeline, "a")));
+        assert!(tracker.track(&flow_data(&pipeline, "a")));
+    }
+
+    #[test]
+    fn the_tracker_stays_within_its_capacity() {
+        let pipeline = pipeline();
+        let tracker = tracker(Duration::from_secs(60), 100);
+        for i in 0..10_000 {
+            assert!(tracker.track(&flow_data(&pipeline, &format!("agent-{i}"))));
+        }
+        // The cache rounds the size up to a whole number per shard, so the
+        // capacity is at most one entry per shard over the size asked for.
+        assert!(
+            tracker.capacity() < 100 + fiftyone_caching::default_concurrency(),
+            "capacity {} for a size of 100",
+            tracker.capacity()
+        );
+        assert!(
+            tracker.len() <= tracker.capacity(),
+            "{} entries in a tracker of capacity {}",
+            tracker.len(),
+            tracker.capacity()
+        );
     }
 }

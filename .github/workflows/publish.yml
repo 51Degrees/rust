@@ -51,11 +51,22 @@ jobs:
           # shallow clone has none of them.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+      # The version rule and the bump check below are taken from common-ci,
+      # which the other five languages publish through, so there is one rule
+      # and not two that drift apart.
+      - name: Checkout common-ci
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/common-ci
+          path: common-ci
       # The version comes from the tags, as it does in the other five
       # languages, rather than from a number committed in each manifest. No
       # commit can then release a version by accident, and all 24 crates move
       # together instead of drifting apart, which is how three of them reached
-      # 4.6 while the other twenty one stayed at 4.5.2.
+      # 4.6 while the other twenty one stayed at 4.5.2. common-ci's
+      # GitVersion.yml gives main a plain version such as 4.5.9, where
+      # GitVersion's own defaults give a pre-release such as 4.5.9-7, which a
+      # requirement such as 4.5 never selects.
       - name: Work out the version from the tags
         id: version
         shell: pwsh
@@ -77,19 +88,12 @@ jobs:
             Write-Output "This is needed once. After a release has gone out from here the tag is written by this workflow."
             exit 1
           }
-          dotnet tool install --global GitVersion.Tool --version 6.*
-          $v = dotnet-gitversion /showvariable SemVer
+          # The version common-ci installs, so the rule reads the same here.
+          dotnet tool install --global GitVersion.Tool --version 6.1
+          $v = dotnet-gitversion /config common-ci/GitVersion.yml /showvariable SemVer
           if (-not $v) { throw 'GitVersion produced no version' }
           Write-Output "version=$v" >> $env:GITHUB_OUTPUT
           Write-Output "Releasing $v"
-      # The same check the other five languages publish through, taken from
-      # common-ci rather than copied here, so there is one rule and not two
-      # that drift apart.
-      - name: Checkout common-ci
-        uses: actions/checkout@v4
-        with:
-          repository: 51Degrees/common-ci
-          path: common-ci
       # Refuses a version that moves the major or minor place unless this run
       # was dispatched by someone who asked for it. A push to main carries no
       # inputs, so that route can never allow one and no commit message can
@@ -112,6 +116,12 @@ jobs:
       - name: Copy the OWID source into fodid
         shell: pwsh
         run: ./ci/copy-owid-source.ps1
+      # The examples are built and tested against these crates at the version
+      # being released, as the other languages test their examples against the
+      # package they are about to publish. A failure here stops the release.
+      - name: Test the examples against the crates being released
+        shell: pwsh
+        run: ./ci/test-examples-against-source.ps1 -Version '${{ steps.version.outputs.version }}'
       - name: Authenticate to crates.io (Trusted Publishing)
         uses: rust-lang/crates-io-auth-action@v1
         id: auth

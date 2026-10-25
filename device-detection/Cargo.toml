@@ -31,9 +31,14 @@ fiftyone-cloud-request-engine = { version = "4.5.2", path = "../cloud-request-en
 [features]
 # The full SDK is built and tested here. A cloud-only consumer can opt out of
 # the native on-premise engine with `default-features = false, features = ["cloud"]`.
-default = ["cloud", "on-premise"]
+default = ["cloud", "on-premise", "share-usage"]
 # Pull in the on-premise Hash engine and the native wrapper it needs.
 on-premise = ["dep:fiftyone-device-detection-onpremise", "dep:fiftyone-native"]
+# Turn usage sharing on by default in both pipeline builders, and compile the
+# built-in transport the usage-sharing element sends with. Without it the
+# builders leave usage sharing off unless share_usage(true) is called, and the
+# element sends nothing unless the transport is enabled another way.
+share-usage = ["fiftyone-pipeline-engines-fiftyone/share-usage-transport"]
 # Pull in the cloud engine and the cloud request engine that feeds it.
 cloud = ["dep:fiftyone-device-detection-cloud", "dep:fiftyone-cloud-request-engine"]
 # Opt into the built-in reqwest HTTP client for the cloud path. Implies `cloud`

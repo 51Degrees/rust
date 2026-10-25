@@ -31,13 +31,53 @@
 //! update service touches them from background threads while the owning engine
 //! reads them on the request path.
 
+use std::fmt::Debug;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 
 /// The default polling interval, 30 minutes.
 pub const DEFAULT_POLLING_INTERVAL_SECONDS: u64 = 30 * 60;
+
+/// The 51Degrees Distributor's download endpoint, the update URL the 51Degrees
+/// engines use unless another is configured.
+pub const DISTRIBUTOR_URL: &str = "https://distributor.51degrees.com/api/v2/download";
+
+/// Adds query parameters to a data file's update URL before each request.
+///
+/// The update service asks the formatter for the URL it requests, so a
+/// download service that needs the licence key or the file type in the query
+/// string gets them without the configured URL carrying them. A static URL
+/// that serves a file needs no formatter.
+pub trait DataUpdateUrlFormatter: Debug + Send + Sync {
+    /// The URL to request for `data_file`, built from its configured update URL.
+    fn format_url(&self, data_file: &AspectEngineDataFile) -> String;
+}
+
+/// The formatter for the 51Degrees Distributor.
+///
+/// Appends `LicenseKeys`, with the configured keys separated by `|`,
+/// `Download=True`, and `Type` with the data file's download type, as the .NET
+/// and Java implementations do.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FiftyOneUrlFormatter;
+
+impl DataUpdateUrlFormatter for FiftyOneUrlFormatter {
+    fn format_url(&self, data_file: &AspectEngineDataFile) -> String {
+        let config = data_file.configuration();
+        let url = config.data_update_url.as_deref().unwrap_or_default();
+        let mut formatted = format!(
+            "{url}?LicenseKeys={}&Download=True",
+            config.data_update_license_keys.join("|")
+        );
+        if let Some(download_type) = &config.data_download_type {
+            formatted.push_str("&Type=");
+            formatted.push_str(download_type);
+        }
+        formatted
+    }
+}
 
 /// The default maximum polling randomisation, 10 minutes.
 pub const DEFAULT_MAX_RANDOMISATION_SECONDS: u64 = 10 * 60;
@@ -84,10 +124,14 @@ pub struct DataFileConfiguration {
     /// Whether the poll request carries an `If-Modified-Since` header so the
     /// server can answer `304 Not Modified` when nothing is newer.
     pub verify_modified_since: bool,
-    /// License keys appended to the update URL by a URL formatter. The keys are
-    /// stored but this crate does not format the URL itself; that is the
-    /// engine's responsibility through its update URL.
+    /// License keys the URL formatter adds to the update URL.
     pub data_update_license_keys: Vec<String>,
+    /// The formatter that turns [`Self::data_update_url`] into the URL each poll
+    /// requests. `None` requests the URL as configured.
+    pub url_formatter: Option<Arc<dyn DataUpdateUrlFormatter>>,
+    /// The download type the URL formatter sends, which names the data file
+    /// format the Distributor should serve, such as `HashV41` or `IPIV41`.
+    pub data_download_type: Option<String>,
 }
 
 impl DataFileConfiguration {
@@ -125,6 +169,8 @@ impl DataFileConfigurationBuilder {
                 verify_md5: true,
                 verify_modified_since: true,
                 data_update_license_keys: Vec::new(),
+                url_formatter: None,
+                data_download_type: None,
             },
         }
     }
@@ -189,13 +235,26 @@ impl DataFileConfigurationBuilder {
         self
     }
 
-    /// Set the license keys recorded for the update URL.
+    /// Set the license keys the URL formatter adds to the update URL.
     pub fn data_update_license_keys<I, S>(mut self, keys: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
         self.config.data_update_license_keys = keys.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Set the formatter that builds the URL each poll requests, or `None` to
+    /// request the configured URL as it is.
+    pub fn url_formatter(mut self, formatter: Option<Arc<dyn DataUpdateUrlFormatter>>) -> Self {
+        self.config.url_formatter = formatter;
+        self
+    }
+
+    /// Set the download type the URL formatter sends.
+    pub fn data_download_type(mut self, download_type: impl Into<String>) -> Self {
+        self.config.data_download_type = Some(download_type.into());
         self
     }
 
@@ -262,6 +321,21 @@ impl AspectEngineDataFile {
     /// The remote update URL, if configured.
     pub fn data_update_url(&self) -> Option<&str> {
         self.configuration.data_update_url.as_deref()
+    }
+
+    /// The URL a poll requests: the configured update URL as the configured
+    /// formatter rewrites it, or as it is when there is no formatter. `None`
+    /// when no update URL is configured.
+    pub fn formatted_update_url(&self) -> Option<String> {
+        self.data_update_url()?;
+        Some(match &self.configuration.url_formatter {
+            Some(formatter) => formatter.format_url(self),
+            None => self
+                .configuration
+                .data_update_url
+                .clone()
+                .unwrap_or_default(),
+        })
     }
 
     /// Whether automatic remote updates are enabled for this file.
@@ -362,6 +436,63 @@ mod tests {
         assert_eq!(cfg.polling_interval_seconds, 60);
         assert!(!cfg.verify_md5);
         assert_eq!(cfg.data_update_license_keys, ["KEY1", "KEY2"]);
+        assert!(cfg.url_formatter.is_none());
+        assert!(cfg.data_download_type.is_none());
+    }
+
+    /// The Distributor formatter writes the licence keys, the download flag
+    /// and the type as the other implementations do.
+    #[test]
+    fn fiftyone_formatter_writes_the_distributor_query() {
+        let file = AspectEngineDataFile::new(
+            DataFileConfiguration::builder("d.dat")
+                .data_update_url(DISTRIBUTOR_URL)
+                .data_update_license_keys(["KEY1", "KEY2"])
+                .data_download_type("HashV41")
+                .url_formatter(Some(Arc::new(FiftyOneUrlFormatter)))
+                .build(),
+        );
+        assert_eq!(
+            file.formatted_update_url().as_deref(),
+            Some(
+                "https://distributor.51degrees.com/api/v2/download\
+                 ?LicenseKeys=KEY1|KEY2&Download=True&Type=HashV41"
+            )
+        );
+    }
+
+    /// Without keys or a type the parameters are still present, as .NET writes
+    /// them, so the Distributor answers with its own refusal.
+    #[test]
+    fn fiftyone_formatter_without_keys_or_type() {
+        let file = AspectEngineDataFile::new(
+            DataFileConfiguration::builder("d.dat")
+                .data_update_url("https://example.invalid/d")
+                .url_formatter(Some(Arc::new(FiftyOneUrlFormatter)))
+                .build(),
+        );
+        assert_eq!(
+            file.formatted_update_url().as_deref(),
+            Some("https://example.invalid/d?LicenseKeys=&Download=True")
+        );
+    }
+
+    /// With no formatter the configured URL is requested as it is, and with
+    /// no URL nothing is.
+    #[test]
+    fn no_formatter_requests_the_configured_url() {
+        let file = AspectEngineDataFile::new(
+            DataFileConfiguration::builder("d.dat")
+                .data_update_url("https://example.invalid/file.hash")
+                .data_update_license_keys(["KEY1"])
+                .build(),
+        );
+        assert_eq!(
+            file.formatted_update_url().as_deref(),
+            Some("https://example.invalid/file.hash")
+        );
+        let none = AspectEngineDataFile::new(DataFileConfiguration::builder("d.dat").build());
+        assert!(none.formatted_update_url().is_none());
     }
 
     #[test]
