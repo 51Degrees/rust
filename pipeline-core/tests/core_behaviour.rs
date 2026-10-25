@@ -682,4 +682,50 @@ fn an_attached_resource_lives_with_the_pipeline_and_is_found_by_type() {
     assert!(pipeline.resource::<u32>().is_none());
     drop(pipeline);
     assert_eq!(Arc::strong_count(&resource), 1);
+
+/// A whitelist lists its keys, an aggregator lists the union of its parts and
+/// nothing when a part has no list, and the pipeline-wide filter lists every
+/// element's keys.
+#[test]
+fn named_keys_are_listed_by_whitelists_and_their_unions() {
+    use fiftyone_pipeline_core::EvidenceKeyFilterAggregator;
+
+    let whitelist = EvidenceKeyFilterWhitelist::new(["header.User-Agent", "query.sequence"]);
+    let mut keys = whitelist.named_keys().expect("a whitelist lists its keys");
+    keys.sort();
+    assert_eq!(keys, ["header.user-agent", "query.sequence"]);
+
+    let mut union = EvidenceKeyFilterAggregator::new();
+    union.add_filter(Box::new(whitelist));
+    union.add_filter(Box::new(EvidenceKeyFilterWhitelist::new([
+        "header.user-agent",
+        "header.host",
+    ])));
+    assert_eq!(
+        union.named_keys().expect("every part lists its keys"),
+        ["header.host", "header.user-agent", "query.sequence"]
+    );
+
+    struct AnyKey;
+    impl EvidenceKeyFilter for AnyKey {
+        fn include(&self, _key: &str) -> bool {
+            true
+        }
+    }
+    union.add_filter(Box::new(AnyKey));
+    assert!(union.named_keys().is_none());
+
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(OrderElement::new(
+            "order",
+            log,
+            &["header.user-agent"],
+        )))
+        .build()
+        .unwrap();
+    assert_eq!(
+        pipeline.evidence_key_filter().named_keys(),
+        Some(vec![String::from("header.user-agent")])
+    );
 }

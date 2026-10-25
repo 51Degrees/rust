@@ -302,4 +302,8 @@ impl EvidenceKeyFilter for ElementEvidenceFilter {
     fn order(&self, key: &str) -> Option<i32> {
         self.element.evidence_key_filter().order(key)
     }
+
+    fn named_keys(&self) -> Option<Vec<String>> {
+        self.element.evidence_key_filter().named_keys()
+    }
 }

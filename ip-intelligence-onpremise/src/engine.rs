@@ -273,6 +273,10 @@ impl EvidenceKeyFilter for DataFileEvidenceKeys {
     fn order(&self, key: &str) -> Option<i32> {
         self.keys.load().order(key)
     }
+
+    fn named_keys(&self) -> Option<Vec<String>> {
+        self.keys.load().named_keys()
+    }
 }
 
 /// Resolve the populated property names from the requested set.
