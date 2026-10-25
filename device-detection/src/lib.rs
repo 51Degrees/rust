@@ -83,7 +83,7 @@
 //!
 //! ## Data updates are on by default
 //!
-//! An on-premise pipeline keeps its data file current, as the other languages'
+//! An on-premise pipeline keeps its data file current, as the .NET and Java
 //! pipelines do. The builder creates a `DataUpdateService` the pipeline owns,
 //! which polls the 51Degrees Distributor every thirty minutes, staggered by up
 //! to ten minutes, and refreshes the engine when the file changes on disk. The
@@ -308,12 +308,12 @@ impl DeviceDetectionOnPremisePipelineBuilder {
         }
     }
 
-    /// Enable or disable automatic data file updates. On by default, as in the
-    /// other languages. When on, the pipeline owns a [`DataUpdateService`] that
+    /// Enable or disable automatic data file updates. On by default, as in
+    /// .NET and Java. When on, the pipeline owns a [`DataUpdateService`] that
     /// polls the update URL on the polling interval and refreshes the engine
     /// with each new file. The 51Degrees Distributor serves nothing without a
-    /// licence key, so [`Self::build`] refuses with this on and no key set, and
-    /// a deployment of the Lite file turns this off or sets
+    /// licence key, so [`Self::build`] refuses with this on and no key set, as
+    /// .NET does, and a deployment of the Lite file turns this off or sets
     /// [`Self::data_update_license_keys`].
     pub fn auto_update(mut self, enabled: bool) -> Self {
         self.auto_update = enabled;

@@ -198,7 +198,7 @@ impl DeviceDetectionOnPremiseEngineBuilder {
     ///
     /// Refuses, before opening the file, when the configuration given to
     /// [`Self::auto_update`] has automatic updates or update on startup on and
-    /// no licence key, as the other implementations do. When automatic updates
+    /// no licence key, as .NET does. When automatic updates
     /// were configured with a service, the engine's data file is registered
     /// with that service before the engine is returned, so a startup poll (if
     /// requested) and the polling schedule are in effect.
