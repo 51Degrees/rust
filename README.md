@@ -109,7 +109,7 @@ path, so cloud-only users and most of CI build without a C compiler.
   documentation for what is shared, and the `fiftyone-pipeline-engines-fiftyone`
   crate docs for the feature detail.
 - Automatic data file updates are on by default in the facades' on-premise
-  pipeline builders, as they are in the other languages. The pipeline owns a
+  pipeline builders, as they are in .NET and Java. The pipeline owns a
   data update service that polls the 51Degrees Distributor every thirty
   minutes, staggered by up to ten minutes, with the licence keys given through
   `.data_update_license_keys(..)`, and that refreshes the engine when the data

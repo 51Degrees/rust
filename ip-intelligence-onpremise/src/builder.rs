@@ -90,8 +90,8 @@ pub struct IpIntelligenceOnPremiseEngineBuilder {
 impl IpIntelligenceOnPremiseEngineBuilder {
     /// Start building an engine for the `.ipi` data file at `data_file_path`.
     ///
-    /// The defaults match the other implementations: the engine-default
-    /// performance profile, every property populated, and automatic updates
+    /// The defaults match .NET and Java: the engine-default performance
+    /// profile, every property populated, and automatic updates
     /// and the file-system watcher on, so a licence key is needed before the
     /// engine builds unless [`Self::auto_update`] turns the updates off.
     /// Updates take effect once the engine is registered with a
@@ -186,8 +186,7 @@ impl IpIntelligenceOnPremiseEngineBuilder {
 
     /// Set the licence keys the update URL carries. The Distributor serves
     /// nothing without one, so the engine refuses to build with automatic
-    /// updates or update on startup on and none set, as the other
-    /// implementations do.
+    /// updates or update on startup on and none set, as .NET does.
     pub fn data_update_license_keys<I, S>(mut self, keys: I) -> Self
     where
         I: IntoIterator<Item = S>,
