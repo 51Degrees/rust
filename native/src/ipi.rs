@@ -51,11 +51,12 @@
 //! manager is reference counted and lock protected) and [`Results`] is [`Send`]
 //! but not [`Sync`] (per-thread scratch).
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::Path;
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use fiftyone_ip_intelligence_sys as sys;
 use fiftyone_pipeline_core::{constants, Error, Evidence, Result};
@@ -142,6 +143,9 @@ pub struct Manager {
     /// The evidence keys the data file defines, in the order the native lookup
     /// tries them, read once when the file is opened.
     evidence_keys: Vec<EvidenceKey>,
+    /// The required property name to index map, built on first use so a read
+    /// by name costs one hash lookup rather than a native name search.
+    property_index: OnceLock<HashMap<String, c_int>>,
 }
 
 /// One evidence key the data file defines, split into the parts the native
@@ -236,6 +240,7 @@ impl Manager {
         Ok(Arc::new(Manager {
             manager,
             evidence_keys,
+            property_index: OnceLock::new(),
         }))
     }
 
@@ -341,6 +346,43 @@ impl Manager {
             }
         }
         names
+    }
+
+    /// Resolve a property name to its required property index, building the
+    /// name to index map on first use.
+    ///
+    /// Returns [`None`] when the property is not one of the required
+    /// properties. The lookup is case sensitive, as the native data set is, so
+    /// pass the property's spelling from the data file. An index belongs to the
+    /// data set it came from, so look it up again after a reload.
+    pub fn required_property_index(&self, property_name: &str) -> Option<c_int> {
+        self.property_index_map().get(property_name).copied()
+    }
+
+    /// The property name to required property index map, built on first use.
+    /// The first caller builds it and racing callers wait for it. Once it is
+    /// set, a lookup takes no lock and writes no shared memory.
+    fn property_index_map(&self) -> &HashMap<String, c_int> {
+        self.property_index.get_or_init(|| {
+            self.available_property_names()
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| (name, index as c_int))
+                .collect()
+        })
+    }
+
+    /// Refuse an index that is not one of this data set's required property
+    /// indexes.
+    fn check_property_index(&self, index: c_int) -> Result<()> {
+        let count = self.property_index_map().len();
+        if index < 0 || index as usize >= count {
+            return Err(Error::Native {
+                status: String::from("InvalidInput"),
+                message: format!("{index} is not a required property index (0..{count})"),
+            });
+        }
+        Ok(())
     }
 
     /// Create a per-thread results structure for running lookups.
@@ -561,6 +603,46 @@ impl Results {
         Ok(value)
     }
 
+    /// Read the value(s) of a required property by the index
+    /// [`Manager::required_property_index`] returned for it, joining multiple
+    /// values with `separator`.
+    ///
+    /// The same values as [`value_as_string`](Self::value_as_string), without a
+    /// name lookup on either side of the native boundary and without
+    /// allocating the property name and separator on each call, for callers
+    /// that read the same properties on every lookup. Returns [`None`] when
+    /// the results carry no value, and an error for an index outside this data
+    /// set's required properties.
+    pub fn value_as_string_by_index(
+        &self,
+        index: c_int,
+        separator: &CStr,
+    ) -> Result<Option<String>> {
+        self.manager.check_property_index(index)?;
+        let results = self.as_ptr();
+        let mut exception = sys::Exception::cleared();
+        // Safety: the writer only touches its buffer and returns the native
+        // available-character count. The separator outlives every invocation
+        // and the index is in range for this data set.
+        let value = unsafe {
+            with_value_string(
+                |buffer, length| {
+                    sys::fiftyoneDegreesResultsIpiGetValuesStringByRequiredPropertyIndex(
+                        results,
+                        index,
+                        buffer,
+                        length,
+                        separator.as_ptr(),
+                        &mut exception,
+                    )
+                },
+                |text| text.to_owned(),
+            )
+        };
+        exception.check()?;
+        Ok(value)
+    }
+
     /// Read the weighted value(s) for the named property, each rendered as a
     /// string paired with its raw `u16` weighting.
     ///
@@ -584,6 +666,19 @@ impl Results {
             .collect())
     }
 
+    /// [`Self::values_weighted`] by the index
+    /// [`Manager::required_property_index`] returned for the property, which
+    /// skips the name lookup. Returns an error for an index outside this data
+    /// set's required properties.
+    pub fn values_weighted_by_index(&self, index: c_int) -> Result<Vec<(String, u16)>> {
+        self.manager.check_property_index(index)?;
+        Ok(self
+            .read_collection_by_index(index)?
+            .into_iter()
+            .map(|(_, value, weighting)| (value, weighting))
+            .collect())
+    }
+
     /// Read the value collection for a property as typed tuples
     /// `(value_type, rendered_value, weighting)`, ordered high weighting first.
     ///
@@ -595,26 +690,21 @@ impl Results {
         &self,
         property_name: &str,
     ) -> Result<Vec<(sys::PropertyValueType, String, u16)>> {
-        let property_c = CString::new(property_name).map_err(|_| Error::Native {
-            status: String::from("InvalidInput"),
-            message: String::from("property name contains an interior nul byte"),
-        })?;
-
-        // Resolve the property to its required-property index. An unknown
-        // property has no values, so report an empty list rather than an error,
-        // matching the string getter's absent-value behavior.
-        // Safety: the manager is initialized and the name is null terminated.
-        let index = unsafe {
-            sys::fiftyoneDegreesShimIpiGetRequiredPropertyIndexFromName(
-                self.manager.as_ptr(),
-                property_c.as_ptr(),
-            )
-        };
-        if index < 0 {
+        // An unknown property has no values, so report an empty list rather
+        // than an error, matching the string getter's absent-value behavior.
+        let Some(index) = self.manager.required_property_index(property_name) else {
             return Ok(Vec::new());
-        }
+        };
+        self.read_collection_by_index(index)
+    }
 
-        let indexes = [index as c_int];
+    /// [`Self::read_collection`] by a required property index the caller has
+    /// checked is in range.
+    fn read_collection_by_index(
+        &self,
+        index: c_int,
+    ) -> Result<Vec<(sys::PropertyValueType, String, u16)>> {
+        let indexes = [index];
         let mut temp = sys::Data::zeroed();
         let mut exception = sys::Exception::cleared();
         // Safety: `results` is valid, the index array is readable for its single
@@ -661,40 +751,53 @@ impl Results {
     /// [`PropertyRead::Float`] or [`PropertyRead::Integer`] according to its
     /// type. A property with no value yields [`PropertyRead::Absent`].
     pub fn read_property(&self, property_name: &str) -> Result<PropertyRead> {
-        use sys::PropertyValueType as Ty;
-        let items = self.read_collection(property_name)?;
-        let Some(value_type) = items.first().map(|item| item.0) else {
-            return Ok(PropertyRead::Absent);
-        };
-        if is_weighted_type(value_type) {
-            let pairs = items
-                .into_iter()
-                .map(|(_, value, weighting)| (value, weighting))
-                .collect();
-            return Ok(PropertyRead::Weighted(pairs));
-        }
-        // Plain property: take the most probable (first) rendered value and
-        // parse it to its scalar type.
-        let Some((_, top, _)) = items.into_iter().next() else {
-            return Ok(PropertyRead::Absent);
-        };
-        let read = match value_type {
-            Ty::Double | Ty::SinglePrecisionFloat | Ty::Declination | Ty::Azimuth => top
-                .trim()
-                .parse::<f32>()
-                .map(PropertyRead::Float)
-                .unwrap_or_else(|_| PropertyRead::String(top)),
-            Ty::Integer | Ty::SingleByte => top
-                .trim()
-                .parse::<i32>()
-                .map(PropertyRead::Integer)
-                .unwrap_or_else(|_| PropertyRead::String(top)),
-            Ty::Boolean => parse_bool(&top)
-                .map(PropertyRead::Boolean)
-                .unwrap_or(PropertyRead::String(top)),
-            _ => PropertyRead::String(top),
-        };
-        Ok(read)
+        Ok(property_read_from(self.read_collection(property_name)?))
+    }
+
+    /// [`Self::read_property`] by the index
+    /// [`Manager::required_property_index`] returned for the property, which
+    /// skips the name lookup. Returns an error for an index outside this data
+    /// set's required properties.
+    pub fn read_property_by_index(&self, index: c_int) -> Result<PropertyRead> {
+        self.manager.check_property_index(index)?;
+        Ok(property_read_from(self.read_collection_by_index(index)?))
+    }
+}
+
+/// Type a value collection as a [`PropertyRead`], deciding plain against
+/// weighted from the value type the data file declares.
+fn property_read_from(items: Vec<(sys::PropertyValueType, String, u16)>) -> PropertyRead {
+    use sys::PropertyValueType as Ty;
+    let Some(value_type) = items.first().map(|item| item.0) else {
+        return PropertyRead::Absent;
+    };
+    if is_weighted_type(value_type) {
+        let pairs = items
+            .into_iter()
+            .map(|(_, value, weighting)| (value, weighting))
+            .collect();
+        return PropertyRead::Weighted(pairs);
+    }
+    // Plain property: take the most probable (first) rendered value and
+    // parse it to its scalar type.
+    let Some((_, top, _)) = items.into_iter().next() else {
+        return PropertyRead::Absent;
+    };
+    match value_type {
+        Ty::Double | Ty::SinglePrecisionFloat | Ty::Declination | Ty::Azimuth => top
+            .trim()
+            .parse::<f32>()
+            .map(PropertyRead::Float)
+            .unwrap_or_else(|_| PropertyRead::String(top)),
+        Ty::Integer | Ty::SingleByte => top
+            .trim()
+            .parse::<i32>()
+            .map(PropertyRead::Integer)
+            .unwrap_or_else(|_| PropertyRead::String(top)),
+        Ty::Boolean => parse_bool(&top)
+            .map(PropertyRead::Boolean)
+            .unwrap_or(PropertyRead::String(top)),
+        _ => PropertyRead::String(top),
     }
 }
 
@@ -997,6 +1100,57 @@ mod tests {
             total_pairs > 0,
             "at least one candidate property should return a weighted (value, weighting) pair"
         );
+    }
+
+    /// Reading by index gives the values reading by name gives, for every
+    /// property the data file carries, as a string and as weighted values.
+    #[test]
+    fn reading_by_index_gives_the_values_reading_by_name_gives() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping reads by index");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::Default);
+        let mut results = manager.create_results().expect("results should allocate");
+        results
+            .process_ip("185.28.167.77")
+            .expect("looking up a public IP should not raise an exception");
+        let names = manager.available_property_names();
+        assert!(!names.is_empty());
+        for name in &names {
+            let index = manager
+                .required_property_index(name)
+                .unwrap_or_else(|| panic!("{name} has an index"));
+            assert_eq!(
+                results.value_as_string_by_index(index, c"|").unwrap(),
+                results.value_as_string(name, "|").unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                results.values_weighted_by_index(index).unwrap(),
+                results.values_weighted(name).unwrap(),
+                "{name}"
+            );
+        }
+        assert!(manager.required_property_index("NoSuchProperty").is_none());
+    }
+
+    /// An index outside the data set's required properties is refused.
+    #[test]
+    fn an_index_outside_the_data_set_is_an_error() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping the index range check");
+            return;
+        };
+        let manager = open_found(&data_file, PerformanceProfile::Default);
+        let mut results = manager.create_results().expect("results should allocate");
+        results
+            .process_ip("185.28.167.77")
+            .expect("looking up a public IP should not raise an exception");
+        let count = manager.available_property_names().len() as c_int;
+        assert!(results.value_as_string_by_index(count, c"|").is_err());
+        assert!(results.value_as_string_by_index(-1, c"|").is_err());
+        assert!(results.values_weighted_by_index(count).is_err());
     }
 
     #[test]
