@@ -102,7 +102,7 @@
 mod builder;
 mod engine;
 
-pub use builder::IpIntelligenceOnPremiseEngineBuilder;
+pub use builder::{IpIntelligenceOnPremiseEngineBuilder, DATA_DOWNLOAD_TYPE};
 #[allow(deprecated)]
 pub use engine::IP_EVIDENCE_KEYS;
 pub use engine::{IpIntelligenceOnPremiseEngine, DEFAULT_DATA_SOURCE_TIER};

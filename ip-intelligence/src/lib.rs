@@ -56,6 +56,18 @@
 //! [`IP_DATA_KEY`], so an application can swap one for the other without touching
 //! its read code.
 //!
+//! # Data updates are on by default
+//!
+//! An on-premise pipeline keeps its data file current, as the other languages'
+//! pipelines do. The builder creates a `DataUpdateService` the pipeline owns,
+//! which polls the 51Degrees Distributor every thirty minutes, staggered by up
+//! to ten minutes, and refreshes the engine when the file changes on disk. The
+//! Distributor needs the licence keys set with `.data_update_license_keys(..)`
+//! and refuses a poll without one, so a deployment without a key turns polling
+//! off with `.auto_update(false)`. `.file_system_watcher(false)` turns the
+//! watcher off, and `pipeline.resource::<DataUpdateService>()` reaches the
+//! service for a check on demand.
+//!
 //! # Features
 //!
 //! The two deployments are behind cargo features so a build that only needs one

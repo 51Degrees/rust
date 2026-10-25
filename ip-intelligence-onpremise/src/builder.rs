@@ -33,10 +33,17 @@ use std::sync::Arc;
 use chrono::{TimeZone, Utc};
 use fiftyone_native::ipi::Manager;
 use fiftyone_native::PerformanceProfile;
-use fiftyone_pipeline_core::Result;
-use fiftyone_pipeline_engines::{AspectEngineDataFile, DataFileConfiguration};
+use fiftyone_pipeline_core::{Error, Result};
+use fiftyone_pipeline_engines::{
+    AspectEngineDataFile, DataFileConfiguration, DataUpdateService, FiftyOneUrlFormatter,
+    OnPremiseAspectEngine, DISTRIBUTOR_URL,
+};
 
 use crate::engine::{IpIntelligenceOnPremiseEngine, DEFAULT_DATA_SOURCE_TIER};
+
+/// The download type the Distributor serves IP Intelligence data files as,
+/// sent in the update URL's `Type` parameter.
+pub const DATA_DOWNLOAD_TYPE: &str = "IPIV41";
 
 /// A fluent builder that opens an `.ipi` data file and produces an
 /// [`IpIntelligenceOnPremiseEngine`].
@@ -70,25 +77,36 @@ pub struct IpIntelligenceOnPremiseEngineBuilder {
     data_source_tier: Option<String>,
     auto_update_enabled: bool,
     file_system_watcher_enabled: bool,
+    update_on_startup: bool,
     data_update_url: Option<String>,
+    data_update_license_keys: Vec<String>,
+    polling_interval_seconds: Option<u64>,
+    max_randomisation_seconds: Option<u64>,
+    data_update_service: Option<Arc<DataUpdateService>>,
 }
 
 impl IpIntelligenceOnPremiseEngineBuilder {
     /// Start building an engine for the `.ipi` data file at `data_file_path`.
     ///
-    /// The defaults match the other ports: the engine-default performance
-    /// profile, every property populated, and automatic updates disabled (the
-    /// caller opts in, then registers the engine with a
-    /// [`fiftyone_pipeline_engines::DataUpdateService`]).
+    /// The defaults match the other implementations: the engine-default
+    /// performance profile, every property populated, and automatic updates
+    /// and the file-system watcher on. Updates take effect once the engine is
+    /// registered with a [`DataUpdateService`], which [`Self::data_update_service`]
+    /// and [`Self::build_shared`] do.
     pub fn new(data_file_path: impl Into<PathBuf>) -> Self {
         IpIntelligenceOnPremiseEngineBuilder {
             data_file_path: data_file_path.into(),
             profile: PerformanceProfile::Default,
             requested_properties: Vec::new(),
             data_source_tier: None,
-            auto_update_enabled: false,
-            file_system_watcher_enabled: false,
+            auto_update_enabled: true,
+            file_system_watcher_enabled: true,
+            update_on_startup: false,
             data_update_url: None,
+            data_update_license_keys: Vec::new(),
+            polling_interval_seconds: None,
+            max_randomisation_seconds: None,
+            data_update_service: None,
         }
     }
 
@@ -130,29 +148,68 @@ impl IpIntelligenceOnPremiseEngineBuilder {
         self
     }
 
-    /// Enable or disable automatic data-file updates.
+    /// Enable or disable automatic data-file updates. On by default.
     ///
-    /// When enabled, the data file is configured so a
-    /// [`fiftyone_pipeline_engines::DataUpdateService`] the engine is registered
-    /// with will poll the update URL (if set) and apply downloaded updates by
-    /// calling the engine's `refresh`.
+    /// When enabled, the [`DataUpdateService`] the engine is registered with
+    /// polls the update URL on the polling interval and applies a downloaded
+    /// update by calling the engine's `refresh`.
     pub fn auto_update(mut self, enabled: bool) -> Self {
         self.auto_update_enabled = enabled;
         self
     }
 
-    /// Enable or disable the file-system watcher for the data file. When
-    /// enabled, the update service refreshes the engine when the file changes
-    /// on disk.
+    /// Enable or disable the file-system watcher for the data file. On by
+    /// default. When enabled, the update service refreshes the engine when the
+    /// file changes on disk.
     pub fn file_system_watcher(mut self, enabled: bool) -> Self {
         self.file_system_watcher_enabled = enabled;
         self
     }
 
-    /// Set the remote update URL for the data file, used by the update service
-    /// when automatic updates are enabled.
+    /// Set whether the update service polls once, before the engine is
+    /// returned, when the engine is registered. Off by default.
+    pub fn update_on_startup(mut self, enabled: bool) -> Self {
+        self.update_on_startup = enabled;
+        self
+    }
+
+    /// Set the remote update URL for the data file. The 51Degrees Distributor
+    /// by default.
     pub fn data_update_url(mut self, url: impl Into<String>) -> Self {
         self.data_update_url = Some(url.into());
+        self
+    }
+
+    /// Set the licence keys the update URL carries. The Distributor refuses a
+    /// poll without one.
+    pub fn data_update_license_keys<I, S>(mut self, keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.data_update_license_keys = keys.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Set the interval between polls of the update URL, in seconds. Thirty
+    /// minutes by default.
+    pub fn polling_interval_seconds(mut self, seconds: u64) -> Self {
+        self.polling_interval_seconds = Some(seconds);
+        self
+    }
+
+    /// Set the most that is added at random to each polling interval, in
+    /// seconds, so many instances do not poll together. Ten minutes by default.
+    pub fn max_randomisation_seconds(mut self, seconds: u64) -> Self {
+        self.max_randomisation_seconds = Some(seconds);
+        self
+    }
+
+    /// Set the service the engine's data file is registered with on
+    /// [`Self::build_shared`], which starts the polling and the watcher the
+    /// other options configure.
+    pub fn data_update_service(mut self, service: Arc<DataUpdateService>) -> Self {
+        self.data_update_service = Some(service);
         self
     }
 
@@ -161,8 +218,42 @@ impl IpIntelligenceOnPremiseEngineBuilder {
     /// Opens the native IP-intelligence manager with the configured performance
     /// profile and property restriction, then assembles the engine and its
     /// data-file run-time state. Returns the native error if the data file
-    /// fails to load.
+    /// fails to load. Registering with a data update service needs the shared
+    /// engine [`Self::build_shared`] returns, so this refuses to build when
+    /// [`Self::data_update_service`] was set.
     pub fn build(self) -> Result<IpIntelligenceOnPremiseEngine> {
+        if self.data_update_service.is_some() {
+            return Err(Error::configuration(
+                "a data update service was set, so build the engine with build_shared, \
+                 which registers it",
+            ));
+        }
+        self.build_engine()
+    }
+
+    /// Open the data file, build the engine, and register its data file with
+    /// the service set by [`Self::data_update_service`], if any.
+    ///
+    /// Registration starts the file-system watcher and schedules the polls the
+    /// options configure, and polls once first when update on startup is on.
+    pub fn build_shared(mut self) -> Result<Arc<IpIntelligenceOnPremiseEngine>> {
+        let service = self.data_update_service.take();
+        let engine = Arc::new(self.build_engine()?);
+        if let Some(service) = service {
+            let data_file = engine
+                .data_files()
+                .first()
+                .cloned()
+                .ok_or_else(|| Error::configuration("engine has no data file to register"))?;
+            let as_engine: Arc<dyn OnPremiseAspectEngine> = engine.clone();
+            service
+                .register(as_engine, data_file)
+                .map_err(|e| Error::configuration(e.to_string()))?;
+        }
+        Ok(engine)
+    }
+
+    fn build_engine(self) -> Result<IpIntelligenceOnPremiseEngine> {
         let property_refs: Option<Vec<&str>> = if self.requested_properties.is_empty() {
             None
         } else {
@@ -208,13 +299,28 @@ impl IpIntelligenceOnPremiseEngineBuilder {
         ))
     }
 
-    /// Build the data-file configuration that captures the update options.
+    /// Build the data-file configuration that captures the update options. The
+    /// update source is the Distributor unless a URL was given, with the
+    /// Distributor's URL formatter and the IP Intelligence download type, as the
+    /// other 51Degrees implementations have it.
     fn data_file_configuration(&self) -> DataFileConfiguration {
         let mut config = DataFileConfiguration::builder(self.data_file_path.clone())
             .automatic_updates_enabled(self.auto_update_enabled)
-            .file_system_watcher_enabled(self.file_system_watcher_enabled);
-        if let Some(url) = &self.data_update_url {
-            config = config.data_update_url(url.clone());
+            .file_system_watcher_enabled(self.file_system_watcher_enabled)
+            .update_on_startup(self.update_on_startup)
+            .data_update_url(
+                self.data_update_url
+                    .clone()
+                    .unwrap_or_else(|| DISTRIBUTOR_URL.to_owned()),
+            )
+            .data_update_license_keys(self.data_update_license_keys.clone())
+            .url_formatter(Some(Arc::new(FiftyOneUrlFormatter)))
+            .data_download_type(DATA_DOWNLOAD_TYPE);
+        if let Some(seconds) = self.polling_interval_seconds {
+            config = config.polling_interval_seconds(seconds);
+        }
+        if let Some(seconds) = self.max_randomisation_seconds {
+            config = config.max_randomisation_seconds(seconds);
         }
         config.build()
     }
@@ -224,32 +330,75 @@ impl IpIntelligenceOnPremiseEngineBuilder {
 mod tests {
     use super::*;
 
+    /// The defaults are those of the .NET and Java engines: updates and the
+    /// watcher on, no poll at startup, the Distributor as the source with its
+    /// URL formatter and the IP Intelligence download type.
     #[test]
-    fn defaults_disable_updates() {
+    fn defaults_match_the_other_implementations() {
         let builder = IpIntelligenceOnPremiseEngineBuilder::new("does-not-exist.ipi");
         let config = builder.data_file_configuration();
-        assert!(!config.automatic_updates_enabled);
-        assert!(!config.file_system_watcher_enabled);
-        assert!(config.data_update_url.is_none());
+        assert!(config.automatic_updates_enabled);
+        assert!(config.file_system_watcher_enabled);
+        assert!(!config.update_on_startup);
+        assert_eq!(config.data_update_url.as_deref(), Some(DISTRIBUTOR_URL));
+        assert!(config.url_formatter.is_some());
+        assert_eq!(
+            config.data_download_type.as_deref(),
+            Some(DATA_DOWNLOAD_TYPE)
+        );
+        assert!(config.data_update_license_keys.is_empty());
         assert_eq!(
             config.data_file_path.as_deref(),
             Some(std::path::Path::new("does-not-exist.ipi"))
+        );
+        let file = AspectEngineDataFile::new(config);
+        assert_eq!(
+            file.formatted_update_url().as_deref(),
+            Some(
+                "https://distributor.51degrees.com/api/v2/download\
+                 ?LicenseKeys=&Download=True&Type=IPIV41"
+            )
         );
     }
 
     #[test]
     fn update_options_are_captured() {
         let builder = IpIntelligenceOnPremiseEngineBuilder::new("d.ipi")
-            .auto_update(true)
-            .file_system_watcher(true)
-            .data_update_url("https://example.invalid/d");
+            .auto_update(false)
+            .file_system_watcher(false)
+            .update_on_startup(true)
+            .data_update_url("https://example.invalid/d")
+            .data_update_license_keys(["KEY1", "KEY2"])
+            .polling_interval_seconds(60)
+            .max_randomisation_seconds(5);
         let config = builder.data_file_configuration();
-        assert!(config.automatic_updates_enabled);
-        assert!(config.file_system_watcher_enabled);
+        assert!(!config.automatic_updates_enabled);
+        assert!(!config.file_system_watcher_enabled);
+        assert!(config.update_on_startup);
         assert_eq!(
             config.data_update_url.as_deref(),
             Some("https://example.invalid/d")
         );
+        assert_eq!(config.data_update_license_keys, ["KEY1", "KEY2"]);
+        assert_eq!(config.polling_interval_seconds, 60);
+        assert_eq!(config.max_randomisation_seconds, 5);
+        let file = AspectEngineDataFile::new(config);
+        assert_eq!(
+            file.formatted_update_url().as_deref(),
+            Some("https://example.invalid/d?LicenseKeys=KEY1|KEY2&Download=True&Type=IPIV41")
+        );
+    }
+
+    /// A service set on the builder needs the shared engine, so the plain
+    /// build refuses before it opens the file.
+    #[test]
+    fn build_refuses_a_service_it_cannot_register() {
+        let error = IpIntelligenceOnPremiseEngineBuilder::new("does-not-exist.ipi")
+            .data_update_service(Arc::new(DataUpdateService::new()))
+            .build()
+            .err()
+            .expect("build refuses");
+        assert!(error.to_string().contains("build_shared"), "{error}");
     }
 
     #[test]

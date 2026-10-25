@@ -32,9 +32,16 @@ use std::sync::Arc;
 
 use fiftyone_native::PerformanceProfile;
 use fiftyone_pipeline_core::{Error, Result};
-use fiftyone_pipeline_engines::{DataFileConfiguration, DataUpdateService, OnPremiseAspectEngine};
+use fiftyone_pipeline_engines::{
+    DataFileConfiguration, DataUpdateService, FiftyOneUrlFormatter, OnPremiseAspectEngine,
+    DISTRIBUTOR_URL,
+};
 
 use crate::engine::{open_manager, DeviceDetectionOnPremiseEngine};
+
+/// The download type the Distributor serves Hash data files as, sent in the
+/// update URL's `Type` parameter.
+pub const DATA_DOWNLOAD_TYPE: &str = "HashV41";
 
 /// A fluent builder for [`DeviceDetectionOnPremiseEngine`].
 ///
@@ -155,10 +162,13 @@ impl DeviceDetectionOnPremiseEngineBuilder {
     /// Enable automatic updates with an explicit data-file configuration.
     ///
     /// The configuration's `data_file_path` is overridden with the builder's
-    /// path so the engine and the update service agree on the file. When
-    /// `service` is supplied the data file is registered with it on
-    /// [`Self::build`]; otherwise the configuration is still attached to the
-    /// engine's data file so a caller can register it later.
+    /// path so the engine and the update service agree on the file. A
+    /// configuration with no update URL polls the 51Degrees Distributor, with
+    /// the Distributor's URL formatter and the Hash download type filled in,
+    /// as the other 51Degrees implementations do. When `service` is supplied
+    /// the data file is registered with it on [`Self::build`]; otherwise the
+    /// configuration is still attached to the engine's data file so a caller
+    /// can register it later.
     pub fn auto_update(
         mut self,
         config: DataFileConfiguration,
@@ -202,7 +212,7 @@ impl DeviceDetectionOnPremiseEngineBuilder {
         // updates disabled so the engine still has a registered file path for
         // a manual `refresh` or `check_for_update`.
         let (data_file_config, service) = match self.auto_update {
-            Some(AutoUpdate { config, service }) => (config, service),
+            Some(AutoUpdate { config, service }) => (with_distributor_defaults(config), service),
             None => (
                 DataFileConfiguration::builder(self.data_file_path.clone())
                     .automatic_updates_enabled(false)
@@ -235,5 +245,65 @@ impl DeviceDetectionOnPremiseEngineBuilder {
         }
 
         Ok(engine)
+    }
+}
+
+/// Fill in the Distributor as the update source where the configuration names
+/// none: its URL, its URL formatter and the Hash download type.
+fn with_distributor_defaults(mut config: DataFileConfiguration) -> DataFileConfiguration {
+    if config.data_update_url.is_none() {
+        config.data_update_url = Some(DISTRIBUTOR_URL.to_owned());
+    }
+    if config.url_formatter.is_none() {
+        config.url_formatter = Some(Arc::new(FiftyOneUrlFormatter));
+    }
+    if config.data_download_type.is_none() {
+        config.data_download_type = Some(DATA_DOWNLOAD_TYPE.to_owned());
+    }
+    config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fiftyone_pipeline_engines::AspectEngineDataFile;
+
+    /// A configuration naming no update source gets the Distributor, its URL
+    /// formatter and the Hash download type, and the formatted URL is the one
+    /// the other implementations request. A configuration naming its own
+    /// source and type keeps them.
+    #[test]
+    fn distributor_defaults_fill_only_what_is_missing() {
+        let defaulted = with_distributor_defaults(
+            DataFileConfiguration::builder("d.hash")
+                .data_update_license_keys(["KEY1"])
+                .build(),
+        );
+        assert_eq!(defaulted.data_update_url.as_deref(), Some(DISTRIBUTOR_URL));
+        assert!(defaulted.url_formatter.is_some());
+        assert_eq!(
+            defaulted.data_download_type.as_deref(),
+            Some(DATA_DOWNLOAD_TYPE)
+        );
+        let file = AspectEngineDataFile::new(defaulted);
+        assert_eq!(
+            file.formatted_update_url().as_deref(),
+            Some(
+                "https://distributor.51degrees.com/api/v2/download\
+                 ?LicenseKeys=KEY1&Download=True&Type=HashV41"
+            )
+        );
+
+        let kept = with_distributor_defaults(
+            DataFileConfiguration::builder("d.hash")
+                .data_update_url("https://example.invalid/d.hash")
+                .data_download_type("Other")
+                .build(),
+        );
+        assert_eq!(
+            kept.data_update_url.as_deref(),
+            Some("https://example.invalid/d.hash")
+        );
+        assert_eq!(kept.data_download_type.as_deref(), Some("Other"));
     }
 }

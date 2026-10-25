@@ -81,6 +81,18 @@
 //! feature is enabled. See the [`fiftyone_pipeline_engines_fiftyone`] crate
 //! docs for what the element sends and how.
 //!
+//! ## Data updates are on by default
+//!
+//! An on-premise pipeline keeps its data file current, as the other languages'
+//! pipelines do. The builder creates a `DataUpdateService` the pipeline owns,
+//! which polls the 51Degrees Distributor every thirty minutes, staggered by up
+//! to ten minutes, and refreshes the engine when the file changes on disk. The
+//! Distributor needs the licence keys set with `.data_update_license_keys(..)`
+//! and refuses a poll without one, so a deployment of the free Lite file turns
+//! polling off with `.auto_update(false)`. `.file_system_watcher(false)` turns
+//! the watcher off, and `pipeline.resource::<DataUpdateService>()` reaches the
+//! service for a check on demand.
+//!
 //! ## Examples
 //!
 //! See [`DeviceDetectionPipelineBuilder::on_premise`] for an on-premise example
@@ -113,6 +125,9 @@ pub use fiftyone_pipeline_core::{
 
 #[cfg(any(feature = "cloud", feature = "on-premise"))]
 use fiftyone_pipeline_engines_fiftyone::{SequenceElement, ShareUsageElement};
+
+#[cfg(feature = "on-premise")]
+use fiftyone_pipeline_engines::{DataFileConfiguration, DataUpdateService};
 
 // ---------------------------------------------------------------------------
 // Re-exports: the on-premise engine and the native performance profile.
@@ -244,9 +259,9 @@ impl DeviceDetectionPipelineBuilder {
 /// Builds an `Arc<`[`Pipeline`]`>` around the on-premise Hash engine.
 ///
 /// Defaults: the [`PerformanceProfile::Default`] profile, every property the
-/// data file supports, the UA-CH high-entropy decoder enabled, and share usage
-/// enabled with the `share-usage` feature. Override any of these before
-/// [`Self::build`].
+/// data file supports, the UA-CH high-entropy decoder enabled, share usage
+/// enabled with the `share-usage` feature, and automatic data updates on.
+/// Override any of these before [`Self::build`].
 #[cfg(feature = "on-premise")]
 pub struct DeviceDetectionOnPremisePipelineBuilder {
     data_file_path: std::path::PathBuf,
@@ -256,6 +271,14 @@ pub struct DeviceDetectionOnPremisePipelineBuilder {
     concurrency: Option<u16>,
     use_uach: bool,
     share_usage: bool,
+    auto_update: bool,
+    file_system_watcher: bool,
+    update_on_startup: bool,
+    data_update_url: Option<String>,
+    data_update_license_keys: Vec<String>,
+    polling_interval_seconds: Option<u64>,
+    max_randomisation_seconds: Option<u64>,
+    data_update_service: Option<std::sync::Arc<DataUpdateService>>,
 }
 
 #[cfg(feature = "on-premise")]
@@ -270,7 +293,80 @@ impl DeviceDetectionOnPremisePipelineBuilder {
             concurrency: None,
             use_uach: true,
             share_usage: cfg!(feature = "share-usage"),
+            auto_update: true,
+            file_system_watcher: true,
+            update_on_startup: false,
+            data_update_url: None,
+            data_update_license_keys: Vec::new(),
+            polling_interval_seconds: None,
+            max_randomisation_seconds: None,
+            data_update_service: None,
         }
+    }
+
+    /// Enable or disable automatic data file updates. On by default, as in the
+    /// other languages. When on, the pipeline owns a [`DataUpdateService`] that
+    /// polls the update URL on the polling interval and refreshes the engine
+    /// with each new file. The 51Degrees Distributor refuses a poll without a
+    /// licence key, so a deployment of the Lite file turns this off or sets
+    /// [`Self::data_update_license_keys`].
+    pub fn auto_update(mut self, enabled: bool) -> Self {
+        self.auto_update = enabled;
+        self
+    }
+
+    /// Enable or disable the file-system watcher, which refreshes the engine
+    /// when the data file changes on disk. On by default.
+    pub fn file_system_watcher(mut self, enabled: bool) -> Self {
+        self.file_system_watcher = enabled;
+        self
+    }
+
+    /// Set whether the update service polls once while the pipeline is built,
+    /// so the engine starts with the newest data. Off by default.
+    pub fn update_on_startup(mut self, enabled: bool) -> Self {
+        self.update_on_startup = enabled;
+        self
+    }
+
+    /// Set the URL polled for a new data file. The 51Degrees Distributor by
+    /// default.
+    pub fn data_update_url(mut self, url: impl Into<String>) -> Self {
+        self.data_update_url = Some(url.into());
+        self
+    }
+
+    /// Set the licence keys the update URL carries, which the Distributor
+    /// needs before it serves a file.
+    pub fn data_update_license_keys<I, S>(mut self, keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.data_update_license_keys = keys.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Set the interval between polls of the update URL, in seconds. Thirty
+    /// minutes by default.
+    pub fn polling_interval_seconds(mut self, seconds: u64) -> Self {
+        self.polling_interval_seconds = Some(seconds);
+        self
+    }
+
+    /// Set the most that is added at random to each polling interval, in
+    /// seconds, so many instances do not poll together. Ten minutes by default.
+    pub fn max_randomisation_seconds(mut self, seconds: u64) -> Self {
+        self.max_randomisation_seconds = Some(seconds);
+        self
+    }
+
+    /// Register the engine with `service` instead of a service this builder
+    /// creates, so several pipelines share one. The pipeline keeps it alive
+    /// as well.
+    pub fn data_update_service(mut self, service: std::sync::Arc<DataUpdateService>) -> Self {
+        self.data_update_service = Some(service);
+        self
     }
 
     /// Set the performance profile used to load the data file. Defaults to
@@ -362,8 +458,18 @@ impl DeviceDetectionOnPremisePipelineBuilder {
     pub fn build(self) -> Result<std::sync::Arc<Pipeline>> {
         use std::sync::Arc;
 
-        let mut engine_builder = DeviceDetectionOnPremiseEngineBuilder::new(self.data_file_path)
-            .performance_profile(self.profile);
+        // The service that keeps the data file current: the one the caller
+        // shares, or one of this pipeline's own when any automatic mode is on.
+        let updates_wanted = self.auto_update || self.file_system_watcher || self.update_on_startup;
+        let service = match (self.data_update_service, updates_wanted) {
+            (Some(service), _) => Some(service),
+            (None, true) => Some(Arc::new(DataUpdateService::new())),
+            (None, false) => None,
+        };
+
+        let mut engine_builder =
+            DeviceDetectionOnPremiseEngineBuilder::new(self.data_file_path.clone())
+                .performance_profile(self.profile);
         engine_builder = engine_builder.properties(self.properties);
         if let Some(tier) = self.data_source_tier {
             engine_builder = engine_builder.data_source_tier(tier);
@@ -371,9 +477,29 @@ impl DeviceDetectionOnPremisePipelineBuilder {
         if let Some(concurrency) = self.concurrency {
             engine_builder = engine_builder.concurrency(concurrency);
         }
+        if let Some(service) = &service {
+            let mut config = DataFileConfiguration::builder(self.data_file_path)
+                .automatic_updates_enabled(self.auto_update)
+                .file_system_watcher_enabled(self.file_system_watcher)
+                .update_on_startup(self.update_on_startup)
+                .data_update_license_keys(self.data_update_license_keys);
+            if let Some(url) = self.data_update_url {
+                config = config.data_update_url(url);
+            }
+            if let Some(seconds) = self.polling_interval_seconds {
+                config = config.polling_interval_seconds(seconds);
+            }
+            if let Some(seconds) = self.max_randomisation_seconds {
+                config = config.max_randomisation_seconds(seconds);
+            }
+            engine_builder = engine_builder.auto_update(config.build(), Some(Arc::clone(service)));
+        }
         let engine = engine_builder.build()?;
 
         let mut pipeline_builder = Pipeline::builder();
+        if let Some(service) = service {
+            pipeline_builder = pipeline_builder.add_resource(service);
+        }
         if self.share_usage {
             pipeline_builder = pipeline_builder.add_element(Arc::new(SequenceElement::new()));
         }
@@ -587,6 +713,41 @@ mod tests {
             names.last().copied(),
             Some("fiftyone_pipeline_engines_fiftyone::share_usage_element::ShareUsageElement")
         );
+    }
+
+    /// Data updates are on by default: the pipeline owns a data update service
+    /// with the engine's data file registered. With every automatic mode off,
+    /// no service is created.
+    #[cfg(feature = "on-premise")]
+    #[test]
+    fn on_premise_pipeline_owns_a_data_update_service_by_default() {
+        use super::DeviceDetectionPipelineBuilder;
+        use fiftyone_pipeline_engines::DataUpdateService;
+
+        let Some(data_file) = resolve_dd_data_file() else {
+            eprintln!(
+                "skipping on_premise_pipeline_owns_a_data_update_service_by_default: no Lite \
+                 Hash data file found (set 51DEGREES_DD_PATH to enable this test)"
+            );
+            return;
+        };
+
+        let pipeline = DeviceDetectionPipelineBuilder::on_premise(&data_file)
+            .share_usage(false)
+            .build()
+            .expect("the on-premise pipeline should build against the Lite data file");
+        let service = pipeline
+            .resource::<DataUpdateService>()
+            .expect("the pipeline owns a data update service");
+        assert_eq!(service.registered_count(), 1);
+
+        let quiet = DeviceDetectionPipelineBuilder::on_premise(&data_file)
+            .share_usage(false)
+            .auto_update(false)
+            .file_system_watcher(false)
+            .build()
+            .expect("the quiet pipeline should build");
+        assert!(quiet.resource::<DataUpdateService>().is_none());
     }
 
     #[cfg(feature = "on-premise")]
