@@ -164,6 +164,8 @@ use fiftyone_device_detection::{
 
 let pipeline = DeviceDetectionPipelineBuilder::on_premise("51Degrees-LiteV4.1.hash")
     .performance_profile(PerformanceProfile::HighPerformance)
+    // Off because the free Lite file has no licence key for updates.
+    .auto_update(false)
     .build()?;
 
 let mut data = pipeline.create_flow_data_with(
@@ -211,6 +213,8 @@ use fiftyone_ip_intelligence::{
 // data repository (see its README).
 let pipeline = IpIntelligencePipelineBuilder::on_premise("51Degrees-IPIV4AsnIpiV41.ipi")
     .performance_profile(PerformanceProfile::HighPerformance)
+    // Off because the free ASN file has no licence key for updates.
+    .auto_update(false)
     .build()?;
 ```
 
