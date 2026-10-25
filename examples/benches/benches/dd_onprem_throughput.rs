@@ -60,6 +60,8 @@ fn build_pipeline(data_file: &Path) -> Arc<Pipeline> {
         .performance_profile(PerformanceProfile::InMemory)
         .property("IsMobile")
         .share_usage(false)
+        // Off so no licence key is needed.
+        .auto_update(false)
         .build()
         .expect("the benchmark on-premise pipeline should build from the Lite .hash file")
 }

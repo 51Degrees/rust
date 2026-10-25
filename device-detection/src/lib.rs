@@ -87,11 +87,13 @@
 //! pipelines do. The builder creates a `DataUpdateService` the pipeline owns,
 //! which polls the 51Degrees Distributor every thirty minutes, staggered by up
 //! to ten minutes, and refreshes the engine when the file changes on disk. The
-//! Distributor needs the licence keys set with `.data_update_license_keys(..)`
-//! and refuses a poll without one, so a deployment of the free Lite file turns
-//! polling off with `.auto_update(false)`. `.file_system_watcher(false)` turns
-//! the watcher off, and `pipeline.resource::<DataUpdateService>()` reaches the
-//! service for a check on demand.
+//! Distributor serves nothing without the licence keys set with
+//! `.data_update_license_keys(..)`, so a build with polling on and no key
+//! fails with an error that says so, as it does in .NET, and a deployment of
+//! the free Lite file turns polling off with `.auto_update(false)`.
+//! `.file_system_watcher(false)` turns the watcher off, and
+//! `pipeline.resource::<DataUpdateService>()` reaches the service for a check
+//! on demand.
 //!
 //! ## Examples
 //!
@@ -307,8 +309,9 @@ impl DeviceDetectionOnPremisePipelineBuilder {
     /// Enable or disable automatic data file updates. On by default, as in the
     /// other languages. When on, the pipeline owns a [`DataUpdateService`] that
     /// polls the update URL on the polling interval and refreshes the engine
-    /// with each new file. The 51Degrees Distributor refuses a poll without a
-    /// licence key, so a deployment of the Lite file turns this off or sets
+    /// with each new file. The 51Degrees Distributor serves nothing without a
+    /// licence key, so [`Self::build`] refuses with this on and no key set, and
+    /// a deployment of the Lite file turns this off or sets
     /// [`Self::data_update_license_keys`].
     pub fn auto_update(mut self, enabled: bool) -> Self {
         self.auto_update = enabled;
@@ -337,7 +340,8 @@ impl DeviceDetectionOnPremisePipelineBuilder {
     }
 
     /// Set the licence keys the update URL carries, which the Distributor
-    /// needs before it serves a file.
+    /// needs before it serves a file. One is required when automatic updates
+    /// or update on startup are on.
     pub fn data_update_license_keys<I, S>(mut self, keys: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -454,7 +458,8 @@ impl DeviceDetectionOnPremisePipelineBuilder {
     /// optional UA-CH decoder, the Hash engine, then usage sharing when it is
     /// on. Returns the same kind of `Arc<`[`Pipeline`]`>` that
     /// [`Pipeline::builder`] does, so a caller drives it identically whichever
-    /// deployment built it.
+    /// deployment built it. Refuses when automatic updates or update on
+    /// startup are on and no licence key is set.
     pub fn build(self) -> Result<std::sync::Arc<Pipeline>> {
         use std::sync::Arc;
 
@@ -715,9 +720,10 @@ mod tests {
         );
     }
 
-    /// Data updates are on by default: the pipeline owns a data update service
-    /// with the engine's data file registered. With every automatic mode off,
-    /// no service is created.
+    /// Data updates are on by default, so a build with no licence key refuses
+    /// and says which switch turns them off. With a key the pipeline owns a
+    /// data update service with the engine's data file registered. With every
+    /// automatic mode off, no service is created.
     #[cfg(feature = "on-premise")]
     #[test]
     fn on_premise_pipeline_owns_a_data_update_service_by_default() {
@@ -732,10 +738,18 @@ mod tests {
             return;
         };
 
-        let pipeline = DeviceDetectionPipelineBuilder::on_premise(&data_file)
+        let error = DeviceDetectionPipelineBuilder::on_premise(&data_file)
             .share_usage(false)
             .build()
-            .expect("the on-premise pipeline should build against the Lite data file");
+            .err()
+            .expect("the default build needs a licence key");
+        assert!(error.to_string().contains("auto_update(false)"), "{error}");
+
+        let pipeline = DeviceDetectionPipelineBuilder::on_premise(&data_file)
+            .share_usage(false)
+            .data_update_license_keys(["KEY1"])
+            .build()
+            .expect("the on-premise pipeline should build with a licence key");
         let service = pipeline
             .resource::<DataUpdateService>()
             .expect("the pipeline owns a data update service");
@@ -771,10 +785,12 @@ mod tests {
             return;
         };
 
-        // Usage sharing is off so the test sends nothing to 51Degrees.
+        // Usage sharing is off so the test sends nothing to 51Degrees, and
+        // automatic updates are off so the build needs no licence key.
         let pipeline = DeviceDetectionPipelineBuilder::on_premise(&data_file)
             .performance_profile(PerformanceProfile::HighPerformance)
             .share_usage(false)
+            .auto_update(false)
             .build()
             .expect("the on-premise pipeline should build against the Lite data file");
 

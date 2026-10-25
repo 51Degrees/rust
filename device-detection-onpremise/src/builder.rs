@@ -168,7 +168,8 @@ impl DeviceDetectionOnPremiseEngineBuilder {
     /// as the other 51Degrees implementations do. When `service` is supplied
     /// the data file is registered with it on [`Self::build`]; otherwise the
     /// configuration is still attached to the engine's data file so a caller
-    /// can register it later.
+    /// can register it later. A configuration with automatic updates or update
+    /// on startup on needs a licence key, or [`Self::build`] refuses.
     pub fn auto_update(
         mut self,
         config: DataFileConfiguration,
@@ -195,18 +196,13 @@ impl DeviceDetectionOnPremiseEngineBuilder {
 
     /// Open the data file and build the engine.
     ///
-    /// When automatic updates were configured with a service, the engine's data
-    /// file is registered with that service before the engine is returned, so a
-    /// startup poll (if requested) and the polling schedule are in effect.
+    /// Refuses, before opening the file, when the configuration given to
+    /// [`Self::auto_update`] has automatic updates or update on startup on and
+    /// no licence key, as the other implementations do. When automatic updates
+    /// were configured with a service, the engine's data file is registered
+    /// with that service before the engine is returned, so a startup poll (if
+    /// requested) and the polling schedule are in effect.
     pub fn build(self) -> Result<Arc<DeviceDetectionOnPremiseEngine>> {
-        // Open the data set with the requested property restriction.
-        let manager = open_manager(
-            &self.data_file_path,
-            self.profile,
-            &self.requested_properties,
-            self.concurrency,
-        )?;
-
         // The data-file configuration the engine carries. When auto-update was
         // requested, use that configuration; otherwise build a static one with
         // updates disabled so the engine still has a registered file path for
@@ -221,6 +217,15 @@ impl DeviceDetectionOnPremiseEngineBuilder {
                 None,
             ),
         };
+        data_file_config.check_license_keys()?;
+
+        // Open the data set with the requested property restriction.
+        let manager = open_manager(
+            &self.data_file_path,
+            self.profile,
+            &self.requested_properties,
+            self.concurrency,
+        )?;
 
         let engine = Arc::new(DeviceDetectionOnPremiseEngine::from_manager(
             manager,
@@ -305,5 +310,33 @@ mod tests {
             Some("https://example.invalid/d.hash")
         );
         assert_eq!(kept.data_download_type.as_deref(), Some("Other"));
+    }
+
+    /// With automatic updates on and no licence key the build refuses before
+    /// it opens the file, so the error is about the key and not the file. With
+    /// a key the file is opened, and the missing file is the error.
+    #[test]
+    fn a_missing_licence_key_refuses_before_the_file_is_opened() {
+        let error = DeviceDetectionOnPremiseEngineBuilder::new("does-not-exist.hash")
+            .auto_update(
+                DataFileConfiguration::builder("does-not-exist.hash").build(),
+                None,
+            )
+            .build()
+            .err()
+            .expect("the build refuses");
+        assert!(error.to_string().contains("licence key"), "{error}");
+
+        let error = DeviceDetectionOnPremiseEngineBuilder::new("does-not-exist.hash")
+            .auto_update(
+                DataFileConfiguration::builder("does-not-exist.hash")
+                    .data_update_license_keys(["KEY1"])
+                    .build(),
+                None,
+            )
+            .build()
+            .err()
+            .expect("the file does not exist");
+        assert!(!error.to_string().contains("licence key"), "{error}");
     }
 }

@@ -72,6 +72,8 @@ pub fn run(options: ExampleOptions) -> Result<()> {
     let pipeline = DeviceDetectionPipelineBuilder::on_premise(&options.data_file)
         .performance_profile(PerformanceProfile::LowMemory)
         .share_usage(false)
+        // Off so no licence key is needed.
+        .auto_update(false)
         .build()
         .context("failed to build the on-premise device-detection pipeline")?;
 

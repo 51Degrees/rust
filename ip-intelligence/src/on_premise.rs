@@ -125,8 +125,9 @@ impl OnPremiseIpIntelligencePipelineBuilder {
     /// Enable or disable automatic data file updates. On by default, as in the
     /// other languages. When on, the pipeline owns a [`DataUpdateService`] that
     /// polls the update URL on the polling interval and refreshes the engine
-    /// with each new file. The 51Degrees Distributor refuses a poll without a
-    /// licence key, so a deployment without one turns this off or sets
+    /// with each new file. The 51Degrees Distributor serves nothing without a
+    /// licence key, so [`Self::build`] refuses with this on and no key set, and
+    /// a deployment without one turns this off or sets
     /// [`Self::data_update_license_keys`].
     pub fn auto_update(mut self, enabled: bool) -> Self {
         self.auto_update = enabled;
@@ -155,7 +156,8 @@ impl OnPremiseIpIntelligencePipelineBuilder {
     }
 
     /// Set the licence keys the update URL carries, which the Distributor
-    /// needs before it serves a file.
+    /// needs before it serves a file. One is required when automatic updates
+    /// or update on startup are on.
     pub fn data_update_license_keys<I, S>(mut self, keys: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -211,7 +213,9 @@ impl OnPremiseIpIntelligencePipelineBuilder {
 
     /// Open the data file, build the engine and assemble the pipeline.
     ///
-    /// Returns the native error if the data file fails to load.
+    /// Returns the native error if the data file fails to load. Refuses when
+    /// automatic updates or update on startup are on and no licence key is
+    /// set.
     pub fn build(self) -> Result<Arc<Pipeline>> {
         // The service that keeps the data file current: the one the caller
         // shares, or one of this pipeline's own when any automatic mode is on.
@@ -320,9 +324,10 @@ mod tests {
         candidates.into_iter().find(|p| p.is_file())
     }
 
-    /// Data updates are on by default: the pipeline owns a data update service
-    /// with the engine's data file registered. With every automatic mode off,
-    /// no service is created.
+    /// Data updates are on by default, so a build with no licence key refuses
+    /// and says which switch turns them off. With a key the pipeline owns a
+    /// data update service with the engine's data file registered. With every
+    /// automatic mode off, no service is created.
     #[test]
     fn on_premise_pipeline_owns_a_data_update_service_by_default() {
         use fiftyone_pipeline_engines::DataUpdateService;
@@ -332,11 +337,20 @@ mod tests {
             return;
         };
 
-        let pipeline = IpIntelligencePipelineBuilder::on_premise(&path)
+        let error = IpIntelligencePipelineBuilder::on_premise(&path)
             .properties(ASN_PROPERTIES.iter().copied())
             .share_usage(false)
             .build()
-            .expect("the on-premise pipeline should build against the ASN data file");
+            .err()
+            .expect("the default build needs a licence key");
+        assert!(error.to_string().contains("auto_update(false)"), "{error}");
+
+        let pipeline = IpIntelligencePipelineBuilder::on_premise(&path)
+            .properties(ASN_PROPERTIES.iter().copied())
+            .share_usage(false)
+            .data_update_license_keys(["KEY1"])
+            .build()
+            .expect("the on-premise pipeline should build with a licence key");
         let service = pipeline
             .resource::<DataUpdateService>()
             .expect("the pipeline owns a data update service");
@@ -366,6 +380,8 @@ mod tests {
             .properties(ASN_PROPERTIES.iter().copied())
             // Off so the test sends nothing to 51Degrees.
             .share_usage(false)
+            // Off so the build needs no licence key.
+            .auto_update(false)
             .build()
             .expect("the ASN data file should build an on-premise pipeline");
 
