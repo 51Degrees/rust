@@ -682,6 +682,7 @@ fn an_attached_resource_lives_with_the_pipeline_and_is_found_by_type() {
     assert!(pipeline.resource::<u32>().is_none());
     drop(pipeline);
     assert_eq!(Arc::strong_count(&resource), 1);
+}
 
 /// A whitelist lists its keys, an aggregator lists the union of its parts and
 /// nothing when a part has no list, and the pipeline-wide filter lists every
