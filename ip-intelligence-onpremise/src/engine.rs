@@ -554,6 +554,8 @@ mod tests {
         let engine = IpIntelligenceOnPremiseEngine::builder(&data_file)
             .performance_profile(PerformanceProfile::HighPerformance)
             .properties(ASN_PROPERTIES.iter().copied())
+            // Off so the build needs no licence key.
+            .auto_update(false)
             .build()
             .unwrap_or_else(|err| {
                 panic!("the ASN IP Intelligence data file should build an engine: {err}")

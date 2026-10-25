@@ -201,6 +201,8 @@ impl IpIntelligencePipelineBuilder {
     /// let pipeline = IpIntelligencePipelineBuilder::on_premise("51Degrees-IPIV4AsnIpiV41.ipi")
     ///     .performance_profile(PerformanceProfile::HighPerformance)
     ///     .property("Asn")
+    ///     // Off because the free ASN file has no licence key for updates.
+    ///     .auto_update(false)
     ///     .build()?;
     ///
     /// let mut data = pipeline.create_flow_data_with(

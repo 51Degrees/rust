@@ -63,6 +63,8 @@ pub const DATA_DOWNLOAD_TYPE: &str = "IPIV41";
 ///     .performance_profile(PerformanceProfile::LowMemory)
 ///     .property("RegisteredCountry")
 ///     .property("Country")
+///     // Off because the free ASN file has no licence key for updates.
+///     .auto_update(false)
 ///     .build()?;
 /// # let _ = engine;
 /// # Ok(())

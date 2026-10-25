@@ -201,6 +201,8 @@ impl DeviceDetectionPipelineBuilder {
     /// # fn main() -> fiftyone_pipeline_core::Result<()> {
     /// let pipeline = DeviceDetectionPipelineBuilder::on_premise("51Degrees-LiteV4.1.hash")
     ///     .performance_profile(PerformanceProfile::HighPerformance)
+    ///     // Off because the free Lite file has no licence key for updates.
+    ///     .auto_update(false)
     ///     .build()?;
     ///
     /// let mut data = pipeline.create_flow_data_with(

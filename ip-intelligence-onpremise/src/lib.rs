@@ -79,6 +79,8 @@
 //! # fn main() -> fiftyone_pipeline_core::Result<()> {
 //! let engine = IpIntelligenceOnPremiseEngine::builder("51Degrees-IPIV4AsnIpiV41.ipi")
 //!     .performance_profile(PerformanceProfile::HighPerformance)
+//!     // Off because the free ASN file has no licence key for updates.
+//!     .auto_update(false)
 //!     .build()?;
 //!
 //! let pipeline = Pipeline::builder().add_element(Arc::new(engine)).build()?;
