@@ -157,8 +157,8 @@ impl DataFileConfiguration {
     /// Fails when [`Self::license_key_required_for_updates`] is on, automatic
     /// updates or update on startup are on, and no key is set or every key is
     /// blank. The engine builders call this before they open the data file,
-    /// as the other 51Degrees implementations do, so a deployment without a
-    /// key fails at startup instead of being refused at every poll.
+    /// as .NET does, so a deployment without a key fails at startup instead
+    /// of being refused at every poll.
     pub fn check_license_keys(&self) -> Result<()> {
         if !self.license_key_required_for_updates {
             return Ok(());
@@ -539,7 +539,7 @@ mod tests {
     }
 
     /// The Distributor formatter writes the licence keys, the download flag
-    /// and the type as the other implementations do.
+    /// and the type as the .NET and Java formatters do.
     #[test]
     fn fiftyone_formatter_writes_the_distributor_query() {
         let file = AspectEngineDataFile::new(
