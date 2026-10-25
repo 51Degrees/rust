@@ -122,12 +122,12 @@ impl OnPremiseIpIntelligencePipelineBuilder {
         self
     }
 
-    /// Enable or disable automatic data file updates. On by default, as in the
-    /// other languages. When on, the pipeline owns a [`DataUpdateService`] that
+    /// Enable or disable automatic data file updates. On by default, as in
+    /// .NET and Java. When on, the pipeline owns a [`DataUpdateService`] that
     /// polls the update URL on the polling interval and refreshes the engine
     /// with each new file. The 51Degrees Distributor serves nothing without a
-    /// licence key, so [`Self::build`] refuses with this on and no key set, and
-    /// a deployment without one turns this off or sets
+    /// licence key, so [`Self::build`] refuses with this on and no key set, as
+    /// .NET does, and a deployment without one turns this off or sets
     /// [`Self::data_update_license_keys`].
     pub fn auto_update(mut self, enabled: bool) -> Self {
         self.auto_update = enabled;

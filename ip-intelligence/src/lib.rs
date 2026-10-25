@@ -58,7 +58,7 @@
 //!
 //! # Data updates are on by default
 //!
-//! An on-premise pipeline keeps its data file current, as the other languages'
+//! An on-premise pipeline keeps its data file current, as the .NET and Java
 //! pipelines do. The builder creates a `DataUpdateService` the pipeline owns,
 //! which polls the 51Degrees Distributor every thirty minutes, staggered by up
 //! to ten minutes, and refreshes the engine when the file changes on disk. The
