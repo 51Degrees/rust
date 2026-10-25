@@ -448,7 +448,7 @@ mod tests {
  * The benchmark pipeline is built with two deliberate choices that maximise
  * throughput:
  *
- * - The `HighPerformance` performance profile, which holds the data set in
+ * - The `InMemory` performance profile, which loads the whole data set into
  *   memory for the fastest detections.
  * - A single requested property (`IsMobile`), so detection resolves only one
  *   component. Requesting fewer properties, ideally from a single component,
@@ -459,8 +459,8 @@ mod tests {
  * performance profiles are listed in a comment in the example body so they can be
  * swapped in to compare:
  *
- * - HighPerformance - fastest detections, most memory.
- * - InMemory        - loads the file fully into memory.
+ * - InMemory        - loads the file fully into memory, fastest detections.
+ * - HighPerformance - everything in memory, connection to the file dropped.
  * - Balanced        - a balance of speed and memory.
  * - Default         - the engine's default balance.
  * - LowMemory       - streams data from disk on demand, least memory, slower.
