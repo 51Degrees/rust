@@ -85,9 +85,9 @@ pub const FAILURES_TO_ENTER_RECOVERY_MAX: u32 = 100;
 pub const FAILURES_WINDOW_SECONDS_DEFAULT: u64 = 100;
 
 /// The data key under which this engine stores its element data in a flow data.
-/// Downstream cloud aspect engines read the raw JSON from here. The data key is
-/// `cloud`, as set out in the specification.
-pub const ELEMENT_DATA_KEY: &str = "cloud";
+/// Downstream cloud aspect engines read the raw JSON from here. The key is
+/// `cloud-response`, the key the other 51Degrees implementations use.
+pub const ELEMENT_DATA_KEY: &str = "cloud-response";
 
 /// The element-data field that holds the raw JSON response body.
 pub const JSON_RESPONSE_KEY: &str = "json-response";

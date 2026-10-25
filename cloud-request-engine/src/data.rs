@@ -28,11 +28,11 @@
 //! aspect data, so this engine makes exactly one HTTP request per flow data
 //! regardless of how many aspects are involved.
 //!
-//! The raw JSON is stored under three names so every consumer can find it:
+//! The raw JSON is stored under two field names so every consumer can find it:
 //!
-//! - `cloud`, the data key field and the most ergonomic field name for
-//!   downstream engines.
-//! - `json-response`, an alternative field name kept for cross-language parity.
+//! - `cloud-response`, the data key, so the JSON can be read by the same name
+//!   the data is stored under.
+//! - `json-response`, the field name the other 51Degrees implementations use.
 //!
 //! A `process-started` boolean records that the engine ran, which lets a
 //! consumer distinguish "the engine produced an empty result" from "the engine
@@ -64,7 +64,7 @@ impl CloudRequestData {
         CloudRequestData { base }
     }
 
-    /// Store the raw JSON response body, under both the `cloud` and
+    /// Store the raw JSON response body, under both the `cloud-response` and
     /// `json-response` field names. Returns `self` for chaining.
     pub fn with_json_response(mut self, json: impl Into<String>) -> Self {
         self.set_json_response(json);
@@ -109,8 +109,8 @@ impl CloudRequestData {
         }
     }
 
-    /// The raw JSON response body, if it has been set. Reads through the `cloud`
-    /// field.
+    /// The raw JSON response body, if it has been set. Reads through the
+    /// `cloud-response` field.
     pub fn json_response(&self) -> Option<&str> {
         match self.base.values().get_value(constants::ELEMENT_DATA_KEY) {
             Some(PropertyValue::String(s)) => Some(s.as_str()),
