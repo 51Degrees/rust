@@ -64,24 +64,22 @@
 //! so the element wiring is visible. [`DeviceDetectionPipelineBuilder`] is a
 //! convenience for the common console-style case and the examples. Usage
 //! sharing is on by default, as it is in the other languages' builders, and
-//! with it on the builder also adds a
-//! [`SequenceElement`](fiftyone_pipeline_engines_fiftyone::SequenceElement). A
-//! web deployment typically adds the JSON and JavaScript builders and a
+//! with it on the builder also adds a [`SequenceElement`]. A web deployment
+//! typically adds the JSON and JavaScript builders and a
 //! [`SetHeadersElement`](fiftyone_pipeline_engines_fiftyone::SetHeadersElement)
 //! through the web integration crate rather than this builder.
 //!
 //! ## Usage sharing is on by default
 //!
 //! With the default `share-usage` feature, both sub-builders add a
-//! [`ShareUsageElement`](fiftyone_pipeline_engines_fiftyone::ShareUsageElement),
-//! which sends evidence from the requests the pipeline processes to 51Degrees
-//! to improve detection. A console or off-line tool turns it off with
-//! `.share_usage(false)`, because evidence 51Degrees already holds adds
-//! nothing. With the feature off, the builders leave usage sharing off unless
-//! `.share_usage(true)` is called, and the element sends nothing unless the
-//! `fiftyone-pipeline-engines-fiftyone/share-usage-transport` feature is
-//! enabled. See the [`fiftyone_pipeline_engines_fiftyone`] crate docs for what
-//! the element sends and how.
+//! [`ShareUsageElement`], which sends evidence from the requests the pipeline
+//! processes to 51Degrees to improve detection. A console or off-line tool
+//! turns it off with `.share_usage(false)`, because evidence 51Degrees already
+//! holds adds nothing. With the feature off, the builders leave usage sharing
+//! off unless `.share_usage(true)` is called, and the element sends nothing
+//! unless the `fiftyone-pipeline-engines-fiftyone/share-usage-transport`
+//! feature is enabled. See the [`fiftyone_pipeline_engines_fiftyone`] crate
+//! docs for what the element sends and how.
 //!
 //! ## Examples
 //!
