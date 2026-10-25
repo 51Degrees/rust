@@ -90,6 +90,8 @@ pub fn build_app(
     let engine = Arc::new(
         IpIntelligenceOnPremiseEngine::builder(data_file.to_path_buf())
             .performance_profile(PerformanceProfile::HighPerformance)
+            // Off so no licence key is needed; see the update-data-file example.
+            .auto_update(false)
             .build()
             .with_context(|| format!("loading the .ipi data file at {}", data_file.display()))?,
     );
