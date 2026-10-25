@@ -89,6 +89,8 @@ fn dd_and_ipi_on_premise_coexist_in_one_binary() {
             .performance_profile(PerformanceProfile::HighPerformance)
             // Off so the test sends nothing to 51Degrees.
             .share_usage(false)
+            // Off so the build needs no licence key.
+            .auto_update(false)
             .build()
             .expect("device-detection on-premise pipeline builds");
 
@@ -121,6 +123,8 @@ fn dd_and_ipi_on_premise_coexist_in_one_binary() {
             .property("Asn")
             // Off so the test sends nothing to 51Degrees.
             .share_usage(false)
+            // Off so the build needs no licence key.
+            .auto_update(false)
             .build()
             .expect("ip-intelligence on-premise pipeline builds");
 
@@ -188,6 +192,8 @@ fn dd_and_ipi_combined_in_one_pipeline() {
         .performance_profile(PerformanceProfile::HighPerformance)
         // Off so the test sends nothing to 51Degrees.
         .share_usage(false)
+        // Off so the build needs no licence key.
+        .auto_update(false)
         .build()
         .expect("device-detection on-premise pipeline builds");
     let ipi_pipeline = IpIntelligencePipelineBuilder::on_premise(&ipi_file)
@@ -195,6 +201,8 @@ fn dd_and_ipi_combined_in_one_pipeline() {
         .property("Asn")
         // Off so the test sends nothing to 51Degrees.
         .share_usage(false)
+        // Off so the build needs no licence key.
+        .auto_update(false)
         .build()
         .expect("ip-intelligence on-premise pipeline builds");
 

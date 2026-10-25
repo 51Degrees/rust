@@ -93,6 +93,8 @@ fn on_premise_facade_resolves_asn() {
         .property("Asn")
         // Off so the test sends nothing to 51Degrees.
         .share_usage(false)
+        // Off so the build needs no licence key.
+        .auto_update(false)
         .build()
         .expect("the on-premise facade pipeline builds");
 
