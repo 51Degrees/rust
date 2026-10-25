@@ -62,7 +62,7 @@ struct Endpoints {
 /// the server accepts, strips each key's prefix following the evidence
 /// precedence rules, POSTs the result as url-encoded form data to the `json`
 /// endpoint, and stores the raw JSON response body in its element data under the
-/// `cloud` data key. Downstream cloud aspect engines read that JSON.
+/// `cloud-response` data key. Downstream cloud aspect engines read that JSON.
 ///
 /// # Credentials
 ///
@@ -211,7 +211,7 @@ pub struct CloudRequestEngine {
     /// a cache backed by its own store, so responses survive across cold starts.
     response_cache: Option<Arc<dyn PutCache<String, String>>>,
 
-    /// The core property metadata: `cloud`, `json-response` and
+    /// The core property metadata: `cloud-response`, `json-response` and
     /// `process-started`. Returned by [`FlowElement::properties`].
     properties: Vec<PropertyMetaData>,
     /// The aspect view of the same metadata.
@@ -629,7 +629,7 @@ impl AspectEngine for CloudRequestEngine {
     }
 
     fn missing_property_reason(&self, property_name: &str) -> MissingPropertyResult {
-        // The cloud request engine itself only ever populates `cloud`,
+        // The cloud request engine itself only ever populates `cloud-response`,
         // `json-response` and `process-started`, so defer to the default aspect
         // reasoning for those. Downstream cloud aspect engines own the resolution
         // of product properties.
