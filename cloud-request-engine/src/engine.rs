@@ -486,21 +486,24 @@ fn validate_endpoint_url(url: &str, what: &str) -> Result<()> {
 ///
 /// The form holds the credential, the asked-for property list when there is one,
 /// and the stripped evidence fields. The pairs are sorted so the key is
-/// independent of evidence insertion order, then joined, so two requests with the
-/// same credential, property list and evidence map to the same key. Including the
-/// credential and the property list means a cache shared between engines never
-/// returns one engine's response for another's request, which matters because two
-/// engines asking for different properties get different answers to the same
-/// evidence.
+/// independent of evidence insertion order. Each name and each value is then
+/// written after its length in bytes, so no value can be read as the end of its
+/// own pair and the start of another, whatever characters it holds. Two requests
+/// therefore share a key only when their credential, property list and evidence
+/// are the same. Including the credential and the property list means a cache
+/// shared between engines never returns one engine's response for another's
+/// request, which matters because two engines asking for different properties
+/// get different answers to the same evidence.
 fn cache_key(form: &[(String, String)]) -> String {
     let mut pairs: Vec<&(String, String)> = form.iter().collect();
     pairs.sort();
     let mut key = String::new();
     for (name, value) in pairs {
-        key.push_str(name);
-        key.push('=');
-        key.push_str(value);
-        key.push('\n');
+        for part in [name, value] {
+            key.push_str(&part.len().to_string());
+            key.push(':');
+            key.push_str(part);
+        }
     }
     key
 }
@@ -1456,6 +1459,33 @@ mod tests {
         ]);
         assert_ne!(a, other_evidence, "different evidence keys differently");
         assert_ne!(a, other_key, "different resource key keys differently");
+    }
+
+    #[test]
+    fn cache_key_cannot_be_matched_by_a_value_shaped_like_another_field() {
+        // A query value can hold a line break and an equals sign, so one value
+        // must not be able to spell out the rest of another request's key.
+        let crafted = cache_key(&[
+            ("resource".to_owned(), "rk".to_owned()),
+            (
+                "user-agent".to_owned(),
+                "UA\nx-device-user-agent=Other".to_owned(),
+            ),
+        ]);
+        let both = cache_key(&[
+            ("resource".to_owned(), "rk".to_owned()),
+            ("user-agent".to_owned(), "UA".to_owned()),
+            ("x-device-user-agent".to_owned(), "Other".to_owned()),
+        ]);
+        assert_ne!(crafted, both);
+
+        // Nor can a value carry the start of the next field's length.
+        let split = cache_key(&[("a".to_owned(), "1:b".to_owned())]);
+        let joined = cache_key(&[
+            ("a".to_owned(), "1".to_owned()),
+            ("b".to_owned(), "".to_owned()),
+        ]);
+        assert_ne!(split, joined);
     }
 
     #[test]
