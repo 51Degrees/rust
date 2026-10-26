@@ -630,13 +630,22 @@ pub struct StringBuilder {
     _private: [u8; 0],
 }
 
-/// Opaque collection item, mirroring `fiftyoneDegreesCollectionItem`.
+/// A value read from one of the data set's collections, mirroring
+/// `fiftyoneDegreesCollectionItem`.
 ///
-/// Used by [`fiftyoneDegreesIpiGetIpAddressAsString`] to point at a string in
-/// the strings collection. The layout is library internal, so it is opaque.
+/// It is laid out as the C structure is, because [`ProfilePercentage`] holds
+/// one ahead of its weighting, and it is passed by pointer to
+/// [`fiftyoneDegreesIpiGetIpAddressAsString`]. The library sets and releases
+/// the item, so a caller only reads it.
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct CollectionItem {
-    _private: [u8; 0],
+    /// The item's data, including any memory allocated to hold it.
+    pub data: Data,
+    /// A handle the library releases the item with, such as a cache node.
+    pub handle: *mut c_void,
+    /// The collection the item came from. Library internal.
+    pub collection: *const c_void,
 }
 
 /// Callback used to iterate matching profiles, mirroring
@@ -750,11 +759,10 @@ pub struct WeightedValuesCollection {
 /// (an alias of `fiftyoneDegreesWeightedItem`).
 ///
 /// It pairs a collection item holding the value with a `raw_weighting`. The
-/// `item` field is opaque because its internals are library managed and released
-/// when the owning results are freed.
+/// item is library managed and released when the owning results are freed.
 #[repr(C)]
 pub struct ProfilePercentage {
-    /// Opaque collection item holding the value. Library managed.
+    /// Collection item holding the value. Library managed.
     pub item: CollectionItem,
     /// Raw weighting out of the library maximum (`65535 * 65535`).
     pub raw_weighting: u32,
@@ -1253,6 +1261,83 @@ mod tests {
             .join("ip-intelligence-data")
             .join("51Degrees-IPIV4AsnIpiV41.ipi");
         path.is_file().then_some(path)
+    }
+
+    /// The data file `51DEGREES_IPI_PATH` names, else the ASN file.
+    fn named_or_asn_data_file() -> Option<PathBuf> {
+        std::env::var("51DEGREES_IPI_PATH")
+            .ok()
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+            .or_else(asn_data_file)
+    }
+
+    /// The weighting of the first value the legacy getter returns is the
+    /// weighting the weighted value collection gives the same value, which
+    /// needs [`ProfilePercentage`] laid out as the C structure is.
+    #[test]
+    fn the_legacy_getter_reads_each_values_weighting() {
+        let Some(data_file) = named_or_asn_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping the legacy weighting");
+            return;
+        };
+        let file = CString::new(data_file.to_string_lossy().as_ref()).expect("no nul");
+        unsafe {
+            let mut manager = ResourceManager::zeroed();
+            let mut exception = Exception::cleared();
+            let status = fiftyoneDegreesIpiInitManagerFromFile(
+                &mut manager,
+                std::ptr::addr_of_mut!(fiftyoneDegreesIpiInMemoryConfig),
+                std::ptr::null_mut(),
+                file.as_ptr(),
+                &mut exception,
+            );
+            assert_eq!(
+                status,
+                StatusCode::Success,
+                "{}",
+                exception_message(&mut exception)
+            );
+            let results = fiftyoneDegreesResultsIpiCreate(&mut manager);
+            assert!(!results.is_null(), "results should be allocated");
+            let ip = CString::new("1.1.1.1").expect("no nul");
+            fiftyoneDegreesResultsIpiFromIpAddressString(
+                results,
+                ip.as_ptr(),
+                ip.as_bytes().len(),
+                &mut exception,
+            );
+            assert!(exception.is_okay(), "{}", exception_message(&mut exception));
+
+            let mut checked = 0;
+            let count = fiftyoneDegreesShimIpiGetRequiredPropertyCount(&mut manager);
+            for index in 0..count as c_int {
+                let first = fiftyoneDegreesResultsIpiGetValues(results, index, &mut exception);
+                assert!(exception.is_okay(), "{}", exception_message(&mut exception));
+                if first.is_null() {
+                    continue;
+                }
+                let legacy = (*first).raw_weighting;
+                let indexes = [index];
+                let mut collection = fiftyoneDegreesResultsIpiGetValuesCollection(
+                    results,
+                    indexes.as_ptr(),
+                    1,
+                    std::ptr::null_mut(),
+                    &mut exception,
+                );
+                assert!(exception.is_okay(), "{}", exception_message(&mut exception));
+                assert!(collection.items_count > 0, "property {index} has values");
+                let weighted = (**collection.items).raw_weighting;
+                fiftyoneDegreesWeightedValuesCollectionRelease(&mut collection);
+                assert_eq!(legacy, weighted, "property {index}");
+                checked += 1;
+            }
+            assert!(checked > 0, "some property should have values");
+
+            fiftyoneDegreesResultsIpiFree(results);
+            fiftyoneDegreesResourceManagerFree(&mut manager);
+        }
     }
 
     /// The no value reason message getter links and returns a non-empty static
