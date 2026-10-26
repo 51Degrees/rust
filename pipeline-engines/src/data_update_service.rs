@@ -819,4 +819,134 @@ mod tests {
         let service = DataUpdateService::new();
         assert_eq!(service.registered_count(), 0);
     }
+
+    /// An engine with one data file and no update URL, so a poll of it makes
+    /// no request.
+    struct IdleEngine {
+        filter: fiftyone_pipeline_core::EvidenceKeyFilterWhitelist,
+        data_files: Vec<Arc<AspectEngineDataFile>>,
+    }
+
+    impl fiftyone_pipeline_core::FlowElement for IdleEngine {
+        fn process(
+            &self,
+            _data: &mut fiftyone_pipeline_core::FlowData,
+        ) -> fiftyone_pipeline_core::Result<()> {
+            Ok(())
+        }
+        fn data_key(&self) -> &str {
+            "idle"
+        }
+        fn evidence_key_filter(&self) -> &dyn fiftyone_pipeline_core::EvidenceKeyFilter {
+            &self.filter
+        }
+        fn properties(&self) -> &[fiftyone_pipeline_core::PropertyMetaData] {
+            &[]
+        }
+    }
+
+    impl crate::AspectEngine for IdleEngine {
+        fn data_source_tier(&self) -> &str {
+            "Lite"
+        }
+        fn aspect_properties(&self) -> &[crate::AspectPropertyMetaData] {
+            &[]
+        }
+    }
+
+    impl OnPremiseAspectEngine for IdleEngine {
+        fn data_files(&self) -> &[Arc<AspectEngineDataFile>] {
+            &self.data_files
+        }
+        fn refresh(&self, _identifier: Option<&str>) -> fiftyone_pipeline_core::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A data file with no update URL that polls every `interval_seconds`
+    /// plus up to `max_randomisation_seconds`.
+    fn polled_file(interval_seconds: u64, max_randomisation_seconds: u64) -> AspectEngineDataFile {
+        AspectEngineDataFile::new(
+            crate::DataFileConfiguration::memory_builder()
+                .polling_interval_seconds(interval_seconds)
+                .max_randomisation_seconds(max_randomisation_seconds)
+                .build(),
+        )
+    }
+
+    /// The delay before the first poll is drawn at random, so instances that
+    /// start together poll at different times. 200 draws from 600 seconds
+    /// give about 170 different delays.
+    #[test]
+    fn the_first_poll_is_delayed_at_random() {
+        let service = DataUpdateService::new();
+        let data_file = polled_file(0, 600);
+        let delays: std::collections::BTreeSet<u64> = (0..200)
+            .map(|_| {
+                let start = Instant::now();
+                service
+                    .initial_poll_due(&data_file)
+                    .duration_since(start)
+                    .as_secs()
+            })
+            .collect();
+        assert!(
+            delays.len() > 100,
+            "{} different delays in 200: {delays:?}",
+            delays.len()
+        );
+    }
+
+    /// Each poll after the first also waits the polling interval plus a
+    /// random delay, as the specification says.
+    #[test]
+    fn each_later_poll_adds_a_random_delay() {
+        const INTERVAL_SECONDS: u64 = 1000;
+        let handle = ServiceHandle {
+            client: reqwest::blocking::Client::new(),
+            inner: Arc::new(Inner {
+                registrations: Mutex::new(Vec::new()),
+                wake: Condvar::new(),
+                shutting_down: Mutex::new(false),
+            }),
+        };
+        let due = Instant::now();
+        for _ in 0..5 {
+            let data_file = Arc::new(polled_file(INTERVAL_SECONDS, INTERVAL_SECONDS));
+            let engine = Arc::new(IdleEngine {
+                filter: fiftyone_pipeline_core::EvidenceKeyFilterWhitelist::new(
+                    Vec::<String>::new(),
+                ),
+                data_files: vec![Arc::clone(&data_file)],
+            });
+            handle.inner.registrations.lock().unwrap().push(Arc::new(Registration {
+                engine,
+                data_file,
+                next_poll: Mutex::new(Some(due)),
+                watcher: Mutex::new(None),
+            }));
+        }
+
+        handle.run_due_polls();
+
+        // Without a delay every next poll is due at most one interval after
+        // the polls ran. Five delays of under two seconds out of a thousand
+        // happen once in about 3 * 10^13 runs.
+        let undelayed = Instant::now() + Duration::from_secs(INTERVAL_SECONDS + 1);
+        let delayed = handle
+            .inner
+            .registrations
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|registration| {
+                registration
+                    .next_poll
+                    .lock()
+                    .unwrap()
+                    .is_some_and(|next| next > undelayed)
+            })
+            .count();
+        assert!(delayed > 0, "no poll after the first added a delay");
+    }
 }
