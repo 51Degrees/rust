@@ -309,6 +309,87 @@ fn metadata_is_published() {
     );
 }
 
+/// The engine accepts every header the data file reads, as a header and as a
+/// query value, alongside the client-side `51d_` values.
+#[test]
+fn evidence_keys_come_from_the_data_file() {
+    let Some(engine) = build_engine() else {
+        eprintln!("no Lite Hash data file found; skipping evidence keys test");
+        return;
+    };
+    let keys = engine.evidence_keys();
+    let filter = engine.evidence_key_filter();
+    for key in [
+        "header.user-agent",
+        "query.user-agent",
+        "header.x-operamini-phone-ua",
+        "query.sec-ch-ua-platform-version",
+    ] {
+        assert!(
+            keys.iter().any(|k| k == key),
+            "{key} should be listed: {keys:?}"
+        );
+        assert!(filter.include(key), "{key} should be accepted");
+    }
+    assert!(filter.include("query.51d_screenpixelswidth"));
+    assert!(!filter.include("header.referer"));
+
+    engine.refresh(None).expect("refresh succeeds");
+    assert!(engine
+        .evidence_key_filter()
+        .include("header.x-operamini-phone-ua"));
+}
+
+/// Client hints given as query values, as for off-line processing, reach the
+/// detection. Chrome reports Windows 11 as Windows NT 10.0 in its User-Agent,
+/// and only the platform version hint tells the two apart.
+#[test]
+fn client_hints_sent_as_query_values_are_used() {
+    let Some(engine) = build_engine() else {
+        eprintln!("no Lite Hash data file found; skipping query client hints test");
+        return;
+    };
+    let element: Arc<dyn FlowElement> = engine;
+    let pipeline = Pipeline::builder()
+        .add_element(element)
+        .build()
+        .expect("pipeline builds");
+    let mut data = pipeline.create_flow_data_with(
+        Evidence::builder()
+            .add("header.user-agent", DESKTOP_USER_AGENT)
+            .add("query.sec-ch-ua-platform", "\"Windows\"")
+            .add("query.sec-ch-ua-platform-version", "\"15.0.0\"")
+            .build(),
+    );
+    data.process().expect("processing succeeds");
+    let device = data.get(DEVICE_DATA_KEY).expect("device data present");
+    let version = device.platform_version();
+    let version = version
+        .value()
+        .expect("PlatformVersion should have a value");
+    assert_eq!(version, "11.0");
+}
+
+/// The match method is written as the specification names it, and the matched
+/// User-Agents are written as a list.
+#[test]
+fn method_and_user_agents_are_written() {
+    let Some(engine) = build_engine() else {
+        eprintln!("no Lite Hash data file found; skipping match metrics test");
+        return;
+    };
+    let device = detect(engine, DESKTOP_USER_AGENT);
+    let method = device.method();
+    let method = method.value().expect("Method should have a value");
+    assert!(
+        ["NONE", "PERFORMANCE", "COMBINED", "PREDICTIVE"].contains(&method.as_str()),
+        "{method}"
+    );
+    let user_agents = device.user_agents();
+    let user_agents = user_agents.value().expect("UserAgents should have a value");
+    assert!(!user_agents.is_empty());
+}
+
 #[test]
 fn paid_tier_data_resolves_hardware_vendor() {
     // Uses whatever `51DEGREES_DD_PATH` points at (or the bundled Lite file as a

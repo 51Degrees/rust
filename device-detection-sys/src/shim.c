@@ -229,14 +229,17 @@ size_t fiftyoneDegreesShimHashGetDataSetName(
 }
 
 /*
- * Reads the match metrics from the primary (first) result into the output
- * parameters and returns 1, or returns 0 when there is no result. The Hash
- * match metrics (the method, difference, drift, iterations and matched-node
- * count) are computed during detection and live on the result, not in the data
- * file's property values, so they are read here directly rather than through
- * the property value reader. `method` receives the fiftyoneDegreesHashMatchMethod
- * enum value (0 None, 1 Performance, 2 Combined, 3 Predictive). Any output
- * pointer may be null to skip that metric.
+ * Reads the match metrics of the results into the output parameters and
+ * returns 1, or returns 0 when `results` is NULL. The results hold one result
+ * for each component, such as the hardware or the browser, each from the
+ * header that matched it. As in the C++ ResultsHash, `method` receives the
+ * highest fiftyoneDegreesHashMatchMethod of any result (0 None,
+ * 1 Performance, 2 Combined, 3 Predictive), and the difference, drift,
+ * iterations and matched-node count are summed across the results. With no
+ * results every metric is zero, which is the method None. The metrics are
+ * computed during detection and live on the results, not in the data file's
+ * property values, so they are read here rather than through the property
+ * value reader. Any output pointer may be null to skip that metric.
  */
 int fiftyoneDegreesShimHashGetResultMetrics(
     fiftyoneDegreesResultsHash *results,
@@ -245,10 +248,68 @@ int fiftyoneDegreesShimHashGetResultMetrics(
     int32_t *drift,
     int32_t *iterations,
     int32_t *matchedNodes) {
-    if (results == NULL || results->count == 0) {
+    if (results == NULL) {
         return 0;
     }
-    fiftyoneDegreesResultHash *result = &results->items[0];
+    int32_t highestMethod = 0;
+    int32_t totalDifference = 0;
+    int32_t totalDrift = 0;
+    int32_t totalIterations = 0;
+    int32_t totalMatchedNodes = 0;
+    for (uint32_t i = 0; i < results->count; i++) {
+        fiftyoneDegreesResultHash *result = &results->items[i];
+        if ((int32_t)result->method > highestMethod) {
+            highestMethod = (int32_t)result->method;
+        }
+        totalDifference += result->difference;
+        totalDrift += result->drift;
+        totalIterations += result->iterations;
+        totalMatchedNodes += result->matchedNodes;
+    }
+    if (method != NULL) {
+        *method = highestMethod;
+    }
+    if (difference != NULL) {
+        *difference = totalDifference;
+    }
+    if (drift != NULL) {
+        *drift = totalDrift;
+    }
+    if (iterations != NULL) {
+        *iterations = totalIterations;
+    }
+    if (matchedNodes != NULL) {
+        *matchedNodes = totalMatchedNodes;
+    }
+    return 1;
+}
+
+/*
+ * Returns the number of results, one for each component, or zero when
+ * `results` is NULL.
+ */
+uint32_t fiftyoneDegreesShimHashGetResultCount(
+    fiftyoneDegreesResultsHash *results) {
+    return results == NULL ? 0 : results->count;
+}
+
+/*
+ * Reads the match metrics of the single result at `resultIndex` into the
+ * output parameters and returns 1, or returns 0 when the index is out of range.
+ * Any output pointer may be null to skip that metric.
+ */
+int fiftyoneDegreesShimHashGetResultMetricsAt(
+    fiftyoneDegreesResultsHash *results,
+    uint32_t resultIndex,
+    int32_t *method,
+    int32_t *difference,
+    int32_t *drift,
+    int32_t *iterations,
+    int32_t *matchedNodes) {
+    if (results == NULL || resultIndex >= results->count) {
+        return 0;
+    }
+    fiftyoneDegreesResultHash *result = &results->items[resultIndex];
     if (method != NULL) {
         *method = (int32_t)result->method;
     }
@@ -265,4 +326,29 @@ int fiftyoneDegreesShimHashGetResultMetrics(
         *matchedNodes = result->matchedNodes;
     }
     return 1;
+}
+
+/*
+ * Writes the matched User-Agent of the result at `resultIndex` into `buffer` as
+ * a null terminated string and returns the number of characters written,
+ * excluding the terminator. Returns zero when the index is out of range or the
+ * result records no matched User-Agent, which it does only when the
+ * updateMatchedUserAgent option is on, and cuts the value short when the
+ * buffer is too small.
+ */
+size_t fiftyoneDegreesShimHashGetMatchedUserAgent(
+    fiftyoneDegreesResultsHash *results,
+    uint32_t resultIndex,
+    char *buffer,
+    size_t length) {
+    if (buffer != NULL && length > 0) {
+        buffer[0] = '\0';
+    }
+    if (results == NULL || resultIndex >= results->count) {
+        return 0;
+    }
+    return copy_bounded(
+        buffer,
+        length,
+        results->items[resultIndex].b.matchedUserAgent);
 }

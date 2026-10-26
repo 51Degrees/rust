@@ -98,13 +98,15 @@ pub fn run(options: ExampleOptions) -> Result<()> {
     println!("----------------------------------------");
 
     // The native-model lookup uses the same dedicated hardware-profile cloud
-    // engine as the TAC lookup. No ShareUsageElement: this is a console example.
+    // engine as the TAC lookup. Usage sharing is off because this is a console
+    // example. In normal operation leave it on, which is the builder's default.
     let mut builder =
         DeviceDetectionPipelineBuilder::cloud(options.resource_key).hardware_profile();
     if let Some(endpoint) = options.endpoint {
         builder = builder.endpoint(endpoint);
     }
     let pipeline = builder
+        .share_usage(false)
         .build()
         .context("failed to build the cloud hardware-profile pipeline")?;
 
@@ -216,8 +218,9 @@ mod tests {
  * ignored by default, so a plain `cargo test` stays green offline, and it skips
  * cleanly when no resource key is set.
  *
- * No `ShareUsageElement` is added, because this is a console example. A
- * production web deployment should enable usage sharing.
+ * Usage sharing is turned off with `.share_usage(false)`, because this is a
+ * console example. In normal operation leave it on, which is the builder's
+ * default, so 51Degrees receives evidence that improves detection.
  *
  * The resource key is read from the first command-line argument or the
  * `51DEGREES_RESOURCE_KEY` environment variable. See https://51degrees.com/pricing?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-device-detection-examples-src-bin-dd-cloud-native-model.rs&utm_term=dd-cloud-native-model

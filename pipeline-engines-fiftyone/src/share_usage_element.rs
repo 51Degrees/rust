@@ -30,17 +30,19 @@
 //! # Architecture
 //!
 //! Processing follows the recommended producer/consumer design. The `process`
-//! function does the minimum work on the request thread: roll the share dice,
-//! consult the repeat-evidence tracker, extract the wanted evidence into a
-//! self-contained [`ShareUsageData`], then hand it to a bounded channel. A
-//! single background thread consumes the channel, accumulates a batch of at
-//! least the configured minimum entries, builds the XML and sends it.
+//! function does the minimum work on the request thread: apply the ignore
+//! filter, roll the share dice, consult the repeat-evidence tracker, extract
+//! the wanted evidence into a self-contained [`ShareUsageData`], then hand it
+//! to a bounded channel. A single background thread consumes the channel,
+//! accumulates a batch of the configured minimum entries, builds the XML and
+//! sends it.
 //!
-//! Usage sharing is expendable. Any failure (a full queue, a send error, an
-//! offline endpoint) is swallowed so the rest of the pipeline is never
-//! disrupted, exactly as the
+//! Usage sharing is expendable. A failure (a full queue, a send error, an
+//! offline endpoint) is logged through the [`log`] facade and never disrupts
+//! the rest of the pipeline, as the
 //! [error-handling section](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/pipeline-elements/usage-sharing-element.md#error-handling)
-//! requires.
+//! requires. Repeated failures are logged at most once a minute, with a count
+//! of the failures since the last message.
 //!
 //! # Transport and the `share-usage-transport` feature
 //!
@@ -61,18 +63,23 @@
 //!   ([`SHARE_USAGE_DEFAULT_URL`](crate::constants::SHARE_USAGE_DEFAULT_URL) by
 //!   default).
 //!
-//! Sending usage data therefore requires two deliberate opt-ins: the element
-//! must be added to the pipeline, *and* `share-usage-transport` must be enabled.
-//! On a target where the built-in client cannot run (such as `wasm32-wasip1`)
-//! the feature is left off and the element runs with the no-op transport.
+//! Sending usage data therefore requires two opt-ins: the element must be
+//! added to the pipeline, *and* `share-usage-transport` must be enabled. The
+//! Device Detection and IP Intelligence facade crates make both by default,
+//! through their `share-usage` feature. On a target where the built-in client
+//! cannot run (such as `wasm32-wasip1`) the feature is left off and the
+//! element runs with the no-op transport.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::Write;
+use std::net::UdpSocket;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -90,13 +97,40 @@ use crate::constants::{
     SHARE_USAGE_DEFAULT_TAKE_TIMEOUT_MS, SHARE_USAGE_DEFAULT_URL, SHARE_USAGE_MAX_EVIDENCE_LENGTH,
 };
 use crate::evidence_filter::{EvidenceKeyFilterShareUsage, EvidenceKeyFilterShareUsageTracker};
+use crate::sequence_element::{SequenceData, SequenceElement};
 use crate::share_usage_tracker::ShareUsageTracker;
 
-/// The minimum allowed value for the minimum-entries-per-message setting.
-///
-/// The endpoint expects batches, and sending fewer wastes connections, so the
-/// configured value is clamped up to this floor.
-pub const MIN_ENTRIES_PER_MESSAGE_FLOOR: usize = 50;
+/// The smallest value accepted for the minimum entries per message. A message
+/// needs at least one record.
+pub const MIN_ENTRIES_PER_MESSAGE_FLOOR: usize = 1;
+
+/// How long the built-in transport waits for the endpoint to answer.
+#[cfg(feature = "share-usage-transport")]
+const HTTP_TIMEOUT_SECONDS: u64 = 30;
+
+/// The most characters of an endpoint's error response that are logged.
+#[cfg(feature = "share-usage-transport")]
+const MAX_LOGGED_RESPONSE_CHARACTERS: usize = 1000;
+
+/// How long a request waits between attempts to add to a full queue, while
+/// the add timeout has not run out.
+const ADD_RETRY_INTERVAL_MILLISECONDS: u64 = 1;
+
+/// The shortest gap between two log messages about the same kind of failure.
+const LOG_INTERVAL_MILLISECONDS: u64 = 60_000;
+
+/// A public address used to ask the operating system which local address
+/// routes to the internet. Connecting a UDP socket sends no packets.
+const ROUTE_PROBE_V4: &str = "8.8.8.8:10002";
+
+/// The IPv6 equivalent of [`ROUTE_PROBE_V4`], for hosts without IPv4.
+const ROUTE_PROBE_V6: &str = "[2001:4860:4860::8888]:10002";
+
+/// The attribute that marks a value whose invalid XML characters were escaped.
+const ESCAPED_ATTRIBUTE: &str = "escaped";
+
+/// The attribute that marks a value cut to the maximum length.
+const TRUNCATED_ATTRIBUTE: &str = "truncated";
 
 /// The data extracted from one request, ready to be written to the XML payload.
 ///
@@ -130,6 +164,7 @@ pub struct ShareUsageConfig {
     blocked_http_headers: Vec<String>,
     included_query_string_parameters: Option<Vec<String>>,
     share_all_evidence: bool,
+    ignore_flow_data_evidence_filter: Vec<(String, String)>,
 }
 
 impl ShareUsageConfig {
@@ -162,6 +197,12 @@ impl ShareUsageConfig {
     pub fn repeat_evidence_interval(&self) -> Duration {
         self.repeat_evidence_interval
     }
+
+    /// The evidence key and value pairs that stop a request being shared. Keys
+    /// are lowercase.
+    pub fn ignore_flow_data_evidence_filter(&self) -> &[(String, String)] {
+        &self.ignore_flow_data_evidence_filter
+    }
 }
 
 impl Default for ShareUsageConfig {
@@ -193,12 +234,14 @@ impl ShareUsageConfigBuilder {
                 blocked_http_headers: Vec::new(),
                 included_query_string_parameters: Some(Vec::new()),
                 share_all_evidence: false,
+                ignore_flow_data_evidence_filter: Vec::new(),
             },
         }
     }
 
     /// Set the share percentage (`0.0..=1.0`). Values outside the range are
-    /// clamped. Returns `self` for chaining.
+    /// clamped. Each request is in the sample with this probability. Returns
+    /// `self` for chaining.
     pub fn share_percentage(mut self, share_percentage: f64) -> Self {
         self.config.share_percentage = share_percentage.clamp(0.0, 1.0);
         self
@@ -219,8 +262,9 @@ impl ShareUsageConfigBuilder {
         self
     }
 
-    /// Set the timeout used when adding to the queue. Returns `self` for
-    /// chaining.
+    /// Set how long a request waits for room when the queue is full. The
+    /// request's data is discarded if no room appears in that time. Returns
+    /// `self` for chaining.
     pub fn add_timeout(mut self, add_timeout: Duration) -> Self {
         self.config.add_timeout = add_timeout;
         self
@@ -277,8 +321,25 @@ impl ShareUsageConfigBuilder {
         self
     }
 
-    /// Produce the configuration, enforcing the minimum-entries floor and that
-    /// the queue can hold at least one batch.
+    /// Set evidence key and value pairs that stop a request being shared. A
+    /// request whose evidence holds any of the keys with exactly that value is
+    /// not shared. Keys match in any case and values match exactly. Returns
+    /// `self` for chaining.
+    pub fn ignore_flow_data_evidence_filter<I, K, V>(mut self, entries: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<str>,
+        V: Into<String>,
+    {
+        self.config.ignore_flow_data_evidence_filter = entries
+            .into_iter()
+            .map(|(key, value)| (key.as_ref().to_lowercase(), value.into()))
+            .collect();
+        self
+    }
+
+    /// Produce the configuration, raising the queue size so it can hold at
+    /// least one message.
     pub fn build(mut self) -> ShareUsageConfig {
         self.config.minimum_entries_per_message = self
             .config
@@ -297,15 +358,37 @@ impl Default for ShareUsageConfigBuilder {
     }
 }
 
-/// The static, per-machine portion of the XML payload, gathered once.
-#[derive(Debug, Clone, Default)]
+/// The values that are the same in every record this element sends.
+///
+/// Everything but the element list is gathered when the element is created.
+/// The element list needs the pipeline, so it is set by the first request and
+/// read without a lock after that.
+#[derive(Debug, Default)]
 struct StaticInfo {
     core_version: String,
-    language: String,
     language_version: String,
     server_ip: String,
     platform: String,
-    flow_elements: Vec<String>,
+    flow_elements: OnceLock<Vec<String>>,
+}
+
+impl StaticInfo {
+    /// Gather the values that do not depend on the pipeline.
+    fn gather() -> Self {
+        StaticInfo {
+            core_version: env!("CARGO_PKG_VERSION").to_owned(),
+            language_version: env!("FIFTYONE_RUSTC_VERSION").to_owned(),
+            server_ip: server_ip(),
+            platform: platform(),
+            flow_elements: OnceLock::new(),
+        }
+    }
+
+    /// The type names of the pipeline's elements, or none before the first
+    /// request.
+    fn flow_elements(&self) -> &[String] {
+        self.flow_elements.get().map(Vec::as_slice).unwrap_or(&[])
+    }
 }
 
 /// A trait for the transport that sends a built, gzip-compressed payload.
@@ -314,7 +397,9 @@ struct StaticInfo {
 /// local server client) for the real HTTP POST without spawning network I/O in
 /// the unit tests.
 trait UsageSender: Send + Sync {
-    /// Send the gzip-compressed XML body. Returns `Ok` on a 200 response.
+    /// Send the gzip-compressed XML body. Returns `Ok` on a 200 response, and
+    /// otherwise a description of the failure, which for any other answer
+    /// includes its status and content.
     fn send(&self, body: Vec<u8>) -> std::result::Result<(), String>;
 }
 
@@ -337,15 +422,17 @@ impl UsageSender for HttpUsageSender {
             .header("content-type", "text/xml")
             .body(body)
             .send()
-            .map_err(|e| format!("usage sharing request failed: {e}"))?;
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "usage sharing endpoint returned status {}",
-                response.status()
-            ))
+            .map_err(|e| format!("The request failed: {e}"))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::OK {
+            return Ok(());
         }
+        let content = response.text().unwrap_or_default();
+        let content: String = content
+            .chars()
+            .take(MAX_LOGGED_RESPONSE_CHARACTERS)
+            .collect();
+        Err(format!("The endpoint answered {status} with {content:?}"))
     }
 }
 
@@ -364,6 +451,53 @@ impl UsageSender for NoopUsageSender {
     }
 }
 
+/// Lets a repeated failure be logged at most once a minute.
+///
+/// Every call to [`LogThrottle::record`] counts one failure. When a message is
+/// due, it returns the number of failures since the last message.
+struct LogThrottle {
+    start: Instant,
+    /// Milliseconds after `start` of the last message plus one, or zero when
+    /// nothing has been logged yet.
+    last_logged: AtomicU64,
+    failures: AtomicU64,
+}
+
+impl LogThrottle {
+    fn new() -> Self {
+        LogThrottle {
+            start: Instant::now(),
+            last_logged: AtomicU64::new(0),
+            failures: AtomicU64::new(0),
+        }
+    }
+
+    /// Count a failure. Returns the failures since the last message when a
+    /// message is due now.
+    fn record(&self) -> Option<u64> {
+        self.failures.fetch_add(1, Ordering::Relaxed);
+        let now = u64::try_from(self.start.elapsed().as_millis())
+            .unwrap_or(u64::MAX - 1)
+            .saturating_add(1);
+        let last = self.last_logged.load(Ordering::Relaxed);
+        if last != 0 && now.saturating_sub(last) < LOG_INTERVAL_MILLISECONDS {
+            return None;
+        }
+        self.last_logged
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .ok()
+            .map(|_| self.failures.swap(0, Ordering::Relaxed))
+    }
+}
+
+/// Why a request's data did not reach the queue.
+enum Discarded {
+    /// The queue stayed full for the whole add timeout.
+    QueueFull,
+    /// The background thread is not running.
+    Stopped,
+}
+
 /// Sends usage data to 51Degrees for analysis.
 ///
 /// Construct one with [`ShareUsageElement::new`]. The background sending thread
@@ -372,15 +506,14 @@ impl UsageSender for NoopUsageSender {
 pub struct ShareUsageElement {
     filter: Arc<EvidenceKeyFilterShareUsage>,
     properties: Vec<PropertyMetaData>,
-    tracker: Arc<ShareUsageTracker>,
+    tracker: ShareUsageTracker,
     config: ShareUsageConfig,
     sender: SyncSender<ShareUsageData>,
     worker: Mutex<Option<JoinHandle<()>>>,
-    static_info: Arc<Mutex<Option<StaticInfo>>>,
-    /// Counts requests for the deterministic share-percentage sampler.
-    request_counter: AtomicU64,
+    static_info: Arc<StaticInfo>,
     success_count: Arc<AtomicU64>,
     fail_count: Arc<AtomicU64>,
+    discarded: LogThrottle,
 }
 
 impl ShareUsageElement {
@@ -398,12 +531,11 @@ impl ShareUsageElement {
     pub fn new(config: ShareUsageConfig) -> Self {
         // With the built-in transport, post over a blocking reqwest client.
         // Without it (for example on wasm32-wasip1) fall back to a no-op sender
-        // so the element still constructs and runs. A consumer can inject its own
-        // transport through with_sender.
+        // so the element still constructs and runs.
         #[cfg(feature = "share-usage-transport")]
         let sender: Box<dyn UsageSender> = {
             let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
                 .build()
                 .unwrap_or_default();
             Box::new(HttpUsageSender {
@@ -446,29 +578,45 @@ impl ShareUsageElement {
 
         // The tracker filter is built from the same settings but excludes the
         // session id and sequence so they cannot defeat deduplication.
-        let tracker_inner = make_filter();
-        let tracker = Arc::new(ShareUsageTracker::new(
+        let tracker = ShareUsageTracker::new(
             config.repeat_evidence_interval,
             config
                 .maximum_queue_size
                 .max(SHARE_USAGE_DEFAULT_MAX_QUEUE_SIZE),
-            Box::new(EvidenceKeyFilterShareUsageTracker::new(tracker_inner)),
-        ));
+            Box::new(EvidenceKeyFilterShareUsageTracker::new(make_filter())),
+        );
 
         let (tx, rx) = sync_channel::<ShareUsageData>(config.maximum_queue_size);
 
-        let static_info: Arc<Mutex<Option<StaticInfo>>> = Arc::new(Mutex::new(None));
+        let static_info = Arc::new(StaticInfo::gather());
         let success_count = Arc::new(AtomicU64::new(0));
         let fail_count = Arc::new(AtomicU64::new(0));
 
-        let worker = spawn_worker(
-            rx,
+        let worker = Worker {
+            receiver: rx,
             sender,
-            config.clone(),
-            Arc::clone(&static_info),
-            Arc::clone(&success_count),
-            Arc::clone(&fail_count),
-        );
+            config: config.clone(),
+            static_info: Arc::clone(&static_info),
+            success_count: Arc::clone(&success_count),
+            fail_count: Arc::clone(&fail_count),
+            send_failures: LogThrottle::new(),
+        };
+        // Without a background thread nothing can be sent. The receiver is
+        // dropped with the closure, so every later add is discarded as stopped
+        // and logged, and the pipeline carries on.
+        let worker = match std::thread::Builder::new()
+            .name("fiftyone-share-usage".to_owned())
+            .spawn(move || worker.run())
+        {
+            Ok(handle) => Some(handle),
+            Err(e) => {
+                log::error!(
+                    "Usage sharing cannot send anything because its background \
+                     thread did not start: {e}"
+                );
+                None
+            }
+        };
 
         ShareUsageElement {
             filter,
@@ -476,11 +624,11 @@ impl ShareUsageElement {
             tracker,
             config,
             sender: tx,
-            worker: Mutex::new(Some(worker)),
+            worker: Mutex::new(worker),
             static_info,
-            request_counter: AtomicU64::new(0),
             success_count,
             fail_count,
+            discarded: LogThrottle::new(),
         }
     }
 
@@ -496,70 +644,42 @@ impl ShareUsageElement {
         self.fail_count.load(Ordering::Relaxed)
     }
 
-    /// Decide whether this request is in the shared sample.
-    ///
-    /// A deterministic counter-based sampler is used rather than a random one so
-    /// the behavior is reproducible and free of per-request RNG state. A share
-    /// percentage of `p` shares roughly one request in `round(1/p)`.
-    fn in_sample(&self) -> bool {
-        let p = self.config.share_percentage;
-        if p >= 1.0 {
-            return true;
-        }
-        if p <= 0.0 {
-            return false;
-        }
-        let n = self.request_counter.fetch_add(1, Ordering::Relaxed);
-        let stride = (1.0 / p).round() as u64;
-        let stride = stride.max(1);
-        n.is_multiple_of(stride)
+    /// True if the evidence matches a pair in the ignore filter, so the
+    /// request is not shared.
+    fn is_ignored(&self, data: &FlowData) -> bool {
+        self.config
+            .ignore_flow_data_evidence_filter
+            .iter()
+            .any(|(key, value)| data.evidence().get(key) == Some(value.as_str()))
     }
 
-    /// Gather the static, per-machine XML information once from the pipeline.
-    fn ensure_static_info(&self, data: &FlowData) {
-        let mut slot = match self.static_info.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if slot.is_some() {
-            return;
-        }
-        let flow_elements = data
-            .pipeline()
-            .flow_elements()
-            .iter()
-            .map(|e| e.data_key().to_owned())
-            .collect();
-        *slot = Some(StaticInfo {
-            core_version: env!("CARGO_PKG_VERSION").to_owned(),
-            language: "rust".to_owned(),
-            language_version: rustc_version_runtime(),
-            server_ip: String::new(),
-            platform: std::env::consts::OS.to_owned(),
-            flow_elements,
-        });
+    /// Decide whether this request is in the shared sample. Each request is
+    /// included with the share percentage as its probability, using the
+    /// calling thread's own random number generator.
+    fn in_sample(&self) -> bool {
+        let p = self.config.share_percentage;
+        p >= 1.0 || (p > 0.0 && fastrand::f64() < p)
     }
 
     /// Extract the wanted evidence from a flow data into a self-contained
     /// [`ShareUsageData`].
     fn extract(&self, data: &FlowData) -> ShareUsageData {
         let mut out = ShareUsageData::default();
-        // The filter to use when copying evidence excludes the session id and
-        // sequence from the generic evidence map, since those are written into
-        // their own XML elements. We reuse the tracker filter for that, which
-        // already drops them, but still want them captured separately, so read
-        // them directly first.
+        // The session id and sequence are written into their own XML elements,
+        // so they are kept out of the generic evidence map.
+        let mut evidence_session_id = None;
+        let mut evidence_sequence = None;
         for (key, value) in data.evidence().iter() {
             if key.eq_ignore_ascii_case(EVIDENCE_CLIENT_IP_KEY) {
                 out.client_ip = Some(value.to_owned());
                 continue;
             }
             if key.eq_ignore_ascii_case(EVIDENCE_SESSIONID) {
-                out.session_id = Some(value.to_owned());
+                evidence_session_id = Some(value.to_owned());
                 continue;
             }
             if key.eq_ignore_ascii_case(EVIDENCE_SEQUENCE) {
-                out.sequence = value.trim().parse::<i64>().ok();
+                evidence_sequence = value.trim().parse::<i64>().ok();
                 continue;
             }
             if !self.filter.include(key) {
@@ -590,21 +710,39 @@ impl ShareUsageElement {
                 .insert(field, (value, truncated));
         }
 
-        // If the sequence element wrote the session id and sequence to its
-        // element data rather than evidence (the usual case in this port), pull
-        // them from there.
-        if out.session_id.is_none() {
-            if let Ok(value) = data.get_evidence_or_property("session-id") {
-                out.session_id = value.as_str().map(str::to_owned);
-            }
-        }
-        if out.sequence.is_none() {
-            if let Ok(value) = data.get_evidence_or_property("sequence") {
-                out.sequence = value.as_integer();
-            }
-        }
+        // The sequence element's values come first. It increments the sequence
+        // the client sent, so its value is the one this request carries. The
+        // evidence is the fallback when the pipeline has no sequence element
+        // before this one.
+        let sequence = data.get(SequenceElement::KEY);
+        out.session_id = sequence
+            .and_then(SequenceData::session_id)
+            .map(str::to_owned)
+            .or(evidence_session_id);
+        out.sequence = sequence
+            .and_then(SequenceData::sequence)
+            .or(evidence_sequence);
 
         out
+    }
+
+    /// Log a discarded record, at most once a minute.
+    fn log_discarded(&self, reason: Discarded) {
+        let Some(count) = self.discarded.record() else {
+            return;
+        };
+        match reason {
+            Discarded::QueueFull => log::warn!(
+                "Usage sharing discarded a record because its queue of {} was \
+                 full, which means records arrive faster than they can be sent. \
+                 Records discarded since the last report: {count}.",
+                self.config.maximum_queue_size
+            ),
+            Discarded::Stopped => log::warn!(
+                "Usage sharing discarded a record because its background thread \
+                 is not running. Records discarded since the last report: {count}."
+            ),
+        }
     }
 }
 
@@ -616,7 +754,17 @@ impl Default for ShareUsageElement {
 
 impl FlowElement for ShareUsageElement {
     fn process(&self, data: &mut FlowData) -> Result<()> {
-        self.ensure_static_info(data);
+        self.static_info.flow_elements.get_or_init(|| {
+            data.pipeline()
+                .flow_elements()
+                .iter()
+                .map(|element| element.type_name().to_owned())
+                .collect()
+        });
+
+        if self.is_ignored(data) {
+            return Ok(());
+        }
 
         // Sampling first: a request not in the sample is never shared.
         if !self.in_sample() {
@@ -631,14 +779,12 @@ impl FlowElement for ShareUsageElement {
 
         let usage = self.extract(data);
 
-        // Hand the data to the background sender. A full queue means we are
-        // producing faster than we can send; the data is simply dropped, which
-        // the specification explicitly permits. Sharing must never block or
-        // fail the pipeline.
-        match self.sender.try_send(usage) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {}
-            Err(TrySendError::Disconnected(_)) => {}
+        // Hand the data to the background sender, waiting up to the add
+        // timeout for room. Data that does not fit is discarded, which the
+        // specification permits, and logged. Sharing must never fail the
+        // pipeline.
+        if let Err(reason) = add_to_queue(&self.sender, usage, self.config.add_timeout) {
+            self.log_discarded(reason);
         }
 
         Ok(())
@@ -683,119 +829,111 @@ impl Drop for ShareUsageElement {
     }
 }
 
-/// Spawn the background consumer thread.
-fn spawn_worker(
-    rx: Receiver<ShareUsageData>,
+/// Add a record to the queue, waiting up to `timeout` for room while it is
+/// full.
+fn add_to_queue(
+    sender: &SyncSender<ShareUsageData>,
+    mut usage: ShareUsageData,
+    timeout: Duration,
+) -> std::result::Result<(), Discarded> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match sender.try_send(usage) {
+            Ok(()) => return Ok(()),
+            Err(TrySendError::Disconnected(_)) => return Err(Discarded::Stopped),
+            Err(TrySendError::Full(returned)) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(Discarded::QueueFull);
+                }
+                usage = returned;
+                std::thread::sleep(
+                    Duration::from_millis(ADD_RETRY_INTERVAL_MILLISECONDS).min(deadline - now),
+                );
+            }
+        }
+    }
+}
+
+/// The background thread: what it reads from and what it sends with.
+struct Worker {
+    receiver: Receiver<ShareUsageData>,
     sender: Box<dyn UsageSender>,
     config: ShareUsageConfig,
-    static_info: Arc<Mutex<Option<StaticInfo>>>,
+    static_info: Arc<StaticInfo>,
     success_count: Arc<AtomicU64>,
     fail_count: Arc<AtomicU64>,
-) -> JoinHandle<()> {
-    std::thread::Builder::new()
-        .name("fiftyone-share-usage".to_owned())
-        .spawn(move || {
-            worker_loop(
-                rx,
-                sender,
-                &config,
-                &static_info,
-                &success_count,
-                &fail_count,
-            );
-        })
-        .expect("failed to spawn usage-sharing thread")
+    send_failures: LogThrottle,
 }
 
-/// The consumer loop. Accumulates a batch then sends it. On channel
-/// disconnection it flushes whatever remains and exits.
-fn worker_loop(
-    rx: Receiver<ShareUsageData>,
-    sender: Box<dyn UsageSender>,
-    config: &ShareUsageConfig,
-    static_info: &Arc<Mutex<Option<StaticInfo>>>,
-    success_count: &Arc<AtomicU64>,
-    fail_count: &Arc<AtomicU64>,
-) {
-    let min_entries = config.minimum_entries_per_message;
-    let take_timeout = config.take_timeout;
-    let mut batch: Vec<ShareUsageData> = Vec::with_capacity(min_entries);
+impl Worker {
+    /// The consumer loop. Accumulates a batch then sends it. On channel
+    /// disconnection it flushes whatever remains and exits.
+    fn run(self) {
+        let min_entries = self.config.minimum_entries_per_message;
+        let take_timeout = self.config.take_timeout;
+        let mut batch: Vec<ShareUsageData> = Vec::with_capacity(min_entries);
 
-    loop {
-        match rx.recv_timeout(take_timeout) {
-            Ok(item) => {
-                batch.push(item);
-                // Once a full batch is gathered, send it.
-                if batch.len() >= min_entries {
-                    send_batch(
-                        sender.as_ref(),
-                        std::mem::take(&mut batch),
-                        static_info,
-                        success_count,
-                        fail_count,
-                    );
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                // The producer paused. Keep accumulating; do not send a partial
-                // batch until shutdown, to keep batches efficient.
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                // The element is being dropped. Drain anything still buffered in
-                // the channel, then send the final (possibly partial) batch.
-                while let Ok(item) = rx.try_recv() {
+        loop {
+            match self.receiver.recv_timeout(take_timeout) {
+                Ok(item) => {
                     batch.push(item);
+                    // Once a full batch is gathered, send it.
+                    if batch.len() >= min_entries {
+                        self.send_batch(std::mem::take(&mut batch));
+                    }
                 }
-                if !batch.is_empty() {
-                    send_batch(
-                        sender.as_ref(),
-                        std::mem::take(&mut batch),
-                        static_info,
-                        success_count,
-                        fail_count,
-                    );
+                Err(RecvTimeoutError::Timeout) => {
+                    // The producer paused. Keep accumulating; do not send a
+                    // partial batch until shutdown, to keep batches efficient.
                 }
-                break;
+                Err(RecvTimeoutError::Disconnected) => {
+                    // The element is being dropped. Drain anything still
+                    // buffered in the channel, then send the final (possibly
+                    // partial) batch.
+                    while let Ok(item) = self.receiver.try_recv() {
+                        batch.push(item);
+                    }
+                    if !batch.is_empty() {
+                        self.send_batch(std::mem::take(&mut batch));
+                    }
+                    break;
+                }
             }
         }
     }
-}
 
-/// Build the XML, gzip it and send it, recording success or failure.
-fn send_batch(
-    sender: &dyn UsageSender,
-    batch: Vec<ShareUsageData>,
-    static_info: &Arc<Mutex<Option<StaticInfo>>>,
-    success_count: &Arc<AtomicU64>,
-    fail_count: &Arc<AtomicU64>,
-) {
-    if batch.is_empty() {
-        return;
-    }
-    let info = {
-        let guard = match static_info.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.clone().unwrap_or_default()
-    };
-
-    let body = match build_compressed_xml(&batch, &info) {
-        Ok(body) => body,
-        Err(_) => {
-            fail_count.fetch_add(1, Ordering::Relaxed);
+    /// Build the XML, gzip it and send it, recording success or failure.
+    fn send_batch(&self, batch: Vec<ShareUsageData>) {
+        if batch.is_empty() {
             return;
         }
-    };
 
-    match sender.send(body) {
-        Ok(()) => {
-            success_count.fetch_add(1, Ordering::Relaxed);
-        }
-        Err(_) => {
-            // Expendable: a failure is counted and logged-by-counter, never
-            // propagated.
-            fail_count.fetch_add(1, Ordering::Relaxed);
+        let body = match build_compressed_xml(&batch, &self.static_info) {
+            Ok(body) => body,
+            Err(e) => {
+                self.fail_count.fetch_add(1, Ordering::Relaxed);
+                log::error!("Usage sharing could not build a message. {e}");
+                return;
+            }
+        };
+
+        match self.sender.send(body) {
+            Ok(()) => {
+                self.success_count.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(detail) => {
+                // Expendable: a failure is counted and logged, never
+                // propagated.
+                self.fail_count.fetch_add(1, Ordering::Relaxed);
+                if let Some(failures) = self.send_failures.record() {
+                    log::warn!(
+                        "Usage sharing failed to send a message to {}. {detail}. \
+                         Messages failed since the last report: {failures}.",
+                        self.config.share_usage_url
+                    );
+                }
+            }
         }
     }
 }
@@ -819,9 +957,11 @@ fn build_compressed_xml(
 /// [usage-sharing processing section](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/pipeline-elements/usage-sharing-element.md#processing):
 /// a `<Devices>` root with one `<Device>` per request. Each evidence value is
 /// written as a child element named after its category (for example `Header`)
-/// with a `Name` attribute for the field. Values that were truncated carry a
-/// `truncated="true"` attribute. [`BytesText`] escapes XML-significant
-/// characters automatically, so invalid characters are handled for us.
+/// with a `Name` attribute for the field. [`BytesText`] escapes the characters
+/// XML gives meaning to, such as `<` and `&`. Characters XML cannot carry at
+/// all, such as most control characters, are replaced by
+/// [`escape_invalid_xml_chars`] and the element is marked `escaped="true"`.
+/// Values that were cut to the maximum length are marked `truncated="true"`.
 fn build_xml(batch: &[ShareUsageData], info: &StaticInfo) -> XmlResult {
     let mut writer = Writer::new(Vec::new());
 
@@ -861,10 +1001,10 @@ fn write_device(
     // The per-machine static information.
     write_text_element(writer, "Version", &info.core_version)?;
     write_text_element(writer, "Product", "Pipeline")?;
-    for element in &info.flow_elements {
+    for element in info.flow_elements() {
         write_text_element(writer, "FlowElement", element)?;
     }
-    write_text_element(writer, "Language", &info.language)?;
+    write_text_element(writer, "Language", "rust")?;
     write_text_element(writer, "LanguageVersion", &info.language_version)?;
     write_text_element(writer, "ServerIP", &info.server_ip)?;
     write_text_element(writer, "Platform", &info.platform)?;
@@ -872,20 +1012,7 @@ fn write_device(
     // The shared evidence, grouped by category.
     for (category, fields) in &data.evidence {
         for (field, (value, truncated)) in fields {
-            if category.is_empty() {
-                // No category: write a bare element named after the field.
-                write_text_element(writer, field, value)?;
-            } else {
-                let element_name = capitalize(category);
-                let mut start = BytesStart::new(element_name.clone());
-                start.push_attribute(("Name", field.as_str()));
-                if *truncated {
-                    start.push_attribute(("truncated", "true"));
-                }
-                writer.write_event(Event::Start(start))?;
-                writer.write_event(Event::Text(BytesText::new(value)))?;
-                writer.write_event(Event::End(BytesEnd::new(element_name)))?;
-            }
+            write_evidence(writer, category, field, value, *truncated)?;
         }
     }
 
@@ -893,16 +1020,109 @@ fn write_device(
     Ok(())
 }
 
-/// Write a `<name>text</name>` element.
+/// Write one evidence value as `<Category Name="field">value</Category>`, or as
+/// `<field>value</field>` when the key has no category.
+///
+/// An entry whose element name would not be a valid XML name is left out,
+/// because writing it would make the whole message unreadable.
+fn write_evidence(
+    writer: &mut Writer<Vec<u8>>,
+    category: &str,
+    field: &str,
+    value: &str,
+    truncated: bool,
+) -> std::result::Result<(), quick_xml::Error> {
+    let element_name = if category.is_empty() {
+        field.to_owned()
+    } else {
+        capitalize(category)
+    };
+    if !is_xml_name(&element_name) {
+        log::debug!(
+            "Usage sharing left out the evidence '{category}.{field}' because \
+             '{element_name}' cannot be an XML element name."
+        );
+        return Ok(());
+    }
+
+    let value = escape_invalid_xml_chars(value);
+    let mut escaped = matches!(value, Cow::Owned(_));
+    let mut start = BytesStart::new(element_name.as_str());
+    if !category.is_empty() {
+        let name = escape_invalid_xml_chars(field);
+        escaped |= matches!(name, Cow::Owned(_));
+        start.push_attribute(("Name", name.as_ref()));
+    }
+    if escaped {
+        start.push_attribute((ESCAPED_ATTRIBUTE, "true"));
+    }
+    if truncated {
+        start.push_attribute((TRUNCATED_ATTRIBUTE, "true"));
+    }
+    writer.write_event(Event::Start(start))?;
+    writer.write_event(Event::Text(BytesText::new(&value)))?;
+    writer.write_event(Event::End(BytesEnd::new(element_name.as_str())))?;
+    Ok(())
+}
+
+/// Write a `<name>text</name>` element, marked `escaped="true"` when the text
+/// held characters XML cannot carry.
 fn write_text_element(
     writer: &mut Writer<Vec<u8>>,
     name: &str,
     text: &str,
 ) -> std::result::Result<(), quick_xml::Error> {
-    writer.write_event(Event::Start(BytesStart::new(name)))?;
-    writer.write_event(Event::Text(BytesText::new(text)))?;
+    let text = escape_invalid_xml_chars(text);
+    let mut start = BytesStart::new(name);
+    if matches!(text, Cow::Owned(_)) {
+        start.push_attribute((ESCAPED_ATTRIBUTE, "true"));
+    }
+    writer.write_event(Event::Start(start))?;
+    writer.write_event(Event::Text(BytesText::new(&text)))?;
     writer.write_event(Event::End(BytesEnd::new(name)))?;
     Ok(())
+}
+
+/// True for a character an XML 1.0 document may contain.
+fn is_xml_char(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\n'
+            | '\r'
+            | '\u{20}'..='\u{D7FF}'
+            | '\u{E000}'..='\u{FFFD}'
+            | '\u{10000}'..='\u{10FFFF}'
+    )
+}
+
+/// Replace each character XML cannot carry with `\x` and four hex digits, the
+/// form the .NET implementation writes, so the reader can see what was there.
+/// Returns [`Cow::Borrowed`] when nothing needed replacing and
+/// [`Cow::Owned`] when something did.
+fn escape_invalid_xml_chars(value: &str) -> Cow<'_, str> {
+    if value.chars().all(is_xml_char) {
+        return Cow::Borrowed(value);
+    }
+    let mut escaped = String::with_capacity(value.len() + 8);
+    for c in value.chars() {
+        if is_xml_char(c) {
+            escaped.push(c);
+        } else {
+            let _ = write!(escaped, "\\x{:04x}", u32::from(c));
+        }
+    }
+    Cow::Owned(escaped)
+}
+
+/// True if `name` can be an XML element name. Deliberately narrower than XML
+/// allows: a letter or underscore, then letters, digits, `-`, `_` or `.`.
+fn is_xml_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_alphabetic() || first == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 /// Upper-case the first character of an evidence category so the XML element
@@ -913,6 +1133,128 @@ fn capitalize(value: &str) -> String {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
     }
+}
+
+/// The address this host uses to reach the internet. The operating system
+/// picks it when a UDP socket is connected to a public address, which sends
+/// no packets. Empty when the host has no route out.
+fn server_ip() -> String {
+    for (local, probe) in [("0.0.0.0:0", ROUTE_PROBE_V4), ("[::]:0", ROUTE_PROBE_V6)] {
+        let address = UdpSocket::bind(local)
+            .and_then(|socket| socket.connect(probe).map(|()| socket))
+            .and_then(|socket| socket.local_addr());
+        match address {
+            Ok(address) if !address.ip().is_unspecified() => return address.ip().to_string(),
+            Ok(_) => {}
+            Err(e) => log::debug!("Usage sharing found no local address routing to {probe}: {e}"),
+        }
+    }
+    String::new()
+}
+
+/// The operating system's name and version, with the service pack where the
+/// system reports one.
+fn platform() -> String {
+    match os_version() {
+        Some(version) => format!("{} {version}", std::env::consts::OS),
+        None => std::env::consts::OS.to_owned(),
+    }
+}
+
+/// The Windows version and service pack, from `RtlGetVersion`, which reports
+/// the real version whatever the program's manifest says.
+#[cfg(windows)]
+fn os_version() -> Option<String> {
+    /// The `OSVERSIONINFOW` structure.
+    #[repr(C)]
+    struct OsVersionInfo {
+        size: u32,
+        major: u32,
+        minor: u32,
+        build: u32,
+        platform_id: u32,
+        service_pack: [u16; 128],
+    }
+
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn RtlGetVersion(info: *mut OsVersionInfo) -> i32;
+    }
+
+    let mut info = OsVersionInfo {
+        size: u32::try_from(std::mem::size_of::<OsVersionInfo>()).ok()?,
+        major: 0,
+        minor: 0,
+        build: 0,
+        platform_id: 0,
+        service_pack: [0; 128],
+    };
+    // SAFETY: `info` is a writable OSVERSIONINFOW whose size field is set,
+    // which is all RtlGetVersion requires. It always succeeds.
+    if unsafe { RtlGetVersion(&mut info) } != 0 {
+        return None;
+    }
+    let length = info
+        .service_pack
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(info.service_pack.len());
+    let service_pack = String::from_utf16_lossy(&info.service_pack[..length]);
+    let version = format!("{}.{}.{}", info.major, info.minor, info.build);
+    if service_pack.trim().is_empty() {
+        Some(version)
+    } else {
+        Some(format!("{version} {}", service_pack.trim()))
+    }
+}
+
+/// The kernel release, with the distribution's name from `os-release` where
+/// there is one, for example `6.8.0-1015-azure (Ubuntu 22.04.4 LTS)`.
+#[cfg(target_os = "linux")]
+fn os_version() -> Option<String> {
+    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .ok()
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty());
+    let distribution = ["/etc/os-release", "/usr/lib/os-release"]
+        .iter()
+        .find_map(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| os_release_name(&text));
+    match (kernel, distribution) {
+        (Some(kernel), Some(distribution)) => Some(format!("{kernel} ({distribution})")),
+        (kernel, distribution) => kernel.or(distribution),
+    }
+}
+
+/// The macOS version, for example `14.5`.
+#[cfg(target_os = "macos")]
+fn os_version() -> Option<String> {
+    let plist = std::fs::read_to_string("/System/Library/CoreServices/SystemVersion.plist").ok()?;
+    plist_string(&plist, "ProductVersion")
+}
+
+/// No version is known for other systems.
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn os_version() -> Option<String> {
+    None
+}
+
+/// The `PRETTY_NAME` value from an `os-release` file, without its quotes.
+#[cfg(any(target_os = "linux", test))]
+fn os_release_name(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("PRETTY_NAME="))
+        .map(|value| value.trim().trim_matches('"').trim_matches('\'').to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+/// The `<string>` that follows `<key>key</key>` in a property list.
+#[cfg(any(target_os = "macos", test))]
+fn plist_string(plist: &str, key: &str) -> Option<String> {
+    let after = plist.split(&format!("<key>{key}</key>")).nth(1)?;
+    let start = after.find("<string>")? + "<string>".len();
+    let end = start + after[start..].find("</string>")?;
+    Some(after[start..end].trim().to_owned()).filter(|value| !value.is_empty())
 }
 
 /// The current UTC time formatted as `yyyy-MM-ddTHH:mm:ss`, as the payload
@@ -953,10 +1295,489 @@ fn civil_from_unix(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     (year, m as u32, d as u32, hour, minute, second)
 }
 
-/// Returns a best-effort language version string. The Rust compiler version is
-/// not available at runtime, so the package's minimum Rust version is reported.
-fn rustc_version_runtime() -> String {
-    option_env!("CARGO_PKG_RUST_VERSION")
-        .unwrap_or("unknown")
-        .to_owned()
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+    use std::sync::mpsc;
+
+    use fiftyone_pipeline_core::{Evidence, Pipeline};
+
+    use super::*;
+
+    /// A transport that keeps each message's XML, and fails with `failure`
+    /// when one is set.
+    #[derive(Clone, Default)]
+    struct Capture {
+        messages: Arc<Mutex<Vec<String>>>,
+        failure: Option<String>,
+    }
+
+    impl Capture {
+        fn messages(&self) -> Vec<String> {
+            self.messages.lock().unwrap().clone()
+        }
+
+        /// Every `<Device>` element across the captured messages.
+        fn devices(&self) -> usize {
+            self.messages()
+                .iter()
+                .map(|xml| xml.matches("<Device>").count())
+                .sum()
+        }
+    }
+
+    impl UsageSender for Capture {
+        fn send(&self, body: Vec<u8>) -> std::result::Result<(), String> {
+            let mut xml = String::new();
+            flate2::read::GzDecoder::new(&body[..])
+                .read_to_string(&mut xml)
+                .unwrap();
+            self.messages.lock().unwrap().push(xml);
+            match &self.failure {
+                Some(failure) => Err(failure.clone()),
+                None => Ok(()),
+            }
+        }
+    }
+
+    /// A transport that reports when a send starts, then holds it until it is
+    /// released, so a test can keep the queue full.
+    struct Gate {
+        entered: Mutex<mpsc::Sender<()>>,
+        release: Mutex<mpsc::Receiver<()>>,
+        sent: Arc<AtomicU64>,
+    }
+
+    impl UsageSender for Gate {
+        fn send(&self, _body: Vec<u8>) -> std::result::Result<(), String> {
+            let _ = self.entered.lock().unwrap().send(());
+            // A time limit, so a failing test ends instead of waiting for a
+            // release its panic skipped.
+            let _ = self
+                .release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5));
+            self.sent.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// Process each evidence set through a pipeline of `before` then a usage
+    /// sharing element, then drop everything so the last message is sent.
+    fn share(
+        config: ShareUsageConfig,
+        sender: impl UsageSender + 'static,
+        before: Vec<Arc<dyn FlowElement>>,
+        requests: Vec<Evidence>,
+    ) {
+        let element = Arc::new(ShareUsageElement::with_sender(config, Box::new(sender)));
+        let mut builder = Pipeline::builder();
+        for other in before {
+            builder = builder.add_element(other);
+        }
+        let pipeline = builder
+            .add_element(Arc::clone(&element) as Arc<dyn FlowElement>)
+            .build()
+            .unwrap();
+        for evidence in requests {
+            pipeline.create_flow_data_with(evidence).process().unwrap();
+        }
+        drop(pipeline);
+        drop(element);
+    }
+
+    fn user_agent(value: &str) -> Evidence {
+        Evidence::builder().add("header.user-agent", value).build()
+    }
+
+    fn device(session_id: Option<&str>, evidence: &[(&str, &str, &str)]) -> ShareUsageData {
+        let mut data = ShareUsageData {
+            session_id: session_id.map(str::to_owned),
+            ..ShareUsageData::default()
+        };
+        for (category, field, value) in evidence {
+            data.evidence
+                .entry((*category).to_owned())
+                .or_default()
+                .insert((*field).to_owned(), ((*value).to_owned(), false));
+        }
+        data
+    }
+
+    /// Wait up to five seconds for `condition`.
+    fn wait_for(condition: impl Fn() -> bool) {
+        let start = Instant::now();
+        while !condition() && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn invalid_xml_characters_are_escaped_and_marked() {
+        let xml = build_xml(
+            &[device(
+                Some("session\u{0}"),
+                &[("header", "user-agent", "agent\u{1}\u{1b}end\u{fffe}")],
+            )],
+            &StaticInfo::default(),
+        )
+        .unwrap();
+        assert!(
+            xml.contains(
+                r#"<Header Name="user-agent" escaped="true">agent\x0001\x001bend\xfffe</Header>"#
+            ),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(r#"<SessionId escaped="true">session\x0000</SessionId>"#),
+            "{xml}"
+        );
+        assert!(xml.chars().all(is_xml_char), "{xml:?}");
+    }
+
+    #[test]
+    fn valid_text_is_left_alone() {
+        let xml = build_xml(
+            &[device(
+                Some("session"),
+                &[(
+                    "header",
+                    "user-agent",
+                    "Mozilla/5.0 <b> & \"\u{fc}\" \u{65e5}\t",
+                )],
+            )],
+            &StaticInfo::default(),
+        )
+        .unwrap();
+        assert!(!xml.contains(ESCAPED_ATTRIBUTE), "{xml}");
+        assert!(
+            xml.contains("Mozilla/5.0 &lt;b&gt; &amp; &quot;\u{fc}&quot; \u{65e5}\t"),
+            "{xml}"
+        );
+    }
+
+    #[test]
+    fn evidence_that_cannot_be_an_element_name_is_left_out() {
+        let xml = build_xml(
+            &[device(
+                None,
+                &[
+                    ("", "51d_value", "dropped"),
+                    ("", "plain", "kept"),
+                    ("my prefix", "field", "dropped"),
+                ],
+            )],
+            &StaticInfo::default(),
+        )
+        .unwrap();
+        assert!(!xml.contains("dropped"), "{xml}");
+        assert!(xml.contains("<plain>kept</plain>"), "{xml}");
+    }
+
+    #[test]
+    fn long_values_are_truncated_and_marked() {
+        let capture = Capture::default();
+        let long = "a".repeat(SHARE_USAGE_MAX_EVIDENCE_LENGTH * 2);
+        share(
+            ShareUsageConfig::default(),
+            capture.clone(),
+            Vec::new(),
+            vec![user_agent(&long)],
+        );
+        let kept = "a".repeat(SHARE_USAGE_MAX_EVIDENCE_LENGTH);
+        assert!(
+            capture.messages()[0].contains(&format!(
+                r#"<Header Name="user-agent" truncated="true">{kept}</Header>"#
+            )),
+            "the value is cut to the maximum length and marked"
+        );
+    }
+
+    #[test]
+    fn the_ignore_filter_stops_matching_requests() {
+        let capture = Capture::default();
+        let config = ShareUsageConfig::builder()
+            .ignore_flow_data_evidence_filter([("Header.X-Test", "skip")])
+            .build();
+        let requests = vec![
+            Evidence::builder()
+                .add("header.user-agent", "one")
+                .add("header.x-test", "skip")
+                .build(),
+            Evidence::builder()
+                .add("header.user-agent", "two")
+                .add("header.x-test", "Skip")
+                .build(),
+            user_agent("three"),
+        ];
+        share(config, capture.clone(), Vec::new(), requests);
+        let xml = capture.messages().concat();
+        assert!(
+            !xml.contains(">one<"),
+            "the exact match is not shared: {xml}"
+        );
+        assert!(xml.contains(">two<"), "values match exactly: {xml}");
+        assert!(xml.contains(">three<"), "{xml}");
+    }
+
+    #[test]
+    fn the_share_percentage_is_the_proportion_shared() {
+        const SAMPLES: usize = 100_000;
+        for percentage in [0.25, 0.4, 0.6, 0.75] {
+            let element = ShareUsageElement::with_sender(
+                ShareUsageConfig::builder()
+                    .share_percentage(percentage)
+                    .build(),
+                Box::new(Capture::default()),
+            );
+            fastrand::seed(7);
+            let shared = (0..SAMPLES).filter(|_| element.in_sample()).count();
+            let proportion = shared as f64 / SAMPLES as f64;
+            assert!(
+                (proportion - percentage).abs() < 0.01,
+                "{percentage} shared {proportion}"
+            );
+        }
+    }
+
+    #[test]
+    fn small_minimum_entries_are_kept() {
+        for (asked, kept) in [(0, 1), (1, 1), (10, 10), (50, 50)] {
+            let config = ShareUsageConfig::builder()
+                .minimum_entries_per_message(asked)
+                .build();
+            assert_eq!(config.minimum_entries_per_message(), kept);
+        }
+    }
+
+    #[test]
+    fn a_message_is_sent_once_the_minimum_is_reached() {
+        let capture = Capture::default();
+        let element = Arc::new(ShareUsageElement::with_sender(
+            ShareUsageConfig::builder()
+                .minimum_entries_per_message(2)
+                .build(),
+            Box::new(capture.clone()),
+        ));
+        let pipeline = Pipeline::builder()
+            .add_element(Arc::clone(&element) as Arc<dyn FlowElement>)
+            .build()
+            .unwrap();
+        for agent in ["one", "two"] {
+            pipeline
+                .create_flow_data_with(user_agent(agent))
+                .process()
+                .unwrap();
+        }
+        wait_for(|| element.success_count() > 0);
+        assert_eq!(element.success_count(), 1, "two records make a message");
+        assert_eq!(capture.devices(), 2);
+    }
+
+    #[test]
+    fn a_full_queue_waits_for_the_add_timeout_then_discards() {
+        const ADD_TIMEOUT_MILLISECONDS: u64 = 50;
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let sent = Arc::new(AtomicU64::new(0));
+        let element = Arc::new(ShareUsageElement::with_sender(
+            ShareUsageConfig::builder()
+                .minimum_entries_per_message(1)
+                .maximum_queue_size(1)
+                .add_timeout(Duration::from_millis(ADD_TIMEOUT_MILLISECONDS))
+                .build(),
+            Box::new(Gate {
+                entered: Mutex::new(entered_tx),
+                release: Mutex::new(release_rx),
+                sent: Arc::clone(&sent),
+            }),
+        ));
+        let pipeline = Pipeline::builder()
+            .add_element(Arc::clone(&element) as Arc<dyn FlowElement>)
+            .build()
+            .unwrap();
+        let process = |agent: &str| {
+            pipeline
+                .create_flow_data_with(user_agent(agent))
+                .process()
+                .unwrap()
+        };
+
+        // The first record goes straight to the sender, which holds it. The
+        // second fills the queue of one.
+        process("one");
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        process("two");
+
+        // The third waits for the add timeout, then is discarded.
+        let start = Instant::now();
+        process("three");
+        assert!(
+            start.elapsed() >= Duration::from_millis(ADD_TIMEOUT_MILLISECONDS),
+            "returned after {:?}",
+            start.elapsed()
+        );
+
+        for _ in 0..3 {
+            let _ = release_tx.send(());
+        }
+        drop(pipeline);
+        drop(element);
+        assert_eq!(sent.load(Ordering::SeqCst), 2, "the third was discarded");
+    }
+
+    #[test]
+    fn a_stopped_or_full_queue_reports_why() {
+        let (tx, rx) = sync_channel::<ShareUsageData>(1);
+        assert!(add_to_queue(&tx, ShareUsageData::default(), Duration::ZERO).is_ok());
+        assert!(matches!(
+            add_to_queue(&tx, ShareUsageData::default(), Duration::ZERO),
+            Err(Discarded::QueueFull)
+        ));
+        drop(rx);
+        assert!(matches!(
+            add_to_queue(&tx, ShareUsageData::default(), Duration::ZERO),
+            Err(Discarded::Stopped)
+        ));
+    }
+
+    #[test]
+    fn a_repeated_failure_is_logged_once_until_the_interval_passes() {
+        let throttle = LogThrottle::new();
+        assert_eq!(throttle.record(), Some(1));
+        assert_eq!(throttle.record(), None);
+        assert_eq!(throttle.record(), None);
+        assert_eq!(throttle.failures.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn a_failed_send_is_counted() {
+        let capture = Capture {
+            failure: Some("the endpoint answered 500".to_owned()),
+            ..Capture::default()
+        };
+        let element = Arc::new(ShareUsageElement::with_sender(
+            ShareUsageConfig::builder()
+                .minimum_entries_per_message(1)
+                .build(),
+            Box::new(capture),
+        ));
+        let pipeline = Pipeline::builder()
+            .add_element(Arc::clone(&element) as Arc<dyn FlowElement>)
+            .build()
+            .unwrap();
+        pipeline
+            .create_flow_data_with(user_agent("one"))
+            .process()
+            .unwrap();
+        wait_for(|| element.fail_count() > 0);
+        assert_eq!(element.fail_count(), 1);
+        assert_eq!(element.success_count(), 0);
+    }
+
+    #[test]
+    fn the_static_values_describe_this_machine_and_pipeline() {
+        let capture = Capture::default();
+        share(
+            ShareUsageConfig::default(),
+            capture.clone(),
+            vec![Arc::new(SequenceElement::new())],
+            vec![user_agent("one")],
+        );
+        let xml = &capture.messages()[0];
+        let text = |name: &str| {
+            let start = xml.find(&format!("<{name}>")).unwrap() + name.len() + 2;
+            let end = start + xml[start..].find(&format!("</{name}>")).unwrap();
+            xml[start..end].to_owned()
+        };
+
+        assert_eq!(text("Language"), "rust");
+        let version = text("LanguageVersion");
+        assert!(
+            version.split('.').count() >= 3
+                && version
+                    .split('.')
+                    .take(2)
+                    .all(|part| part.parse::<u32>().is_ok()),
+            "the compiler version, not {version}"
+        );
+        let platform = text("Platform");
+        assert!(platform.starts_with(std::env::consts::OS), "{platform}");
+        let server_ip = text("ServerIP");
+        assert!(
+            server_ip.is_empty() || server_ip.parse::<std::net::IpAddr>().is_ok(),
+            "{server_ip}"
+        );
+        for name in [
+            "fiftyone_pipeline_engines_fiftyone::sequence_element::SequenceElement",
+            "fiftyone_pipeline_engines_fiftyone::share_usage_element::ShareUsageElement",
+        ] {
+            assert!(
+                xml.contains(&format!("<FlowElement>{name}</FlowElement>")),
+                "{xml}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sequence_elements_values_are_shared() {
+        let capture = Capture::default();
+        share(
+            ShareUsageConfig::default(),
+            capture.clone(),
+            vec![Arc::new(SequenceElement::new())],
+            vec![Evidence::builder()
+                .add("header.user-agent", "one")
+                .add(EVIDENCE_SESSIONID, "session")
+                .add(EVIDENCE_SEQUENCE, "3")
+                .build()],
+        );
+        let xml = &capture.messages()[0];
+        assert!(xml.contains("<SessionId>session</SessionId>"), "{xml}");
+        assert!(
+            xml.contains("<Sequence>4</Sequence>"),
+            "the incremented sequence: {xml}"
+        );
+    }
+
+    #[test]
+    fn without_a_sequence_element_the_evidence_values_are_shared() {
+        let capture = Capture::default();
+        share(
+            ShareUsageConfig::default(),
+            capture.clone(),
+            Vec::new(),
+            vec![Evidence::builder()
+                .add("header.user-agent", "one")
+                .add(EVIDENCE_SESSIONID, "session")
+                .add(EVIDENCE_SEQUENCE, "3")
+                .build()],
+        );
+        let xml = &capture.messages()[0];
+        assert!(xml.contains("<SessionId>session</SessionId>"), "{xml}");
+        assert!(xml.contains("<Sequence>3</Sequence>"), "{xml}");
+    }
+
+    #[test]
+    fn the_distribution_name_is_read_from_os_release() {
+        let text = "NAME=\"Ubuntu\"\nVERSION_ID=\"22.04\"\nPRETTY_NAME=\"Ubuntu 22.04.4 LTS\"\n";
+        assert_eq!(os_release_name(text).as_deref(), Some("Ubuntu 22.04.4 LTS"));
+        assert_eq!(
+            os_release_name("PRETTY_NAME=Alpine").as_deref(),
+            Some("Alpine")
+        );
+        assert_eq!(os_release_name("NAME=x"), None);
+    }
+
+    #[test]
+    fn the_product_version_is_read_from_a_property_list() {
+        let plist = "<dict>\n\t<key>ProductName</key>\n\t<string>macOS</string>\n\t\
+                     <key>ProductVersion</key>\n\t<string>14.5</string>\n</dict>";
+        assert_eq!(
+            plist_string(plist, "ProductVersion").as_deref(),
+            Some("14.5")
+        );
+        assert_eq!(plist_string(plist, "Missing"), None);
+    }
 }
