@@ -156,15 +156,17 @@ impl IpIntelligenceOnPremiseEngineBuilder {
     ///
     /// When enabled, the [`DataUpdateService`] the engine is registered with
     /// polls the update URL on the polling interval and applies a downloaded
-    /// update by calling the engine's `refresh`.
+    /// update by calling the engine's `refresh`. This is the master switch for
+    /// automatic updates, so with it off the file-system watcher does not run
+    /// either.
     pub fn auto_update(mut self, enabled: bool) -> Self {
         self.auto_update_enabled = enabled;
         self
     }
 
     /// Enable or disable the file-system watcher for the data file. On by
-    /// default. When enabled, the update service refreshes the engine when the
-    /// file changes on disk.
+    /// default. When enabled, and [`Self::auto_update`] is on, the update
+    /// service refreshes the engine when the file changes on disk.
     pub fn file_system_watcher(mut self, enabled: bool) -> Self {
         self.file_system_watcher_enabled = enabled;
         self
