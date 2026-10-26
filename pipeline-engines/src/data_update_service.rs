@@ -597,7 +597,10 @@ impl ServiceHandle {
         let response = request.send().map_err(|e| {
             DataUpdateError::new(
                 AutoUpdateStatus::HttpsError,
-                format!("error accessing data update service at '{url}': {e}"),
+                format!(
+                    "error accessing data update service at '{url}': {}",
+                    request_error_message(e)
+                ),
             )
         })?;
 
@@ -645,7 +648,10 @@ impl ServiceHandle {
         let compressed = response.bytes().map_err(|e| {
             DataUpdateError::new(
                 AutoUpdateStatus::StreamError,
-                format!("error reading data update response from '{url}': {e}"),
+                format!(
+                    "error reading data update response from '{url}': {}",
+                    request_error_message(e)
+                ),
             )
         })?;
 
@@ -737,6 +743,21 @@ fn log_poll(registration: &Arc<Registration>, result: DataUpdateResult) {
              Update will be attempted again later. Error detail: {error}"
         ),
     }
+}
+
+/// The message of a failed request and each of its causes, without the URL
+/// the request error names. That URL is the formatted one, whose query
+/// carries the licence keys.
+fn request_error_message(error: reqwest::Error) -> String {
+    let error = error.without_url();
+    let mut message = error.to_string();
+    let mut cause = std::error::Error::source(&error);
+    while let Some(source) = cause {
+        message.push_str(": ");
+        message.push_str(&source.to_string());
+        cause = source.source();
+    }
+    message
 }
 
 /// Format a timestamp as an HTTP-date for the `If-Modified-Since` header.
