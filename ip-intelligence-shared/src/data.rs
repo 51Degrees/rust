@@ -57,6 +57,8 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use fiftyone_pipeline_core::{
     ElementData, NoValueError, PropertyMetaData, PropertyValue, PropertyValueType, TypedKey,
@@ -190,6 +192,122 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// Values read on request
+// ---------------------------------------------------------------------------
+
+/// Reads the properties of one lookup from its native results when they are
+/// requested.
+///
+/// An on-premise engine gives its [`IpIntelligenceDataBase`] a reader rather
+/// than a copy of every value, so a caller that reads one property does not pay
+/// to read the others, some of which are costly, such as a polygon written out
+/// as text.
+pub trait IpIntelligencePropertyReader: Send + Sync {
+    /// The lowercase names of the properties this reader can read. A property
+    /// is identified by its position in this list.
+    fn property_names(&self) -> &[String];
+
+    /// The position of the property with the given lowercase name, or `None`
+    /// when this reader cannot read it.
+    fn position(&self, name: &str) -> Option<usize>;
+
+    /// Read the property at `position` into `data` through its `set_*` methods,
+    /// leaving `data` unchanged when the property has no value. `Err` carries
+    /// the message of a read that failed.
+    fn read_property(
+        &self,
+        position: usize,
+        data: &mut IpIntelligenceDataBase,
+    ) -> Result<(), String>;
+}
+
+/// The values an [`IpIntelligencePropertyReader`] has read, so each property is
+/// read at most once.
+struct DeferredValues {
+    reader: Box<dyn IpIntelligencePropertyReader>,
+    state: Mutex<DeferredState>,
+}
+
+struct DeferredState {
+    /// The values read so far.
+    values: IpIntelligenceDataBase,
+    /// Whether each property has been read, by position in the reader's names,
+    /// with the message of the read if it failed. Empty until the first read.
+    read: Vec<Option<Option<String>>>,
+}
+
+impl DeferredValues {
+    /// The position of a property in the reader's names, or `None` when the
+    /// reader cannot read it.
+    fn position(&self, name: &str) -> Option<usize> {
+        let position = match self.reader.position(name) {
+            Some(position) => Some(position),
+            None if needs_lowercase(name) => self.reader.position(&key(name)),
+            None => None,
+        }?;
+        (position < self.reader.property_names().len()).then_some(position)
+    }
+
+    /// Read the property at `position` if it has not been read, returning the
+    /// message of the read if it failed.
+    fn read(&self, state: &mut DeferredState, position: usize) -> Option<String> {
+        if state.read.is_empty() {
+            state.read.resize(self.reader.property_names().len(), None);
+        }
+        if let Some(failure) = &state.read[position] {
+            return failure.clone();
+        }
+        let failure = self.reader.read_property(position, &mut state.values).err();
+        state.read[position] = Some(failure.clone());
+        failure
+    }
+
+    /// Look at the values read so far, after reading the named property if it
+    /// has not been read. `Err` carries the message of a read that failed.
+    fn with<R>(
+        &self,
+        name: &str,
+        look: impl FnOnce(&IpIntelligenceDataBase) -> R,
+    ) -> Result<R, String> {
+        let position = self.position(name);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let state = &mut *state;
+        if let Some(position) = position {
+            if let Some(message) = self.read(state, position) {
+                return Err(message);
+            }
+        }
+        Ok(look(&state.values))
+    }
+
+    /// The lowercase names of the properties that have a value, reading any not
+    /// yet read.
+    fn keys(&self) -> Vec<String> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let state = &mut *state;
+        for position in 0..self.reader.property_names().len() {
+            self.read(state, position);
+        }
+        state.values.base.keys()
+    }
+}
+
+/// Whether a property name has letters that lowercasing would change.
+fn needs_lowercase(name: &str) -> bool {
+    !name.is_ascii() || name.bytes().any(|byte| byte.is_ascii_uppercase())
+}
+
+impl fmt::Debug for DeferredValues {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        f.debug_struct("DeferredValues")
+            .field("read", &state.read)
+            .field("values", &state.values)
+            .finish_non_exhaustive()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Concrete data
 // ---------------------------------------------------------------------------
 
@@ -202,6 +320,11 @@ where
 /// [`IpIntelligenceData`](crate::IpIntelligenceData) accessors read these stores
 /// by name; the dynamic [`ElementData`] bag holds a mirror so string-keyed
 /// lookups also work.
+///
+/// An on-premise engine also attaches an [`IpIntelligencePropertyReader`]
+/// through [`IpIntelligenceDataBase::with_reader`], and a property not set on
+/// the data directly is then read from the native results the first time it is
+/// requested.
 #[derive(Debug, Clone)]
 pub struct IpIntelligenceDataBase {
     base: AspectDataBase,
@@ -210,20 +333,15 @@ pub struct IpIntelligenceDataBase {
     integers: BTreeMap<String, ValueStore<i32>>,
     booleans: BTreeMap<String, ValueStore<bool>>,
     weighted_strings: BTreeMap<String, WeightedStore<String>>,
+    /// The values read on request, when an engine attached a reader.
+    deferred: Option<Arc<DeferredValues>>,
 }
 
 impl IpIntelligenceDataBase {
     /// Create empty IP-intelligence data attributed to the engine with the given
     /// data key (typically [`IP_DATA_KEY_NAME`]).
     pub fn new(engine_key: impl Into<String>) -> Self {
-        IpIntelligenceDataBase {
-            base: AspectDataBase::new(engine_key),
-            strings: BTreeMap::new(),
-            floats: BTreeMap::new(),
-            integers: BTreeMap::new(),
-            booleans: BTreeMap::new(),
-            weighted_strings: BTreeMap::new(),
-        }
+        Self::from_base(AspectDataBase::new(engine_key))
     }
 
     /// Create IP-intelligence data wrapping an existing [`AspectDataBase`],
@@ -236,10 +354,44 @@ impl IpIntelligenceDataBase {
             integers: BTreeMap::new(),
             booleans: BTreeMap::new(),
             weighted_strings: BTreeMap::new(),
+            deferred: None,
         }
     }
 
-    /// Borrow the embedded [`AspectDataBase`].
+    /// Read every property not set on this data directly from `reader` when it
+    /// is first requested, keeping each value once read.
+    ///
+    /// A value set directly takes precedence over the reader's. Reads go
+    /// through a lock, so the data can be shared between threads.
+    pub fn with_reader(mut self, reader: impl IpIntelligencePropertyReader + 'static) -> Self {
+        self.deferred = Some(Arc::new(DeferredValues {
+            reader: Box::new(reader),
+            state: Mutex::new(DeferredState {
+                values: IpIntelligenceDataBase::new(IP_DATA_KEY_NAME),
+                read: Vec::new(),
+            }),
+        }));
+        self
+    }
+
+    /// A typed value read through the reader, or the default no-value when
+    /// there is no reader.
+    fn deferred_value<T>(
+        &self,
+        name: &str,
+        look: impl FnOnce(&IpIntelligenceDataBase) -> AspectPropertyValue<T>,
+    ) -> AspectPropertyValue<T> {
+        match &self.deferred {
+            Some(deferred) => deferred
+                .with(name, look)
+                .unwrap_or_else(|message| AspectPropertyValue::no_value(message)),
+            None => AspectPropertyValue::empty(),
+        }
+    }
+
+    /// Borrow the embedded [`AspectDataBase`], which holds the values set on
+    /// this data directly. Values a reader supplies are not in it, so read
+    /// through [`ElementData`] or the typed getters to see every value.
     pub fn base(&self) -> &AspectDataBase {
         &self.base
     }
@@ -377,22 +529,34 @@ impl IpIntelligenceDataBase {
     /// Read a plain string property by name, as the generated string accessors
     /// do.
     pub fn string(&self, name: &str) -> AspectPropertyValue<String> {
-        value_store_to_aspect(self.strings.get(&key(name)))
+        match self.strings.get(&key(name)) {
+            Some(store) => value_store_to_aspect(Some(store)),
+            None => self.deferred_value(name, |values| values.string(name)),
+        }
     }
 
     /// Read a plain float property by name.
     pub fn float(&self, name: &str) -> AspectPropertyValue<f32> {
-        value_store_to_aspect(self.floats.get(&key(name)))
+        match self.floats.get(&key(name)) {
+            Some(store) => value_store_to_aspect(Some(store)),
+            None => self.deferred_value(name, |values| values.float(name)),
+        }
     }
 
     /// Read a plain integer property by name.
     pub fn integer(&self, name: &str) -> AspectPropertyValue<i32> {
-        value_store_to_aspect(self.integers.get(&key(name)))
+        match self.integers.get(&key(name)) {
+            Some(store) => value_store_to_aspect(Some(store)),
+            None => self.deferred_value(name, |values| values.integer(name)),
+        }
     }
 
     /// Read a plain boolean property by name.
     pub fn boolean(&self, name: &str) -> AspectPropertyValue<bool> {
-        value_store_to_aspect(self.booleans.get(&key(name)))
+        match self.booleans.get(&key(name)) {
+            Some(store) => value_store_to_aspect(Some(store)),
+            None => self.deferred_value(name, |values| values.boolean(name)),
+        }
     }
 
     /// Read a weighted string property by name.
@@ -407,7 +571,7 @@ impl IpIntelligenceDataBase {
             Some(WeightedStore::NoValue { message }) => {
                 AspectPropertyValue::no_value(message.clone())
             }
-            None => AspectPropertyValue::empty(),
+            None => self.deferred_value(name, |values| values.weighted_string(name)),
         }
     }
 }
@@ -433,11 +597,33 @@ fn value_store_to_aspect<T: Clone>(store: Option<&ValueStore<T>>) -> AspectPrope
 
 impl ElementData for IpIntelligenceDataBase {
     fn get(&self, name: &str) -> Result<PropertyValue, NoValueError> {
-        self.base.get(name)
+        if let Some(value) = self.base.values().get_value(name) {
+            return Ok(value.clone());
+        }
+        match &self.deferred {
+            Some(deferred) => deferred
+                .with(name, |values| values.base.get(name))
+                .unwrap_or_else(|message| Err(NoValueError::new(message))),
+            None => self.base.get(name),
+        }
     }
 
+    /// The names of the properties that have a value. With a reader attached
+    /// this reads every property not yet read, because whether a property has
+    /// a value is only known once it is read.
     fn keys(&self) -> Vec<String> {
-        self.base.keys()
+        let mut keys = self.base.keys();
+        if let Some(deferred) = &self.deferred {
+            // The reader's names are distinct, so only the names set directly
+            // can repeat one of them.
+            let set_directly = keys.len();
+            for name in deferred.keys() {
+                if !keys[..set_directly].contains(&name) {
+                    keys.push(name);
+                }
+            }
+        }
+        keys
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -645,5 +831,181 @@ mod tests {
             .find(|m| m.name == "CountryCodesGeographical")
             .unwrap();
         assert_eq!(codes.value_type, PropertyValueType::KeyValueList);
+    }
+
+    /// A reader over fixed values that counts how often each property is read.
+    struct CountingReader {
+        names: Vec<String>,
+        reads: Arc<Mutex<BTreeMap<String, usize>>>,
+    }
+
+    impl CountingReader {
+        fn new() -> (Self, Arc<Mutex<BTreeMap<String, usize>>>) {
+            let reads = Arc::new(Mutex::new(BTreeMap::new()));
+            let reader = CountingReader {
+                names: [
+                    "country",
+                    "isvpn",
+                    "countrycodesgeographical",
+                    "region",
+                    "areas",
+                ]
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
+                reads: Arc::clone(&reads),
+            };
+            (reader, reads)
+        }
+    }
+
+    impl IpIntelligencePropertyReader for CountingReader {
+        fn property_names(&self) -> &[String] {
+            &self.names
+        }
+
+        fn position(&self, name: &str) -> Option<usize> {
+            self.names.iter().position(|known| known == name)
+        }
+
+        fn read_property(
+            &self,
+            position: usize,
+            data: &mut IpIntelligenceDataBase,
+        ) -> Result<(), String> {
+            let name = self.names[position].as_str();
+            *self
+                .reads
+                .lock()
+                .unwrap()
+                .entry(name.to_owned())
+                .or_insert(0) += 1;
+            match name {
+                "country" => data.set_string("Country", "United Kingdom"),
+                "isvpn" => data.set_boolean("IsVPN", false),
+                "countrycodesgeographical" => {
+                    data.set_weighted_string("CountryCodesGeographical", sample_countries())
+                }
+                "areas" => return Err("the native read failed".to_owned()),
+                _ => {}
+            }
+            Ok(())
+        }
+    }
+
+    fn reads_of(reads: &Mutex<BTreeMap<String, usize>>, name: &str) -> usize {
+        reads.lock().unwrap().get(name).copied().unwrap_or(0)
+    }
+
+    #[test]
+    fn reader_reads_only_the_properties_requested() {
+        let (reader, reads) = CountingReader::new();
+        let data = IpIntelligenceDataBase::new(IP_DATA_KEY_NAME).with_reader(reader);
+        assert_eq!(data.country().value().unwrap().as_str(), "United Kingdom");
+        assert_eq!(reads_of(&reads, "country"), 1);
+        assert_eq!(reads_of(&reads, "areas"), 0);
+        assert_eq!(reads_of(&reads, "isvpn"), 0);
+    }
+
+    #[test]
+    fn reader_reads_each_property_once() {
+        let (reader, reads) = CountingReader::new();
+        let data = IpIntelligenceDataBase::new(IP_DATA_KEY_NAME).with_reader(reader);
+        assert!(!*data.is_vpn().value().unwrap());
+        assert_eq!(data.get("ISVPN").unwrap(), PropertyValue::Bool(false));
+        assert!(!*data.is_vpn().value().unwrap());
+        assert_eq!(reads_of(&reads, "isvpn"), 1);
+    }
+
+    #[test]
+    fn weighted_values_read_on_request_keep_their_order() {
+        let (reader, _) = CountingReader::new();
+        let data = IpIntelligenceDataBase::new(IP_DATA_KEY_NAME).with_reader(reader);
+        let value = data.country_codes_geographical();
+        let list = value.value().expect("a weighted list");
+        assert_eq!(list[0].value, "FR");
+        assert!(matches!(
+            data.get("CountryCodesGeographical"),
+            Ok(PropertyValue::KeyValueList(_))
+        ));
+    }
+
+    #[test]
+    fn keys_list_only_the_properties_with_a_value() {
+        let (reader, reads) = CountingReader::new();
+        let mut data = IpIntelligenceDataBase::new(IP_DATA_KEY_NAME).with_reader(reader);
+        data.set_string("IpRangeStart", "192.0.2.0");
+        let mut keys = data.keys();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "country",
+                "countrycodesgeographical",
+                "iprangestart",
+                "isvpn"
+            ]
+        );
+        for name in [
+            "country",
+            "isvpn",
+            "countrycodesgeographical",
+            "region",
+            "areas",
+        ] {
+            assert_eq!(reads_of(&reads, name), 1, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_value_set_directly_wins_over_the_reader() {
+        let (reader, reads) = CountingReader::new();
+        let mut data = IpIntelligenceDataBase::new(IP_DATA_KEY_NAME).with_reader(reader);
+        data.set_string("Country", "France");
+        assert_eq!(data.country().value().unwrap().as_str(), "France");
+        assert_eq!(
+            data.get("Country").unwrap(),
+            PropertyValue::String("France".to_owned())
+        );
+        assert_eq!(reads_of(&reads, "country"), 0);
+    }
+
+    #[test]
+    fn a_property_without_a_value_reads_as_absent() {
+        let (reader, _) = CountingReader::new();
+        let data = IpIntelligenceDataBase::new(IP_DATA_KEY_NAME).with_reader(reader);
+        assert!(data.region().value().is_err());
+        assert!(data.get("Region").is_err());
+        assert!(data.get("NotAProperty").is_err());
+    }
+
+    #[test]
+    fn a_failed_read_is_a_no_value_carrying_its_message() {
+        let (reader, _) = CountingReader::new();
+        let data = IpIntelligenceDataBase::new(IP_DATA_KEY_NAME).with_reader(reader);
+        assert_eq!(
+            data.get("Areas").unwrap_err().message,
+            "the native read failed"
+        );
+        assert_eq!(
+            data.string("Areas").no_value_message(),
+            Some("the native read failed")
+        );
+    }
+
+    #[test]
+    fn reads_from_several_threads_agree_and_read_once() {
+        let (reader, reads) = CountingReader::new();
+        let data = Arc::new(IpIntelligenceDataBase::new(IP_DATA_KEY_NAME).with_reader(reader));
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let data = Arc::clone(&data);
+                std::thread::spawn(move || data.country().value().unwrap().clone())
+            })
+            .collect();
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), "United Kingdom");
+        }
+        assert_eq!(reads_of(&reads, "country"), 1);
     }
 }

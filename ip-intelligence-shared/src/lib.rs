@@ -68,8 +68,8 @@ mod ip_intelligence_data;
 
 pub use data::{
     declared_property_value_type, default_aspect_property_metadata, default_property_metadata,
-    generated_property_names, IpIntelligenceDataBase, ValueStore, WeightedStore, IP_DATA_KEY,
-    IP_DATA_KEY_NAME, WEIGHTED_PROPERTY_VALUE_TYPE, WEIGHTED_RECORD_VALUE_KEY,
-    WEIGHTED_RECORD_WEIGHT_KEY,
+    generated_property_names, IpIntelligenceDataBase, IpIntelligencePropertyReader, ValueStore,
+    WeightedStore, IP_DATA_KEY, IP_DATA_KEY_NAME, WEIGHTED_PROPERTY_VALUE_TYPE,
+    WEIGHTED_RECORD_VALUE_KEY, WEIGHTED_RECORD_WEIGHT_KEY,
 };
 pub use ip_intelligence_data::{IpIntelligenceData, GENERATED_PROPERTY_TYPES};
