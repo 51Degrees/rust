@@ -1,11 +1,11 @@
 name: Nightly Performance
 
-# Runs the on-premise performance examples, writes their throughput figures into
-# results_<name>.json in the common-ci schema, and uploads them so the shared
-# steps/compare-performance.ps1 can chart them on the documentation performance
-# graphs. The Rust on-premise engines call the device-detection-cxx and
-# ip-intelligence-cxx libraries through FFI, so the figures track native
-# performance.
+# Runs the on-premise performance examples. Each example writes its results
+# JSON, the shared steps/publish-performance-results.ps1 validates it and puts
+# it at results_<name>.json, and the shared steps/compare-performance.ps1 charts
+# it on the documentation performance graphs. The Rust on-premise engines call
+# the device-detection-cxx and ip-intelligence-cxx libraries through FFI, so the
+# figures track native performance.
 #
 # This mirrors the per-language performance steps in common-ci's nightly
 # workflows. It is kept self-contained here (rather than calling the shared
@@ -57,13 +57,11 @@ jobs:
           path: rust
           submodules: recursive
 
-      # 2. common-ci, checked out for the shared comparison step
-      #    (steps/compare-performance.ps1). The Rust performance adapter itself
-      #    now lives in this repo at ci/run-performance-tests.ps1 (see
-      #    ci/missing-ci-scripts.md), because it serves only this repository and
-      #    a folder named rust in common-ci collides with the clone of a
-      #    repository named rust (51Degrees/rust#50); only the comparison step
-      #    is shared.
+      # 2. common-ci, checked out for the shared steps that publish and compare
+      #    the results (steps/publish-performance-results.ps1 and
+      #    steps/compare-performance.ps1). The Rust performance adapter lives in
+      #    this repo at ci/run-performance-tests.ps1 (see
+      #    ci/missing-ci-scripts.md), because it serves only this repository.
       - name: Checkout common-ci
         uses: actions/checkout@v4
         with:
@@ -132,8 +130,8 @@ jobs:
         with:
           workspaces: rust
 
-      # 5. Run the performance examples and write results_<name>.json files under
-      #    rust/test-results/performance-summary in the common-ci schema.
+      # 5. Run the performance examples and publish each results_<name>.json
+      #    under rust/test-results/performance-summary through the shared step.
       - name: Run performance and write results
         shell: pwsh
         run: ./rust/ci/run-performance-tests.ps1 -RepoName rust

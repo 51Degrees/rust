@@ -161,9 +161,11 @@ is ignored by git and listed in the `fodid` manifest's `include`, so
   the bundled asset and `UPSTREAM_PINNED_REF` to the same commit in one pull
   request.
 - `nightly-performance.yml` — nightly (and on-demand) on-premise throughput
-  run that feeds the documentation performance graphs. Its Rust adapter lives
-  in this repo at `ci/run-performance-tests.ps1`; only the shared comparison
-  step (`compare-performance.ps1`) comes from common-ci. See
+  run that feeds the documentation performance graphs. Its adapter,
+  `ci/run-performance-tests.ps1`, runs the performance examples. Each example
+  writes its own results JSON, and common-ci provides the steps that validate
+  and compare it (`steps/publish-performance-results.ps1` and
+  `steps/compare-performance.ps1`). See
   [ci/missing-ci-scripts.md](ci/missing-ci-scripts.md) for how this relates to
   the org-standard reusable-workflow contract and the planned direction.
 
