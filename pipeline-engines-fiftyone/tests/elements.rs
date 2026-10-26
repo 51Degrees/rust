@@ -97,6 +97,27 @@ fn sequence_treats_unparseable_sequence_as_one() {
     assert_eq!(sequence.sequence(), Some(1));
 }
 
+#[test]
+fn sequence_treats_a_sequence_with_no_next_integer_as_one() {
+    // The sequence comes from the request, so the largest integer must not
+    // overflow when it is incremented.
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(SequenceElement::new()))
+        .build()
+        .unwrap();
+
+    for (raw, expected) in [(i64::MAX, 1), (i64::MAX - 1, i64::MAX)] {
+        let evidence = Evidence::builder()
+            .add("query.sequence", raw.to_string())
+            .build();
+        let mut data = pipeline.create_flow_data_with(evidence);
+        data.process().unwrap();
+
+        let sequence = data.get(SequenceElement::KEY).unwrap();
+        assert_eq!(sequence.sequence(), Some(expected), "for {raw}");
+    }
+}
+
 // --------------------------------------------------------------------------
 // Set headers element
 // --------------------------------------------------------------------------
