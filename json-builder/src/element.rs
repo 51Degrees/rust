@@ -22,7 +22,7 @@
 
 //! The JSON builder flow element.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use fiftyone_pipeline_core::{
     ElementData, EvidenceKeyFilter, EvidenceKeyFilterWhitelist, FlowData, FlowElement, Pipeline,
@@ -153,8 +153,10 @@ impl PipelineConfig {
 ///   (`element.property`) of every JavaScript-typed property present. It is
 ///   only emitted while the request sequence number is below
 ///   [`crate::MAX_JAVASCRIPT_ITERATIONS`]. This key keeps its original casing.
-/// - `errors` is an object mapping an element data key to the list of error
-///   messages recorded against it, present only when the flow data has errors.
+/// - `errors` is an array of the messages of the errors the flow data
+///   recorded, in the order they were recorded, present only when there are
+///   any. The specification gives it this shape and the client script reads it
+///   as one.
 ///
 /// # Determinism
 ///
@@ -329,10 +331,10 @@ impl JsonBuilderElement {
             }
         }
 
-        // Flow errors, grouped by the element they relate to.
+        // Flow errors, as the list of their messages.
         let errors = Self::collect_errors(data);
         if !errors.is_empty() {
-            root.insert(ERRORS_KEY.to_owned(), Value::Object(errors));
+            root.insert(ERRORS_KEY.to_owned(), Value::Array(errors));
         }
 
         // `serde_json::to_string_pretty` preserves the insertion order because
@@ -423,22 +425,13 @@ impl JsonBuilderElement {
         paths
     }
 
-    /// Group the flow data's errors by the element data key they relate to,
-    /// mapping each to its list of error messages.
-    fn collect_errors(data: &FlowData) -> Map<String, Value> {
-        let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for error in data.errors() {
-            grouped
-                .entry(error.element_data_key.clone())
-                .or_default()
-                .push(error.source.to_string());
-        }
-        let mut map = Map::new();
-        for (key, messages) in grouped {
-            let array = messages.into_iter().map(Value::String).collect();
-            map.insert(key, Value::Array(array));
-        }
-        map
+    /// The messages of the flow data's errors, in the order they were
+    /// recorded.
+    fn collect_errors(data: &FlowData) -> Vec<Value> {
+        data.errors()
+            .iter()
+            .map(|error| Value::String(error.source.to_string()))
+            .collect()
     }
 }
 
