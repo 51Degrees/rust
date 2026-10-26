@@ -76,7 +76,7 @@ use std::fmt::Write as _;
 use std::io::Write;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -94,7 +94,7 @@ use crate::constants::{
     SHARE_USAGE_DEFAULT_ELEMENT_DATA_KEY, SHARE_USAGE_DEFAULT_MAX_QUEUE_SIZE,
     SHARE_USAGE_DEFAULT_MIN_ENTRIES_PER_MESSAGE,
     SHARE_USAGE_DEFAULT_REPEAT_EVIDENCE_INTERVAL_MINUTES, SHARE_USAGE_DEFAULT_SHARE_PERCENTAGE,
-    SHARE_USAGE_DEFAULT_TAKE_TIMEOUT_MS, SHARE_USAGE_DEFAULT_URL, SHARE_USAGE_MAX_EVIDENCE_LENGTH,
+    SHARE_USAGE_DEFAULT_URL, SHARE_USAGE_MAX_EVIDENCE_LENGTH,
 };
 use crate::evidence_filter::{EvidenceKeyFilterShareUsage, EvidenceKeyFilterShareUsageTracker};
 use crate::sequence_element::{SequenceData, SequenceElement};
@@ -158,7 +158,6 @@ pub struct ShareUsageConfig {
     minimum_entries_per_message: usize,
     maximum_queue_size: usize,
     add_timeout: Duration,
-    take_timeout: Duration,
     repeat_evidence_interval: Duration,
     share_usage_url: String,
     blocked_http_headers: Vec<String>,
@@ -226,7 +225,6 @@ impl ShareUsageConfigBuilder {
                 minimum_entries_per_message: SHARE_USAGE_DEFAULT_MIN_ENTRIES_PER_MESSAGE,
                 maximum_queue_size: SHARE_USAGE_DEFAULT_MAX_QUEUE_SIZE,
                 add_timeout: Duration::from_millis(SHARE_USAGE_DEFAULT_ADD_TIMEOUT_MS),
-                take_timeout: Duration::from_millis(SHARE_USAGE_DEFAULT_TAKE_TIMEOUT_MS),
                 repeat_evidence_interval: Duration::from_secs(
                     SHARE_USAGE_DEFAULT_REPEAT_EVIDENCE_INTERVAL_MINUTES * 60,
                 ),
@@ -270,10 +268,14 @@ impl ShareUsageConfigBuilder {
         self
     }
 
-    /// Set the timeout used when taking from the queue. Returns `self` for
-    /// chaining.
-    pub fn take_timeout(mut self, take_timeout: Duration) -> Self {
-        self.config.take_timeout = take_timeout;
+    /// Accept the take timeout of the specification's configuration, so a
+    /// configuration written for the other languages carries over.
+    ///
+    /// It has no effect here. Each message holds the minimum entries per
+    /// message and is sent as soon as they are queued, so the background
+    /// thread waits for each record with no time limit and never needs one.
+    /// Returns `self` for chaining.
+    pub fn take_timeout(self, _take_timeout: Duration) -> Self {
         self
     }
 
@@ -867,39 +869,24 @@ struct Worker {
 }
 
 impl Worker {
-    /// The consumer loop. Accumulates a batch then sends it. On channel
-    /// disconnection it flushes whatever remains and exits.
+    /// The consumer loop. Sends a message each time it holds the minimum
+    /// entries, and waits for each record with no time limit, so an idle
+    /// element uses no processor time. Once the element is dropped and every
+    /// queued record has been received, it sends what remains, even below the
+    /// minimum, and exits.
     fn run(self) {
         let min_entries = self.config.minimum_entries_per_message;
-        let take_timeout = self.config.take_timeout;
         let mut batch: Vec<ShareUsageData> = Vec::with_capacity(min_entries);
 
-        loop {
-            match self.receiver.recv_timeout(take_timeout) {
-                Ok(item) => {
-                    batch.push(item);
-                    // Once a full batch is gathered, send it.
-                    if batch.len() >= min_entries {
-                        self.send_batch(std::mem::take(&mut batch));
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    // The producer paused. Keep accumulating; do not send a
-                    // partial batch until shutdown, to keep batches efficient.
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    // The element is being dropped. Drain anything still
-                    // buffered in the channel, then send the final (possibly
-                    // partial) batch.
-                    while let Ok(item) = self.receiver.try_recv() {
-                        batch.push(item);
-                    }
-                    if !batch.is_empty() {
-                        self.send_batch(std::mem::take(&mut batch));
-                    }
-                    break;
-                }
+        // `recv` fails only when the channel is closed and empty.
+        while let Ok(item) = self.receiver.recv() {
+            batch.push(item);
+            if batch.len() >= min_entries {
+                self.send_batch(std::mem::take(&mut batch));
             }
+        }
+        if !batch.is_empty() {
+            self.send_batch(batch);
         }
     }
 
