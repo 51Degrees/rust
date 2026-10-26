@@ -30,6 +30,7 @@
 //! Build one with [`PipelineBuilder`]: add elements in execution order, then
 //! call [`PipelineBuilder::build`] to obtain an `Arc<Pipeline>`.
 
+use std::any::Any;
 use std::sync::Arc;
 
 use crate::constants;
@@ -49,6 +50,9 @@ pub struct Pipeline {
     evidence_key_filter: EvidenceKeyFilterAggregator,
     suppress_process_exceptions: bool,
     concurrent: bool,
+    /// Objects the pipeline keeps alive for as long as it lives, such as the
+    /// data update service that refreshes an engine's data file.
+    resources: Vec<Arc<dyn Any + Send + Sync>>,
 }
 
 impl Pipeline {
@@ -83,6 +87,15 @@ impl Pipeline {
     /// True if any element in this pipeline runs multiple threads internally.
     pub fn is_concurrent(&self) -> bool {
         self.concurrent
+    }
+
+    /// The first resource of type `T` attached with
+    /// [`PipelineBuilder::add_resource`], such as the data update service that
+    /// keeps an on-premise engine's data file current.
+    pub fn resource<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
+        self.resources
+            .iter()
+            .find_map(|resource| Arc::clone(resource).downcast::<T>().ok())
     }
 
     /// Create a new, unprocessed flow data bound to this pipeline, with no
@@ -200,6 +213,7 @@ fn clone_error(error: &Error) -> Error {
 pub struct PipelineBuilder {
     elements: Vec<Arc<dyn FlowElement>>,
     suppress_process_exceptions: bool,
+    resources: Vec<Arc<dyn Any + Send + Sync>>,
 }
 
 impl PipelineBuilder {
@@ -209,6 +223,7 @@ impl PipelineBuilder {
         PipelineBuilder {
             elements: Vec::new(),
             suppress_process_exceptions: constants::DEFAULT_SUPPRESS_PROCESS_EXCEPTIONS,
+            resources: Vec::new(),
         }
     }
 
@@ -216,6 +231,15 @@ impl PipelineBuilder {
     /// Returns `self` for chaining.
     pub fn add_element(mut self, element: Arc<dyn FlowElement>) -> Self {
         self.elements.push(element);
+        self
+    }
+
+    /// Attach a resource the pipeline keeps alive for as long as it lives, such
+    /// as the data update service that refreshes an engine's data file. The
+    /// pipeline drops it with its elements, and [`Pipeline::resource`] finds it
+    /// again by type. Returns `self` for chaining.
+    pub fn add_resource(mut self, resource: Arc<dyn Any + Send + Sync>) -> Self {
+        self.resources.push(resource);
         self
     }
 
@@ -255,6 +279,7 @@ impl PipelineBuilder {
             evidence_key_filter: aggregator,
             suppress_process_exceptions: self.suppress_process_exceptions,
             concurrent,
+            resources: self.resources,
         }))
     }
 }
@@ -276,5 +301,9 @@ impl EvidenceKeyFilter for ElementEvidenceFilter {
 
     fn order(&self, key: &str) -> Option<i32> {
         self.element.evidence_key_filter().order(key)
+    }
+
+    fn named_keys(&self) -> Option<Vec<String>> {
+        self.element.evidence_key_filter().named_keys()
     }
 }

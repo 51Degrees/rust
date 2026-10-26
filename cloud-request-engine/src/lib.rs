@@ -48,7 +48,7 @@
 //! 2. POSTs the result as url-encoded form data (with the credential, and the
 //!    asked-for property list when there is one) to the `json` endpoint.
 //! 3. Stores the raw JSON response body in its [`CloudRequestData`] under the
-//!    `cloud` data key.
+//!    `cloud-response` data key.
 //!
 //! ## Credentials and the properties asked for
 //!
@@ -145,11 +145,11 @@
 //!
 //! ## Element data shape
 //!
-//! [`CloudRequestData`] (data key `cloud`) carries:
+//! [`CloudRequestData`] (data key `cloud-response`) carries:
 //!
 //! | Field            | Type         | Description                            |
 //! |------------------|--------------|----------------------------------------|
-//! | `cloud`          | string       | The raw JSON response body.            |
+//! | `cloud-response` | string       | The raw JSON response body.            |
 //! | `json-response`  | string       | The same raw JSON, under an alias field name. |
 //! | `process-started`| bool         | True once the engine began processing. |
 //! | `warnings`       | string list  | Advisory messages, being the service's own warnings and, once per engine, any asked-for property that did not come back. |

@@ -143,38 +143,66 @@ bool fiftyoneDegreesOverridesAdd(
 	size_t length;
 	String *copy;
 	OverrideValue *override;
-	if (requiredPropertyIndex >= 0 && values->count < values->capacity) {
-
-		// Set the override either as a new item, or override an existing
-		// one if there is already one with the same required property
-		// index.
-		while (currentOverrideIndex < values->count &&
-			(int)values->items[currentOverrideIndex].requiredPropertyIndex !=
-			requiredPropertyIndex) {
-			currentOverrideIndex++;
-		}
-		override = &values->items[currentOverrideIndex];
-
-		if (currentOverrideIndex == values->count) {
-			// Increment the override count and set the required property
-			// index.
-			values->count++;
-			override->requiredPropertyIndex = requiredPropertyIndex;
-		}
-
-		// Ensure there is sufficient memory for the string being copied.
-		length = strlen(value);
-		copy = (String*)fiftyoneDegreesDataMalloc(
-			&override->string,
-			sizeof(String) + length);
-
-		// Copy the string from the evidence pair to the override data 
-		// item.
-		memcpy(&copy->value, value, length + 1);
-		copy->size = (int16_t)(length + 1);
+	if (values == NULL || requiredPropertyIndex < 0 || value == NULL) {
+		return false;
 	}
 
-	return values->count < values->capacity;
+	// Find the item the array already holds for the property, if any.
+	while (currentOverrideIndex < values->count &&
+		(int)values->items[currentOverrideIndex].requiredPropertyIndex !=
+		requiredPropertyIndex) {
+		currentOverrideIndex++;
+	}
+
+	if (currentOverrideIndex == values->count) {
+
+		// The property is new to the array so a free item is needed, and
+		// this is the only case that can run out of room. Replacing the
+		// value of a property the array already holds reuses that
+		// property's item, which is why the room is checked here rather
+		// than before the search.
+		if (values->count >= values->capacity) {
+			values->status = FIFTYONE_DEGREES_STATUS_INSUFFICIENT_CAPACITY;
+			return false;
+		}
+
+		// Increment the override count and set the required property
+		// index.
+		values->count++;
+		values->items[currentOverrideIndex].requiredPropertyIndex =
+			requiredPropertyIndex;
+	}
+	override = &values->items[currentOverrideIndex];
+
+	// Ensure there is sufficient memory for the string being copied.
+	length = strlen(value);
+	copy = (String*)fiftyoneDegreesDataMalloc(
+		&override->string,
+		sizeof(String) + length);
+	if (copy == NULL) {
+
+		// The value could not be copied, and any value the item held has
+		// been freed by the allocation attempt, so take the item out of the
+		// array rather than leave one with no value to return. Swapping it
+		// with the last item in use keeps every allocation with exactly one
+		// item, so the array still frees them all.
+		values->count--;
+		if (currentOverrideIndex != values->count) {
+			OverrideValue swap = values->items[currentOverrideIndex];
+			values->items[currentOverrideIndex] =
+				values->items[values->count];
+			values->items[values->count] = swap;
+		}
+		values->status = FIFTYONE_DEGREES_STATUS_INSUFFICIENT_MEMORY;
+		return false;
+	}
+
+	// Copy the string from the evidence pair to the override data
+	// item.
+	memcpy(&copy->value, value, length + 1);
+	copy->size = (uint16_t)(length + 1);
+
+	return true;
 }
 
 
@@ -186,10 +214,15 @@ static bool addOverrideToResults(void *state, EvidenceKeyValuePair *pair) {
 		add->properties,
 		pair->item.key);
 
-	return fiftyoneDegreesOverridesAdd(
+	fiftyoneDegreesOverridesAdd(
 		add->values,
 		requiredPropertyIndex,
 		(const char*)pair->parsedValue);
+
+	// Keep reading the evidence whatever the add did. A value that could not
+	// be stored is recorded in the status of the values array, and an item
+	// further on can still replace a value the array already holds.
+	return true;
 }
 
 static uint32_t countOverridableProperties(
@@ -229,6 +262,7 @@ fiftyoneDegreesOverrideValueArray* fiftyoneDegreesOverrideValuesCreate(
 	fiftyoneDegreesOverrideValueArray* overrides;
 	FIFTYONE_DEGREES_ARRAY_CREATE(OverrideValue, overrides, capacity);
 	if (overrides != NULL) {
+		overrides->status = FIFTYONE_DEGREES_STATUS_SUCCESS;
 		for (i = 0; i < capacity; i++) {
 			item = &overrides->items[i];
 			item->requiredPropertyIndex = 0;
@@ -409,6 +443,7 @@ void fiftyoneDegreesOverrideValuesReset(
 			}
 		}
 		overrides->count = 0;
+		overrides->status = FIFTYONE_DEGREES_STATUS_SUCCESS;
 	}
 }
 

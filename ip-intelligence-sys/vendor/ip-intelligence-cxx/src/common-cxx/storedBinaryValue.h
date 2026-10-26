@@ -59,7 +59,7 @@
  * 			Byte[] – IP – [ 1, 2, 3, 4 ]
  * @example
  * WKB (value of  POINT(2.0 4.0)):
- * 			Short – length - 21
+ * 			Unsigned short – length - 21
  * 			Byte[] – value – [
  * 				0 (endianness),
  * 				0, 0, 0, 1 (2D point),
@@ -69,7 +69,7 @@
  */
 #pragma pack(push, 1)
 typedef struct fiftyone_degrees_var_length_byte_array_t {
- int16_t size; /**< Size of the byte array in memory (starting from 'firstByte') */
+ uint16_t size; /**< Size of the byte array in memory (starting from 'firstByte') */
  unsigned char firstByte; /**< The first byte of the array */
 } fiftyoneDegreesVarLengthByteArray;
 #pragma pack(pop)

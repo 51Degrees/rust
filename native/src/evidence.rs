@@ -38,18 +38,18 @@
 //! call without a fresh allocation per pair when the pool is already large
 //! enough.
 //!
-//! Only Device Detection uses the native evidence array here. IP Intelligence
+//! The native evidence array here is Device Detection's. IP Intelligence
 //! compiles its own copy of `common-cxx` with wider file offsets and must not
-//! link the `fiftyone-common-sys` evidence functions (doing so would bind the
-//! two incompatible `common-cxx` builds together). The IP Intelligence wrapper
-//! therefore extracts the client IP string from the same pipeline evidence and
-//! feeds the native string entry point instead, using
-//! [`client_ip_from_evidence`].
+//! use the `fiftyone-common-sys` evidence functions (doing so would bind the
+//! two incompatible `common-cxx` builds together), so the IP Intelligence
+//! wrapper makes its evidence array with its own copy's functions. It reads
+//! each client IP value with [`parse_client_ip`].
 
 #[cfg(feature = "dd")]
 use std::cell::RefCell;
 #[cfg(feature = "dd")]
 use std::ffi::CString;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 #[cfg(feature = "dd")]
 use std::os::raw::c_char;
 
@@ -286,13 +286,16 @@ pub(crate) unsafe fn with_native_evidence<R>(
     })
 }
 
-/// Extract the client IP address string from pipeline evidence for the IP
-/// Intelligence string entry point.
+/// Pick a client IP address string from pipeline evidence, trying
+/// [`constants::EVIDENCE_CLIENT_IP_KEY`] (`server.client-ip`), then
+/// `query.client-ip`, then the first value under any `server.` prefix. Returns
+/// [`None`] when none is present.
 ///
-/// The canonical key is [`constants::EVIDENCE_CLIENT_IP_KEY`]
-/// (`server.client-ip`). When it is absent the first value under any `server.`
-/// prefix is used, then any `query.client-ip`. Returns [`None`] when no
-/// candidate is present.
+/// IP Intelligence does not use this, because its data file defines the keys
+/// and the order to try them in. The IP Intelligence `Results::process_evidence`
+/// reads those keys, and [`parse_client_ip`] reads one value.
+#[deprecated(note = "IP Intelligence reads the keys its data file defines. Use \
+            `ipi::Results::process_evidence`, or `parse_client_ip` for one value.")]
 pub fn client_ip_from_evidence(evidence: &Evidence) -> Option<String> {
     if let Some(ip) = evidence.get(constants::EVIDENCE_CLIENT_IP_KEY) {
         return Some(ip.to_owned());
@@ -310,6 +313,48 @@ pub fn client_ip_from_evidence(evidence: &Evidence) -> Option<String> {
                 .unwrap_or(false)
         })
         .map(|(_, v)| v.to_owned())
+}
+
+/// Read a client IP address from one evidence value, accepting the same forms
+/// as the .NET IP Intelligence engine.
+///
+/// The value may be a bare IPv4 or IPv6 address, an IPv4 address with a port,
+/// or a bracketed IPv6 address with or without a port. An IPv6 zone index
+/// (`fe80::1%1`) is dropped, and a comma separated list, as a proxy forwards
+/// it, gives its first entry. Anything else gives [`None`], including the
+/// shortened, octal and bare number IPv4 forms some parsers accept, because
+/// those would let numeric junk count as an address.
+pub fn parse_client_ip(value: &str) -> Option<IpAddr> {
+    let candidate = value.split(',').next().unwrap_or_default().trim();
+    if let Some(bracketed) = candidate.strip_prefix('[') {
+        // "[2001:db8::1]" or "[2001:db8::1]:443".
+        let (address, rest) = bracketed.split_once(']')?;
+        if !rest.is_empty() && !rest.strip_prefix(':').is_some_and(is_port) {
+            return None;
+        }
+        return parse_ipv6_without_zone(address);
+    }
+    if let Ok(address) = candidate.parse::<IpAddr>() {
+        return Some(address);
+    }
+    // "192.0.2.1:443". Without brackets an IPv6 address keeps all its colons,
+    // because a port cannot be told apart from its last group.
+    if let Ok(SocketAddr::V4(socket)) = candidate.parse::<SocketAddr>() {
+        return Some(IpAddr::V4(*socket.ip()));
+    }
+    // "fe80::1%1".
+    parse_ipv6_without_zone(candidate)
+}
+
+/// Parse an IPv6 address, dropping any zone index after a `%`.
+fn parse_ipv6_without_zone(text: &str) -> Option<IpAddr> {
+    let address = text.split_once('%').map_or(text, |(address, _)| address);
+    address.parse::<Ipv6Addr>().ok().map(IpAddr::V6)
+}
+
+/// True when `text` is a port number, being digits only and at most 65535.
+fn is_port(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) && text.parse::<u16>().is_ok()
 }
 
 #[cfg(test)]
@@ -374,6 +419,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn client_ip_prefers_canonical_key() {
         let evidence = Evidence::builder()
             .add("server.client-ip", "1.2.3.4")
@@ -386,6 +432,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn client_ip_falls_back_to_query() {
         let evidence = Evidence::builder()
             .add("query.client-ip", "5.6.7.8")
@@ -397,8 +444,51 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn client_ip_absent_is_none() {
         let evidence = Evidence::builder().add("header.user-agent", "x").build();
         assert_eq!(client_ip_from_evidence(&evidence), None);
+    }
+
+    fn parsed(value: &str) -> Option<String> {
+        parse_client_ip(value).map(|address| address.to_string())
+    }
+
+    #[test]
+    fn a_client_ip_is_read_in_the_forms_proxies_send() {
+        assert_eq!(parsed("192.0.2.1").as_deref(), Some("192.0.2.1"));
+        assert_eq!(parsed(" 192.0.2.1 ").as_deref(), Some("192.0.2.1"));
+        assert_eq!(parsed("192.0.2.1:443").as_deref(), Some("192.0.2.1"));
+        assert_eq!(parsed("2001:DB8:0::1").as_deref(), Some("2001:db8::1"));
+        assert_eq!(parsed("[2001:db8::1]").as_deref(), Some("2001:db8::1"));
+        assert_eq!(parsed("[2001:db8::1]:443").as_deref(), Some("2001:db8::1"));
+        assert_eq!(parsed("fe80::1%1").as_deref(), Some("fe80::1"));
+        assert_eq!(parsed("[fe80::1%eth0]:443").as_deref(), Some("fe80::1"));
+        assert_eq!(
+            parsed("192.0.2.1, 198.51.100.7").as_deref(),
+            Some("192.0.2.1")
+        );
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_whole_address_is_not_read() {
+        for value in [
+            "",
+            "  ",
+            "unknown",
+            ", 192.0.2.1",
+            "192.0.2",
+            "3221225985",
+            "012.0.2.1",
+            "192.0.2.1/24",
+            "192.0.2.1 x",
+            "192.0.2.1:65536",
+            "192.0.2.1:+443",
+            "[192.0.2.1]",
+            "[2001:db8::1]443",
+            "[2001:db8::1]:",
+        ] {
+            assert_eq!(parsed(value), None, "{value:?} should not be read");
+        }
     }
 }

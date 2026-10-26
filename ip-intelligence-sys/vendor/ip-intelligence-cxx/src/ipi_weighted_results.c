@@ -123,6 +123,10 @@ static void PropValuesInit(PropValues * const values, const uint32_t count) {
     values->items = (PropValuesChunk *)values->data.ptr;
     for (uint32_t i = 0, n = values->count; i < n; i++) {
         DataReset(&values->items[i].data);
+        // A chunk might not be populated, so the count and converter must
+        // not hold uninitialized values when the items are moved.
+        values->items[i].count = 0;
+        values->items[i].converter = NULL;
     }
 }
 
@@ -513,6 +517,10 @@ static void PropValuesChunkPopulate(
     for (uint32_t i = 0; i < context->valuesCount; i++) {
         WeightedValueHeader * const header = (WeightedValueHeader *)(
             converter->itemSize * i + chunkDataPtr);
+        // The save loop below stops at the first exception, so the type must
+        // be set here or the items it never reaches are released as whatever
+        // type the uninitialized memory happens to hold.
+        header->valueType = converter->valueType;
         converter->itemInitFunc(header, converterState);
     }
     for (uint32_t i = 0; (i < context->valuesCount) && EXCEPTION_OKAY; i++) {

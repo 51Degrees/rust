@@ -25,6 +25,10 @@ fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines", d
 # one to the request's value. Its default features carry no reqwest, so the
 # crate still compiles for wasm32-wasip1.
 fiftyone-pipeline-engines-fiftyone = { version = "4.5.2", path = "../pipeline-engines-fiftyone" }
+# The cloud request engine's data key, which the JSON leaves out because its
+# data is the raw cloud response. default-features = false keeps reqwest out, so
+# the crate still compiles for wasm32-wasip1.
+fiftyone-cloud-request-engine = { version = "4.5.2", path = "../cloud-request-engine", default-features = false }
 # serde_json with preserve_order keeps the serialized key order deterministic so
 # the JSON (and any ETag computed from it downstream) is stable across runs. The
 # indexmap-backed Map this enables preserves insertion order rather than sorting.

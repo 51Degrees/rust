@@ -48,8 +48,8 @@ use crate::meta::{cloud_json, refresh_product_metadata};
 /// # Place it after a cloud request engine
 ///
 /// This engine consumes no evidence of its own. Instead it reads the raw JSON a
-/// [`CloudRequestEngine`] stored under the `cloud` data key, slices out the
-/// `device` member, and deserializes it into the shared
+/// [`CloudRequestEngine`] stored under the `cloud-response` data key, slices
+/// out the `device` member, and deserializes it into the shared
 /// [`DeviceDataBase`](fiftyone_device_detection_shared::DeviceDataBase). It must
 /// therefore sit *after* a `CloudRequestEngine` in the pipeline. The engine is
 /// constructed from an [`Arc<CloudRequestEngine>`], the same instance added to

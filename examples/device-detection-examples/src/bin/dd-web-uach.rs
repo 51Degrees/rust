@@ -72,7 +72,10 @@ pub struct Options {
 /// ([`UachJsConversionElement`]) is wired explicitly ahead of the Hash engine.
 /// The decoder turns a `getHighEntropyValues` blob into the `sec-ch-ua*` headers
 /// the engine consumes, which is the heart of this example.
-pub fn build_app(data_file: &std::path::Path) -> anyhow::Result<Router> {
+///
+/// `share_usage` is true when the binary serves the page. The tests pass false,
+/// so a test run sends nothing to 51Degrees.
+pub fn build_app(data_file: &std::path::Path, share_usage: bool) -> anyhow::Result<Router> {
     let engine = DeviceDetectionOnPremiseEngineBuilder::new(data_file.to_path_buf())
         .performance_profile(PerformanceProfile::HighPerformance)
         .build()
@@ -82,11 +85,11 @@ pub fn build_app(data_file: &std::path::Path) -> anyhow::Result<Router> {
     // high-entropy decoder, then the Hash engine. The decoder is the element
     // this example exists to show: it sits before the engine so the decoded
     // client hints are present when detection runs.
-    let elements: Vec<Arc<dyn FlowElement>> = vec![
-        Arc::new(ShareUsageElement::with_defaults()),
-        Arc::new(UachJsConversionElement::new()),
-        engine,
-    ];
+    let mut elements: Vec<Arc<dyn FlowElement>> =
+        vec![Arc::new(UachJsConversionElement::new()), engine];
+    if share_usage {
+        elements.insert(0, Arc::new(ShareUsageElement::with_defaults()));
+    }
     let web = WebPipeline::build(elements, WebIntegrationOptions::default())
         .context("assembling the web pipeline")?;
     let state = FiftyOneState::from_web_pipeline(&web);
@@ -110,7 +113,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     // constructed, and tokio forbids dropping a runtime from inside another
     // runtime's async context, so doing this work outside block_on avoids that
     // panic.
-    let app = build_app(&options.data_file)?;
+    let app = build_app(&options.data_file, true)?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -219,15 +222,15 @@ mod tests {
 
     fn test_app() -> Option<Router> {
         let data_file = examples_shared::dd_data_path()?;
-        Some(build_app(&data_file).expect("UACH app builds"))
+        Some(build_app(&data_file, false).expect("UACH app builds"))
     }
 
     /// Dispatch a request carrying a full UACH header set, so the example
     /// exercises the client-hints evidence path on the server side too.
     ///
-    /// Driven from a `#[test]` (not `#[tokio::test]`): the share-usage element
-    /// holds a blocking reqwest client whose drop must stay off the tokio worker
-    /// threads, so the app is owned and dropped on the plain test thread.
+    /// Driven from a `#[test]` (not `#[tokio::test]`): with usage sharing on, the
+    /// app holds a blocking reqwest client whose drop must stay off the tokio
+    /// worker threads, so the app is owned and dropped on the plain test thread.
     async fn dispatch(app: &Router, uri: &str) -> Captured {
         let mut builder = Request::builder()
             .method("GET")

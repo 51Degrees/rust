@@ -201,16 +201,12 @@ typedef struct detection_component_state_t {
 	HeaderID headerUniqueId; /* Unique id in the data set for the header */
 	int headerIndex; /* Current header index. See macro HTTP_HEADER */
 	Exception* exception; /* Pointer to the exception structure */
+	EvidencePrefix specialPrefix; /* Prefix given to the headers that special
+								  evidence such as GHEV or SUA is turned into.
+								  See setSpecialHeaderPrefix */
+	uint32_t graphs; /* Bit i set means the graph for component i is walked.
+					 See COMPONENT_MASK_ENABLED */
 } detectionComponentState;
-
-/**
- * State structure for checking that there is a single User-Agent string in the
- * evidence.
- */
-typedef struct detection_ua_state_t {
-	EvidenceKeyValuePair* pair;
-	int count;
-} detectionUaState;
 
 /**
  * Used to find an existing evidence pair for the header.
@@ -219,6 +215,14 @@ typedef struct set_special_headers_find_state_t {
 	KeyValuePair* header;
 	EvidenceKeyValuePair* pair;
 } setSpecialHeadersFindState;
+
+/**
+ * Used to find whether any evidence pair is a header from the data set.
+ */
+typedef struct find_data_set_header_state_t {
+	Headers* headers;
+	bool found;
+} findDataSetHeaderState;
 
 /**
  * PRESET HASH CONFIGURATIONS
@@ -750,13 +754,15 @@ static void evaluateListNode(detectionState *state) {
 						state->hash);
 				} while (nodeHash == NULL && advanceHash(state));
 			}
-			else {
+			else if (GRAPH_NODE_IS_HASH_TABLE(node)) {
 				do {
 					nodeHash = GraphGetMatchingHashFromListNodeTable(
 						node,
 						state->hash);
 				} while (nodeHash == NULL && advanceHash(state));
 			}
+			// Any other modulo cannot index the records of the node safely, so
+			// no hash is looked for and the unmatched branch is taken.
 		}
 	}
 	
@@ -1106,95 +1112,6 @@ static bool processRoots(
 	return matched;
 }
 
-static void setResultFromUserAgentComponentIndex(
-	detectionState* state,
-	uint32_t componentIndex,
-	Item* rootNodesItem,
-	uint32_t httpHeaderUniqueId) {
-	const ComponentKeyValuePair* graphKey;
-	HashRootNodes* rootNodes;
-	uint32_t headerIndex;
-	Exception* exception = state->exception;
-	Component* component = COMPONENT(state->dataSet, componentIndex);
-	bool complete = false;
-	for (headerIndex = 0;
-		EXCEPTION_OKAY &&
-		component != NULL &&
-		headerIndex < component->keyValuesCount &&
-		complete == false;
-		headerIndex++) {
-		graphKey = &(&component->firstKeyValuePair)[headerIndex];
-		if (graphKey->key == httpHeaderUniqueId) {
-			rootNodes = (HashRootNodes*)getRootNodes(
-				state->dataSet,
-				graphKey->value,
-				rootNodesItem,
-				state->exception);
-			if (rootNodes != NULL && EXCEPTION_OKAY) {
-				if (processRoots(
-					state, 
-					state->dataSet,
-					componentIndex,
-					component,
-					rootNodes) == true) {
-					addProfile(
-						state->result,
-						(byte)componentIndex,
-						state->profileOffset,
-						false);
-					complete = true;
-				}
-				COLLECTION_RELEASE(state->dataSet->rootNodes, rootNodesItem);
-			}
-		}
-	}
-}
-
-static void setResultFromUserAgent(
-	ResultHash* result,
-	DataSetHash* dataSet,
-	Exception* exception) {
-	detectionState state;
-	uint32_t componentIndex;
-	Item rootNodesItem;
-	uint32_t headerId = dataSet->b.b.uniqueHeaders->items[
-		result->b.uniqueHttpHeaderIndex].headerId;
-	DataReset(&rootNodesItem.data);
-	detectionStateInit(&state, result, dataSet, exception);
-	for (componentIndex = 0;
-		componentIndex < dataSet->componentsList.count;
-		componentIndex++) {
-		if (dataSet->componentsAvailable[componentIndex] == true) {
-			setResultFromUserAgentComponentIndex(
-				&state,
-				componentIndex,
-				&rootNodesItem,
-				headerId);
-		}
-	}
-	state.result->iterations = state.iterations;
-	state.result->drift = state.drift;
-	state.result->difference = state.difference;
-	state.result->matchedNodes = state.matchedNodes;
-	if (state.result->b.matchedUserAgent != NULL) {
-		state.result->b.matchedUserAgent[
-			MIN(state.result->b.targetUserAgentLength,
-				state.result->b.matchedUserAgentLength)] = '\0';
-	}
-	if (state.matchedNodes == 0) {
-		state.result->method = FIFTYONE_DEGREES_HASH_MATCH_METHOD_NONE;
-	}
-	else if (state.performanceMatches > 0 && state.predictiveMatches > 0) {
-		state.result->method = FIFTYONE_DEGREES_HASH_MATCH_METHOD_COMBINED;
-	}
-	else if (state.performanceMatches > 0) {
-		state.result->method = FIFTYONE_DEGREES_HASH_MATCH_METHOD_PERFORMANCE;
-	}
-	else if (state.predictiveMatches > 0) {
-		state.result->method = FIFTYONE_DEGREES_HASH_MATCH_METHOD_PREDICTIVE;
-	}
-}
-
 /**
  * DATA INITIALISE AND RESET METHODS
  */
@@ -1382,6 +1299,10 @@ static StatusCode initComponentsAvailable(
 			return COLLECTION_FAILURE;
 		}
 		dataSet->componentsAvailable[property->componentIndex] = true;
+		// Record the component so required property indexes can be turned
+		// into a component mask without reading the property again.
+		dataSet->b.b.available->items[i].componentIndex =
+			property->componentIndex;
 		COLLECTION_RELEASE(dataSet->properties, &item);
 	}
 
@@ -1684,6 +1605,16 @@ static void initGetHighEntropyValues(
 static StatusCode readHeaderFromMemory(
 	MemoryReader *reader,
 	const DataSetHashHeader *header) {
+
+	// MemoryAdvance below only reports an overrun once the copy has already
+	// read past the end, so the space is checked here instead. The pointers
+	// are compared before subtracting because a negative size puts lastByte
+	// behind current.
+	if (reader->current > reader->lastByte ||
+		(size_t)(reader->lastByte - reader->current) <
+		sizeof(DataSetHashHeader)) {
+		return CORRUPT_DATA;
+	}
 
 	// Copy the bytes that make up the dataset header.
 	if (memcpy(
@@ -2011,7 +1942,6 @@ static StatusCode initDataSetFromFile(
 		fileName,
 		sizeof(DataSetHashHeader));
 	if (status != SUCCESS) {
-		freeDataSet(dataSet);
 		return status;
 	}
 
@@ -2031,7 +1961,6 @@ static StatusCode initDataSetFromFile(
 
 	// Return the status code if something has gone wrong.
 	if (status != SUCCESS || EXCEPTION_FAILED) {
-		freeDataSet(dataSet);
 		// Delete the temp file if one has been created.
 		if (config->b.b.useTempFile == true) {
 			FileDelete(dataSet->b.b.fileName);
@@ -2043,7 +1972,6 @@ static StatusCode initDataSetFromFile(
 	// initialisation was successful.
 	status = initPropertiesAndHeaders(dataSet, properties, exception);
 	if (status != SUCCESS || EXCEPTION_FAILED) {
-		freeDataSet(dataSet);
 		// Delete the temp file if one has been created.
 		if (config->b.b.useTempFile == true) {
 			FileDelete(dataSet->b.b.fileName);
@@ -2055,7 +1983,6 @@ static StatusCode initDataSetFromFile(
 	// properties which are to be returned (i.e. available properties).
 	status = initComponentsAvailable(dataSet, exception);
 	if (status != SUCCESS || EXCEPTION_FAILED) {
-		freeDataSet(dataSet);
 		if (config->b.b.useTempFile == true) {
 			FileDelete(dataSet->b.b.fileName);
 		}
@@ -2064,7 +1991,6 @@ static StatusCode initDataSetFromFile(
 
 	// Check there are properties available for retrieval.
 	if (dataSet->b.b.available->count == 0) {
-		freeDataSet(dataSet);
 		// Delete the temp file if one has been created.
 		if (config->b.b.useTempFile == true) {
 			FileDelete(dataSet->b.b.fileName);
@@ -2075,7 +2001,6 @@ static StatusCode initDataSetFromFile(
 	// Initialise the index for properties and profiles to values.
 	initIndicesPropertyProfile(dataSet, exception);
 	if (status != SUCCESS || EXCEPTION_FAILED) {
-		freeDataSet(dataSet);
 		if (config->b.b.useTempFile == true) {
 			FileDelete(dataSet->b.b.fileName);
 		}
@@ -2084,7 +2009,6 @@ static StatusCode initDataSetFromFile(
 
 	// Initialise the headers for each component.
 	if (!initComponentHeaders(dataSet, exception) || EXCEPTION_FAILED) {
-		freeDataSet(dataSet);
 		if (config->b.b.useTempFile == true) {
 			FileDelete(dataSet->b.b.fileName);
 		}
@@ -2120,6 +2044,10 @@ fiftyoneDegreesStatusCode fiftyoneDegreesHashInitManagerFromFile(
 		fileName,
 		exception);
 	if (status != SUCCESS || EXCEPTION_FAILED) {
+		// Nothing below has taken ownership of the data set, so it is freed
+		// here on every failure. Without this a failed initialisation leaks
+		// it along with the file pool's open handles.
+		freeDataSet(dataSet);
 		return status;
 	}
 	ResourceManagerInit(manager, dataSet, &dataSet->b.b.handle, freeDataSet);
@@ -2230,7 +2158,6 @@ static StatusCode initDataSetFromMemory(
 	// Initialise the index for properties and profiles to values.
 	initIndicesPropertyProfile(dataSet, exception);
 	if (status != SUCCESS || EXCEPTION_FAILED) {
-		freeDataSet(dataSet);
 		if (config->b.b.useTempFile == true) {
 			FileDelete(dataSet->b.b.fileName);
 		}
@@ -2239,7 +2166,6 @@ static StatusCode initDataSetFromMemory(
 
 	// Initialise the headers for each component.
 	if (!initComponentHeaders(dataSet, exception) || EXCEPTION_FAILED) {
-		freeDataSet(dataSet);
 		if (config->b.b.useTempFile == true) {
 			FileDelete(dataSet->b.b.fileName);
 		}
@@ -2277,6 +2203,10 @@ fiftyoneDegreesStatusCode fiftyoneDegreesHashInitManagerFromMemory(
 		size,
 		exception);
 	if (status != SUCCESS || EXCEPTION_FAILED) {
+		// A plain free is used rather than the engine's free method so
+		// that the memory provided by the caller is left for the caller
+		// to release, keeping the behaviour callers have always had on
+		// this path.
 		Free(dataSet);
 		return status;
 	}
@@ -2581,14 +2511,23 @@ static bool setResultFromEvidenceForComponentCallback(
 			// produce and outcome that concludes the iterations.
 			s->lastResult = result;
 
-			// Perform the device detection and set the result.
-			complete = setResultForComponentHeader(
-				s->dataSet,
-				s->componentIndex,
-				pair->header,
-				result,
-				exception);
-			if (EXCEPTION_FAILED) return false;
+			if (COMPONENT_MASK_ENABLED(s->graphs, s->componentIndex)) {
+
+				// Perform the device detection and set the result.
+				complete = setResultForComponentHeader(
+					s->dataSet,
+					s->componentIndex,
+					pair->header,
+					result,
+					exception);
+				if (EXCEPTION_FAILED) return false;
+			}
+			else {
+
+				// The caller will not read this component, so leave the
+				// result with a null profile and do not walk the graph.
+				complete = true;
+			}
 
 		}
 		else {
@@ -2617,17 +2556,19 @@ static bool setSpecialHeadersFindCallback(
 	return true;
 }
 
-// Adds the header to the evidence. If the header already exists then the 
-// current value is replaced.
+// Adds the header to the evidence with the prefix in the state. If the header
+// already exists with that prefix then the current value is replaced. A pair
+// for the same header with any other prefix is left alone, because it belongs
+// to evidence that is not the evidence detection will use.
 static bool setSpecialHeadersCallback(void *state, KeyValuePair header) {
 	int uniqueHeaderIndex;
 	detectionComponentState* componentState = (detectionComponentState*)state;
 
-	// Get the existing pair for the header with any prefix.
+	// Get the existing pair for the header with the same prefix.
 	setSpecialHeadersFindState findState = { &header, NULL };
 	EvidenceIterate(
 		componentState->evidence,
-		INT_MAX,
+		componentState->specialPrefix,
 		&findState,
 		setSpecialHeadersFindCallback);
 
@@ -2635,7 +2576,7 @@ static bool setSpecialHeadersCallback(void *state, KeyValuePair header) {
 		// No pair was found so add a new string.
 		findState.pair = EvidenceAddPair(
 			componentState->evidence,
-			FIFTYONE_DEGREES_EVIDENCE_HTTP_HEADER_STRING,
+			componentState->specialPrefix,
 			header);
 	}
 
@@ -2662,6 +2603,48 @@ static bool setSpecialHeadersCallback(void *state, KeyValuePair header) {
 	return true;
 }
 
+// If the pair is a header from the data set then records that one was found
+// and stops, otherwise continues iterating.
+static bool findDataSetHeaderCallback(
+	void* state,
+	EvidenceKeyValuePair* pair) {
+	findDataSetHeaderState* s = (findDataSetHeaderState*)state;
+	int index = HeaderGetIndex(
+		s->headers,
+		pair->item.key,
+		pair->item.keyLength);
+	if (index >= 0 && s->headers->items[index].isDataSet) {
+		s->found = true;
+		return false;
+	}
+	return true;
+}
+
+// Sets the prefix given to the headers that special evidence is turned into,
+// so that they are read alongside the other headers detection will use.
+// resultsHashFromEvidence_handleComponentEvidence uses the first prefix in
+// prefixOrderOfPrecedence that yields evidence, and query comes before
+// header. So if the query evidence holds any header from the data set, such
+// as a User-Agent a server has passed on, the special headers are added as
+// query evidence. Otherwise they are added as header evidence, as they
+// always were, which keeps the case of a browser calling directly unchanged.
+// This applies whether the special evidence came from the query or from a
+// cookie. Cookie is not in prefixOrderOfPrecedence, so special headers
+// given the cookie prefix would never be used.
+static void setSpecialHeaderPrefix(detectionComponentState* state) {
+	findDataSetHeaderState findState = {
+		state->dataSet->b.b.uniqueHeaders,
+		false };
+	EvidenceIterate(
+		state->evidence,
+		FIFTYONE_DEGREES_EVIDENCE_QUERY,
+		&findState,
+		findDataSetHeaderCallback);
+	state->specialPrefix = findState.found ?
+		FIFTYONE_DEGREES_EVIDENCE_QUERY :
+		FIFTYONE_DEGREES_EVIDENCE_HTTP_HEADER_STRING;
+}
+
 // True if the header is GHEV, the transform results in at least one additional 
 // header, and there is no exception. Otherwise false.
 static bool setGetHighEntropyValuesHeader(
@@ -2671,6 +2654,7 @@ static bool setGetHighEntropyValuesHeader(
     if (IS_HASH_HEADER_MATCH(
         FIFTYONE_DEGREES_EVIDENCE_HIGH_ENTROPY_VALUES,
         pair)) {
+        setSpecialHeaderPrefix(state);
         TransformIterateResult result = TransformIterateGhevFromBase64(
             pair->parsedValue,
             state->results->b.bufferTransform,
@@ -2693,6 +2677,7 @@ static bool setStructuredUserAgentHeader(
                         FIFTYONE_DEGREES_EVIDENCE_STRUCTURED_USER_AGENT,
                         pair)) 
     {
+        setSpecialHeaderPrefix(state);
         TransformIterateResult result = TransformIterateSua
         (pair->parsedValue,
          state->results->b.bufferTransform,
@@ -2885,12 +2870,18 @@ static void resultsHashFromEvidence_extractOverrides(
 // true.
 static void resultsHashFromEvidence_SetMissingComponentDefaultProfiles(
 	DataSetHash* dataSet,
-	ResultsHash* results) {
+	ResultsHash* results,
+	uint32_t graphs) {
 
 	if (dataSet->config.b.allowUnmatched == true) {
 		for (byte i = 0;
 			i < dataSet->componentsList.count;
 			i++) {
+
+			// A component whose graph was not walked gets no default.
+			if (COMPONENT_MASK_ENABLED(graphs, i) == false) {
+				continue;
+			}
 
 			// Get the result for the component.
 			ResultHash* result = getResultFromResultsForComponentIndex(
@@ -2944,7 +2935,8 @@ static int resultsHashFromEvidence_findAndApplyDeviceIDs(
 		if (lookupState.profilesFoundFromDeviceId > 0) {
 			resultsHashFromEvidence_SetMissingComponentDefaultProfiles(
 				state->dataSet,
-				state->results);
+				state->results,
+				state->graphs);
 		}
 
 	} while (false); // once
@@ -3059,15 +3051,6 @@ static void resultsHashFromEvidence_handleAllEvidence(
 	}
 }
 
-static bool resultsHashFromEvidence_findUa(
-	void* state, 
-	EvidenceKeyValuePair *pair) {
-	detectionUaState *s = (detectionUaState*)state;
-	s->pair = pair;
-	s->count++;
-	return true;
-}
-
 static void resultsHashReset(ResultsHash* results) {
 	DataSetHash* dataSet = (DataSetHash*)results->b.b.dataSet;
 	for (uint32_t i = 0; i < results->count; i++) {
@@ -3076,43 +3059,18 @@ static void resultsHashReset(ResultsHash* results) {
 	results->count = 0;
 }
 
-void fiftyoneDegreesResultsHashFromEvidence(
+void fiftyoneDegreesResultsHashFromEvidenceForProperties(
 	fiftyoneDegreesResultsHash *results,
 	fiftyoneDegreesEvidenceKeyValuePairArray *evidence,
+	const int *requiredPropertyIndexes,
+	int requiredPropertyIndexesCount,
 	fiftyoneDegreesException *exception) {
 	DataSetHash* dataSet = (DataSetHash*)results->b.b.dataSet;
-	detectionUaState uaState = { NULL, 0 };
 
 	// Check for null evidence and set an exception if not present.
 	if (evidence == (EvidenceKeyValuePairArray*)NULL) {
 		EXCEPTION_SET(NULL_POINTER);
 		return;
-	}
-	
-	// If there is only one item of evidence and it's the User-Agent then use
-	// the simpler method that does not consider other headers, or the 
-	// possibility of profile id and device id overrides. Does not iterate the
-	// evidence as there is check to confirm only one entry.
-	EvidenceIterate(
-		evidence,
-		INT_MAX,
-		&uaState,
-		resultsHashFromEvidence_findUa);
-	if (uaState.count == 1) {
-		Header* ua = &dataSet->b.b.uniqueHeaders->items[
-			dataSet->b.uniqueUserAgentHeaderIndex];
-		if (uaState.pair->item.keyLength == ua->nameLength &&
-			StringCompareLength(
-				uaState.pair->item.key,
-				ua->name,
-				ua->nameLength) == 0) {
-			ResultsHashFromUserAgent(
-				results,
-				uaState.pair->parsedValue,
-				uaState.pair->parsedLength,
-				exception);
-			return;
-		}
 	}
 
 	// Initialise the state.
@@ -3124,7 +3082,12 @@ void fiftyoneDegreesResultsHashFromEvidence(
 		0,
 		0,
 		0,
-		exception };
+		exception,
+		FIFTYONE_DEGREES_EVIDENCE_HTTP_HEADER_STRING,
+		PropertiesGetComponentMask(
+			dataSet->b.b.available,
+			requiredPropertyIndexes,
+			requiredPropertyIndexesCount) };
 
 	// Reset the results data before iterating the evidence.
 	resultsHashReset(results);
@@ -3168,7 +3131,8 @@ void fiftyoneDegreesResultsHashFromEvidence(
 			if (EXCEPTION_FAILED) { break; };
 			resultsHashFromEvidence_SetMissingComponentDefaultProfiles(
 				dataSet,
-				results);
+				results,
+				state.graphs);
 		}
 
 		// Check to see if all the UACH evidence is present and if so then 
@@ -3187,29 +3151,89 @@ void fiftyoneDegreesResultsHashFromEvidence(
 	} while (false); // once
 }
 
+void fiftyoneDegreesResultsHashFromEvidence(
+	fiftyoneDegreesResultsHash *results,
+	fiftyoneDegreesEvidenceKeyValuePairArray *evidence,
+	fiftyoneDegreesException *exception) {
+	fiftyoneDegreesResultsHashFromEvidenceForProperties(
+		results,
+		evidence,
+		NULL,
+		-1,
+		exception);
+}
+
+void fiftyoneDegreesResultsHashFromUserAgentForProperties(
+	fiftyoneDegreesResultsHash *results,
+	const char* userAgent,
+	size_t userAgentLength,
+	const int *requiredPropertyIndexes,
+	int requiredPropertyIndexesCount,
+	fiftyoneDegreesException *exception) {
+	DataSetHash *dataSet = (DataSetHash*)results->b.b.dataSet;
+
+	// Wrap the User-Agent in a single-pair evidence array keyed on the data
+	// set's User-Agent header and delegate to the evidence-driven detection,
+	// which is now the single detection implementation. A User-Agent processed
+	// here therefore yields exactly the same results (one item per available
+	// component) as the same User-Agent passed through ResultsHashFromEvidence.
+	// The evidence pair aliases the caller's string (parsedValue == item.value
+	// for a header prefix, no copy), so the lifetime contract is unchanged: the
+	// caller must keep userAgent alive while the results are in use.
+	//
+	// The array and its single item are built on the stack to avoid a heap
+	// allocation on this hot, UA-only detection path. EvidenceAddPair fills the
+	// item and never grows the array (capacity 1, one pair), so no 'next' block
+	// is allocated and there is nothing to free.
+	Header* uaHeader = &dataSet->b.b.uniqueHeaders->items[
+		dataSet->b.uniqueUserAgentHeaderIndex];
+	// Zero-initialise: EvidenceAddPair sets prefix, item, parsedValue and
+	// header but not parsedLength, which would otherwise be stack garbage.
+	EvidenceKeyValuePair pairStorage = { FIFTYONE_DEGREES_EVIDENCE_IGNORE };
+	EvidenceKeyValuePairArray evidence;
+	evidence.count = 0;
+	evidence.capacity = 1;
+	evidence.items = &pairStorage;
+	evidence.next = NULL;
+	evidence.prev = NULL;
+
+	KeyValuePair uaPair = {
+		uaHeader->name,
+		uaHeader->nameLength,
+		userAgent,
+		userAgentLength };
+	EvidenceAddPair(
+		&evidence,
+		FIFTYONE_DEGREES_EVIDENCE_HTTP_HEADER_STRING,
+		uaPair);
+
+	fiftyoneDegreesResultsHashFromEvidenceForProperties(
+		results,
+		&evidence,
+		requiredPropertyIndexes,
+		requiredPropertyIndexesCount,
+		exception);
+
+	// Guard the stack-allocation contract: if a future change makes the
+	// engine add pairs beyond the capacity of 1, EvidenceAddPair would heap
+	// allocate evidence.next, which would leak here (and a naive EvidenceFree
+	// would walk prev back to this stack block). Debug builds only; assert
+	// compiles out under NDEBUG (release).
+	assert(evidence.next == NULL);
+}
+
 void fiftyoneDegreesResultsHashFromUserAgent(
 	fiftyoneDegreesResultsHash *results,
 	const char* userAgent,
 	size_t userAgentLength,
 	fiftyoneDegreesException *exception) {
-	DataSetHash *dataSet = (DataSetHash*)results->b.b.dataSet;
-
-	hashResultReset(dataSet, &results->items[0]);
-	results->items[0].b.targetUserAgent = (char*)userAgent;
-	results->items[0].b.targetUserAgentLength = (int)userAgentLength;
-	results->items[0].b.uniqueHttpHeaderIndex = 
-		dataSet->b.uniqueUserAgentHeaderIndex;
-	results->count = 1;
-
-	if (results != (ResultsHash*)NULL) {
-		setResultFromUserAgent(
-			&results->items[0],
-			dataSet,
-			exception);
-		if (EXCEPTION_FAILED) {
-			return;
-		}
-	}
+	fiftyoneDegreesResultsHashFromUserAgentForProperties(
+		results,
+		userAgent,
+		userAgentLength,
+		NULL,
+		-1,
+		exception);
 }
 
 // Adds the profile associated with the string version of the profile id 
@@ -3280,13 +3304,36 @@ void fiftyoneDegreesResultsHashFree(
 
 fiftyoneDegreesResultsHash* fiftyoneDegreesResultsHashCreate(
 	fiftyoneDegreesResourceManager *manager,
+	uint32_t userAgentCapacity,
 	uint32_t overridesCapacity) {
 	uint32_t i;
 	ResultsHash *results;
 
+	// Kept only so callers built against the pre-4.5 API (e.g. the HAProxy
+	// 51degrees addon) still compile; results are now sized by the number of
+	// components determined at initialisation, so this value is unused.
+	(void)userAgentCapacity;
+
 	// Increment the inUse counter for the active data set so that we can
 	// track any results that are created.
 	DataSetHash* dataSet = (DataSetHash*)DataSetGet(manager);
+
+	// A set of results can never need more override values than there are
+	// properties the data set allows evidence to override, because a value is
+	// held once for each of those properties and a second value for the same
+	// property replaces the first. Every value the evidence carries, every
+	// empty value marking the JavaScript property that measures one of those
+	// values, and the empty value for the high entropy values script, is a
+	// value for one of those properties. Sizing the list here means a caller
+	// no longer has to work the size out from the evidence, which is what
+	// left values, in particular those empty values, unapplied. A caller
+	// asking for more still gets what it asks for, and a caller asking for
+	// none still gets none, which is how overrides are turned off.
+	if (overridesCapacity > 0 &&
+		dataSet->b.b.overridable != NULL &&
+		dataSet->b.b.overridable->count > overridesCapacity) {
+		overridesCapacity = dataSet->b.b.overridable->count;
+	}
 
 	// Create a new instance of results with a result for each component in the
 	// dataset.
@@ -3814,7 +3861,17 @@ fiftyoneDegreesResultsNoValueReason fiftyoneDegreesResultsHashGetNoValueReason(
 		exception);
 
 	if (result == NULL) {
-		return FIFTYONE_DEGREES_RESULTS_NO_VALUE_REASON_NO_RESULT_FOR_PROPERTY;
+		// In the unified result shape (issue #362) value selection returns no
+		// result for the property's component when none of the result items
+		// carries a matched profile for it and unmatched results are disabled
+		// (allowUnmatched == false). A result item still exists for the
+		// component (count > 0 is guaranteed by the NO_RESULTS check above) - it
+		// simply has a null profile - so report NULL_PROFILE, whose message
+		// points the caller at lenient matching, rather than the generic
+		// NO_RESULT_FOR_PROPERTY. Before #362 removed the single User-Agent fast
+		// path, this same case produced one coalesced result and correctly
+		// reported NULL_PROFILE.
+		return FIFTYONE_DEGREES_RESULTS_NO_VALUE_REASON_NULL_PROFILE;
 	}
 	else if (result->profileOffsets[property->componentIndex] == NULL_PROFILE_OFFSET) {
 		return FIFTYONE_DEGREES_RESULTS_NO_VALUE_REASON_NULL_PROFILE;
@@ -4143,8 +4200,12 @@ size_t fiftyoneDegreesResultsHashGetValuesJson(
 		if (propertyIndex >= 0) {
             // Write the property and values only if we have them
             // Otherwise we could have ended up with {"key1":,"key2":} invalid json
+            // A non-NULL return is not enough: when the matched profile has
+            // no values for the property it returns the list's items with a
+            // count of zero, so the count must be checked too.
             if (ResultsHashGetValues(results, i, exception) != NULL &&
-                EXCEPTION_OKAY) {
+                EXCEPTION_OKAY &&
+                results->values.count > 0) {
                 // Get the property.
             	const CollectionKey propertyKey = {
 					{propertyIndex},

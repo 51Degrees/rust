@@ -35,7 +35,7 @@ uint32_t fiftyoneDegreesStringGetFinalSize(
 #	ifdef _MSC_VER
     UNREFERENCED_PARAMETER(exception);
 #	endif
-	return (uint32_t)(sizeof(int16_t) + (*(int16_t*)initial));
+	return (uint32_t)(sizeof(uint16_t) + (*(uint16_t*)initial));
 }
 #endif
 
@@ -46,7 +46,7 @@ void* fiftyoneDegreesStringRead(
 	const CollectionKey * const key,
 	fiftyoneDegreesData * const data,
 	fiftyoneDegreesException * const exception) {
-	int16_t length;
+	uint16_t length;
 	return CollectionReadFileVariable(
 		file,
 		data,

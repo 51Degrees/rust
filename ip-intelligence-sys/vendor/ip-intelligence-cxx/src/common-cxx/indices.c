@@ -212,7 +212,10 @@ static map* createPropertyIndexes(
 		index[i].availableProperty = i;
 		index[i].propertyIndex = (int16_t)available->items[i].propertyIndex;
 	}
-	qsort(index, available->count, sizeof(map*), comparePropertyIndexes);
+	// The element size is that of the map structure, not of a pointer to it.
+	// The two are the same on 64 bit builds but not on 32 bit builds, where
+	// using the pointer size would sort pieces of the elements.
+	qsort(index, available->count, sizeof(map), comparePropertyIndexes);
 	return index;
 }
 
@@ -235,6 +238,7 @@ fiftyoneDegreesIndicesPropertyProfileCreate(
 		sizeof(IndicesPropertyProfile));
 	if (index == NULL) {
 		EXCEPTION_SET(FIFTYONE_DEGREES_STATUS_INSUFFICIENT_MEMORY);
+		Free(propertyIndexes);
 		return NULL;
 	}
 	index->filled = 0;
@@ -255,17 +259,43 @@ fiftyoneDegreesIndicesPropertyProfileCreate(
 		return NULL;
 	}
 	index->availablePropertyCount = available->count;
-	index->size = (index->maxProfileId - index->minProfileId + 1) * 
+
+	// Work out the number of entries in 64 bits so that a range of profile
+	// ids too large for the index is refused, rather than wrapping to a
+	// smaller number and leaving the array too short for the profiles.
+	uint64_t size =
+		((uint64_t)index->maxProfileId - index->minProfileId + 1) *
 		available->count;
-	
+	if (index->maxProfileId < index->minProfileId ||
+		size > UINT32_MAX ||
+		size > SIZE_MAX / sizeof(uint32_t)) {
+		EXCEPTION_SET(FIFTYONE_DEGREES_STATUS_INSUFFICIENT_MEMORY);
+		Free(index);
+		Free(propertyIndexes);
+		return NULL;
+	}
+	index->size = (uint32_t)size;
+
 	// Allocate memory for the values index and set the fields.
-	index->valueIndexes =(uint32_t*)Malloc(sizeof(uint32_t) * index->size);
+	index->valueIndexes = (uint32_t*)Malloc(
+		sizeof(uint32_t) * (size_t)index->size);
 	if (index->valueIndexes == NULL) {
 		EXCEPTION_SET(FIFTYONE_DEGREES_STATUS_INSUFFICIENT_MEMORY);
 		Free(index);
 		Free(propertyIndexes);
 		return NULL;
 	}
+
+	// Mark every entry as having no value. iterateProfiles only writes the
+	// entries for properties a profile has values for. The others, being
+	// profile ids that are not in the data set and properties a profile has
+	// no values for, must never be read as a position in a profile's values.
+	// Setting every byte to 0xFF sets every entry to
+	// FIFTYONE_DEGREES_INDICES_NO_VALUE.
+	memset(
+		index->valueIndexes,
+		0xFF,
+		sizeof(uint32_t) * (size_t)index->size);
 
 	// For each of the profiles in the collection call add the property value
 	// indexes to the index array.
@@ -299,7 +329,14 @@ uint32_t fiftyoneDegreesIndicesPropertyProfileLookup(
 	fiftyoneDegreesIndicesPropertyProfile* index,
 	uint32_t profileId,
 	uint32_t availablePropertyIndex) {
-	uint32_t valueIndex = 
+	// A profile id or property outside the index has no entry, so there is
+	// nothing to read.
+	if (profileId < index->minProfileId ||
+		profileId > index->maxProfileId ||
+		availablePropertyIndex >= index->availablePropertyCount) {
+		return FIFTYONE_DEGREES_INDICES_NO_VALUE;
+	}
+	uint32_t valueIndex =
 		(getProfileIdIndex(index, profileId) * index->availablePropertyCount) + 
 		availablePropertyIndex;
 	assert(valueIndex < index->size);
