@@ -22,6 +22,7 @@
 
 //! The cloud request engine and its builder.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -35,6 +36,7 @@ use fiftyone_pipeline_core::{
 use fiftyone_pipeline_engines::{
     AspectEngine, AspectPropertyMetaData, EngineDeployment, MissingPropertyResult,
 };
+use serde::de::IgnoredAny;
 
 use crate::constants;
 use crate::data::CloudRequestData;
@@ -207,8 +209,10 @@ pub struct CloudRequestEngine {
 
     /// An optional response cache, keyed by the request's evidence. When present,
     /// an identical request is served from the cache instead of calling the cloud.
-    /// A short-lived host (for example a `wasm32-wasip1` edge instance) can supply
-    /// a cache backed by its own store, so responses survive across cold starts.
+    /// A response carrying a 51Did is never stored or served, see
+    /// [`CloudRequestEngineBuilder::cache`]. A short-lived host (for example a
+    /// `wasm32-wasip1` edge instance) can supply a cache backed by its own store,
+    /// so responses survive across cold starts.
     response_cache: Option<Arc<dyn PutCache<String, String>>>,
 
     /// The core property metadata: `cloud-response`, `json-response` and
@@ -456,6 +460,21 @@ fn response_carries(body: &serde_json::Value, asked: &str) -> bool {
     }
 }
 
+/// Whether a response body carries 51Did values, being a top-level member
+/// named [`constants::IDENTIFIER_MEMBER`] in any case.
+///
+/// Such a body answers the one request it was made for, so it is never stored
+/// in the response cache or served from it. A body that is not a JSON object
+/// cannot be checked, so it counts as carrying them.
+fn carries_identifier(json: &str) -> bool {
+    match serde_json::from_str::<HashMap<String, IgnoredAny>>(json) {
+        Ok(members) => members
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(constants::IDENTIFIER_MEMBER)),
+        Err(_) => true,
+    }
+}
+
 /// Validate that a resolved endpoint is a well-formed absolute http(s) URL.
 ///
 /// The base endpoint can come from the builder's `endpoint`/`*_endpoint` setters,
@@ -534,10 +553,12 @@ impl FlowElement for CloudRequestEngine {
         // serve a stored response without calling the cloud. The lookup runs
         // before the recovery gate, so a cache hit also avoids being blocked
         // during a recovery period. A short-lived host supplies its own cache so
-        // hits survive across cold starts.
+        // hits survive across cold starts. A stored body carrying 51Did values,
+        // which a store shared with other writers can hold, was made for another
+        // request, so it is not served and the cloud is asked instead.
         let cache_key = self.response_cache.as_ref().map(|_| cache_key(&form));
         if let (Some(cache), Some(key)) = (&self.response_cache, &cache_key) {
-            if let Some(body) = cache.get(key) {
+            if let Some(body) = cache.get(key).filter(|body| !carries_identifier(body)) {
                 // The body validated when it was stored, so re-validating it
                 // reproduces the same JSON and warnings a live response would,
                 // without a network call.
@@ -578,9 +599,12 @@ impl FlowElement for CloudRequestEngine {
         )?;
         self.add_missing_values_warning(&mut parsed);
 
-        // Store the successful response so the next identical request is a hit.
+        // Store the successful response so the next identical request is a hit,
+        // unless it carries 51Did values, which were created for this request.
         if let (Some(cache), Some(key)) = (&self.response_cache, cache_key) {
-            cache.put(key, parsed.json.clone());
+            if !carries_identifier(&parsed.json) {
+                cache.put(key, parsed.json.clone());
+            }
         }
 
         if let Some(cloud) = data.get_mut_cloud() {
@@ -860,6 +884,14 @@ impl CloudRequestEngineBuilder {
     /// property list with the accepted, prefix-stripped evidence, so a different
     /// credential, a different property list or different evidence never
     /// collides. The cached value is the raw JSON response body.
+    ///
+    /// A response carrying 51Did values is never stored, and one found in the
+    /// cache is never served. The cloud creates a 51Did afresh for each request
+    /// that asks for one, and two visitors can present the same evidence, so a
+    /// stored copy would hand one visitor the 51Did created for another. A
+    /// request that carries no `id.usage` evidence asks for no 51Did, so in a
+    /// pipeline that asks for one on some requests the cache still serves the
+    /// others, while each request that asks for one reaches the cloud.
     ///
     /// Any [`fiftyone_caching::PutCache`] works, so a consumer chooses the policy:
     /// the in-process [`fiftyone_caching::LruCache`] for a long-lived host, or a
@@ -1653,6 +1685,22 @@ mod tests {
         // a product that is not an object carries no properties.
         assert!(!response_carries(&body, "ismobile"));
         assert!(!response_carries(&body, "javascriptProperties.device"));
+    }
+
+    #[test]
+    fn carries_identifier_finds_the_member_in_any_case() {
+        assert!(carries_identifier(
+            r#"{"device":{"ismobile":true},"fodid":{"idrandglobal":"x"}}"#
+        ));
+        assert!(carries_identifier(r#"{"FODid":{"idprobglobal":null}}"#));
+        // A member of another product that merely mentions the name is not one.
+        assert!(!carries_identifier(
+            r#"{"device":{"ismobile":true,"fodid":"text"},"javascriptProperties":[]}"#
+        ));
+        assert!(!carries_identifier(r#"{"device":{"ismobile":true}}"#));
+        // What cannot be read as an object cannot be checked, so it is not shared.
+        assert!(carries_identifier("[]"));
+        assert!(carries_identifier("not json"));
     }
 
     #[cfg(not(feature = "reqwest-client"))]
