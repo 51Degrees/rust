@@ -100,20 +100,27 @@ Example binaries live in `<crate>/src/bin/*.rs` (run with `--bin`), not in an
 
 ## Releasing to crates.io
 
-Releases are automated, and every push to `main` releases. The version is never
-committed. `.github/workflows/publish.yml` works it out from the release tags
-with GitVersion and common-ci's `GitVersion.yml`, which gives `main` the next
-plain patch, such as 4.5.9 after 4.5.8, and `ci/set-crate-versions.ps1` writes
-it into every manifest on the build machine. The workflow refuses a major or
-minor move unless a person dispatches it with `allow-version-bump`, tests the
-examples against the crates at that version, publishes each crate to crates.io
-in dependency order with `ci/publish-crates.sh`, skipping any version already
-published, and tags the commit.
+Releases are automated, as in the other languages. The nightly pipeline at
+01:00 UTC merges the eligible pull requests and then publishes `main` through
+common-ci's shared publish when it has moved past the last release tag, so a
+night's merges go out as one patch release. `.github/workflows/publish.yml`
+runs the same publish by hand. The version is never committed. The shared
+publish works it out from the release tags with GitVersion and common-ci's
+`GitVersion.yml`, which gives `main` the next plain patch, such as 4.5.10 after
+4.5.9, and refuses a major or minor move unless a person dispatches
+`publish.yml` with `allow-version-bump`. The `ci/*.ps1` publish hooks write
+the version into every manifest on the build machine, test the examples
+against the crates at that version, package every crate, and publish each to
+crates.io in dependency order, skipping any version already published and
+waiting for the crates.io index to list each one before the next. The shared
+publish then tags the commit and creates the GitHub release.
+`ci/missing-ci-scripts.md` describes the hooks.
 
-Authentication uses crates.io **Trusted Publishing**: the publish workflow
-exchanges the run's GitHub OIDC identity for a short-lived token, so no API
-token is stored. Each crate has this repository and `publish.yml` registered as
-a trusted publisher (one-time setup in `ci/setup-trusted-publishing.sh`).
+Authentication uses crates.io **Trusted Publishing**. The publish exchanges the
+run's GitHub OIDC identity for a short-lived token, so no API token is stored.
+Each crate has this repository's `nightly-pipeline.yml` and `publish.yml`
+registered as trusted publishers (one-time setup in
+`ci/setup-trusted-publishing.sh`).
 
 The OWID library the `fodid` crates build on is not a crates.io dependency.
 Its source is compiled into `fodid` as a private module from the `owid-rust`
@@ -148,8 +155,11 @@ is ignored by git and listed in the `fodid` manifest's `include`, so
   reads no secrets.
 - `examples.yml` — builds and tests `examples/` against local source
   (`source.toml`) before a release. Runs on every PR.
-- `publish.yml` — publishes on push to `main`, then a `verify-published` job
-  builds and tests `examples/` against the just-released crates.io packages.
+- `nightly-pipeline.yml` — at 01:00 UTC merges the eligible pull requests and
+  publishes `main` through common-ci's shared workflows, then builds and tests
+  `examples/` against the crates.io packages.
+- `publish.yml` — the same publish, dispatched by hand, the only route that can
+  allow a major or minor version move.
 - `utm-link-lint.yml` — see UTM conventions below. Runs on every PR.
 - `mustache-drift.yml` — guards the generated JavaScript resource template.
   Push and pull request builds compare against a pinned upstream commit
@@ -164,8 +174,8 @@ is ignored by git and listed in the `fodid` manifest's `include`, so
   run that feeds the documentation performance graphs. Its Rust adapter lives
   in this repo at `ci/run-performance-tests.ps1`; only the shared comparison
   step (`compare-performance.ps1`) comes from common-ci. See
-  [ci/missing-ci-scripts.md](ci/missing-ci-scripts.md) for how this relates to
-  the org-standard reusable-workflow contract and the planned direction.
+  [ci/missing-ci-scripts.md](ci/missing-ci-scripts.md) for how the repository
+  uses the shared reusable workflows.
 
 ## Conventions and gotchas
 

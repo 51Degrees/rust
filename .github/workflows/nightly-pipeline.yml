@@ -7,6 +7,13 @@ name: Nightly Pipeline
 # here sat until somebody merged it by hand, and main is protected so the
 # author could not merge their own.
 #
+# Then it publishes main through common-ci's shared publish, as the other
+# languages do, which publishes only when main has moved past the last release
+# tag, so everything merged that night goes out as one patch release.
+# publish.yml runs the same publish by hand. crates.io Trusted Publishing
+# accepts this file, so the publish job needs id-token, and no crates.io token
+# is stored.
+#
 # Eligibility is decided centrally by common-ci steps/get-pull-requests.ps1,
 # being a pull request that is not a draft, has no review still requested, has
 # no review that is anything other than an approval, and either is approved by
@@ -29,6 +36,11 @@ on:
   schedule:
     - cron: '0 1 * * *'
 
+# One publish at a time, whether it starts here or from publish.yml.
+concurrency:
+  group: publish-crates-io
+  cancel-in-progress: false
+
 jobs:
   PullRequests:
     name: Nightly Pull Requests
@@ -44,3 +56,36 @@ jobs:
       build-test-timeout-minutes: 180
     secrets:
       token: ${{ secrets.ACCESS_TOKEN }}
+
+  Publish:
+    if: ${{ !cancelled() }}
+    needs: PullRequests
+    name: Nightly Publish
+    permissions:
+      contents: read
+      id-token: write
+    uses: 51Degrees/common-ci/.github/workflows/nightly-publish.yml@main
+    with:
+      repo-name: ${{ github.event.repository.name }}
+      org-name: ${{ github.event.repository.owner.login }}
+      dryrun: ${{ inputs.dryrun || false }}
+      skip-compare-performance: true
+    secrets:
+      token: ${{ secrets.ACCESS_TOKEN }}
+
+  # The examples built and tested against the crates on crates.io, with no
+  # source.toml patch, every night, so a release that did not reach crates.io
+  # whole shows here.
+  published-examples:
+    name: examples vs published crates
+    needs: Publish
+    if: ${{ !cancelled() && needs.Publish.result == 'success' && !inputs.dryrun }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo update
+      - run: cargo test
