@@ -705,18 +705,18 @@ impl Results {
         index: c_int,
     ) -> Result<Vec<(sys::PropertyValueType, String, u16)>> {
         let indexes = [index];
-        let mut temp = sys::Data::zeroed();
         let mut exception = sys::Exception::cleared();
-        // Safety: `results` is valid, the index array is readable for its single
-        // element, and `temp` is a zeroed scratch buffer the library may grow.
-        // The returned collection owns its memory and is released below on every
+        // Safety: `results` is valid and the index array is readable for its
+        // single element. With no scratch buffer passed, the library converts
+        // values to text in one of its own and frees it before returning. The
+        // returned collection owns its memory and is released below on every
         // path.
         let mut collection = unsafe {
             sys::fiftyoneDegreesResultsIpiGetValuesCollection(
                 self.as_ptr(),
                 indexes.as_ptr(),
                 indexes.len() as u32,
-                &mut temp,
+                std::ptr::null_mut(),
                 &mut exception,
             )
         };
