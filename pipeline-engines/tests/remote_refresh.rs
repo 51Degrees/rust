@@ -331,3 +331,99 @@ fn a_failed_download_keeps_the_licence_key_out_of_the_error() {
     assert!(message.contains(&url), "{message}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A download that keeps arriving completes even when it takes longer than
+/// the HTTP client's timeout, which limits each wait for more of the response
+/// and not the whole download. A data file of several gigabytes takes minutes
+/// to arrive.
+#[test]
+fn a_steady_download_longer_than_the_client_timeout_completes() {
+    const CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+    const PARTS: usize = 10;
+    const PART_GAP: std::time::Duration = std::time::Duration::from_millis(500);
+    let body: Vec<u8> = (0..50 * 1024).map(|i| (i % 251) as u8).collect();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/datafile", listener.local_addr().unwrap());
+    let sent = body.clone();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 4096];
+        let _ = stream.read(&mut request);
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            sent.len()
+        );
+        let _ = stream.write_all(head.as_bytes());
+        for part in sent.chunks(sent.len().div_ceil(PARTS)) {
+            std::thread::sleep(PART_GAP);
+            if stream.write_all(part).and_then(|_| stream.flush()).is_err() {
+                return;
+            }
+        }
+    });
+
+    let dir = std::env::temp_dir().join(format!("fiftyone-dut-steady-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("device.dat");
+    std::fs::write(&path, b"version 1").unwrap();
+    let config = DataFileConfiguration::builder(&path)
+        .data_update_url(url)
+        .automatic_updates_enabled(false)
+        .file_system_watcher_enabled(false)
+        .decompress_content(false)
+        .build();
+    let engine: Arc<dyn OnPremiseAspectEngine> =
+        Arc::new(TestEngine::new(Arc::new(AspectEngineDataFile::new(config))));
+    let client = reqwest::blocking::Client::builder()
+        .timeout(CLIENT_TIMEOUT)
+        .build()
+        .unwrap();
+
+    let status = DataUpdateService::with_client(client).check_for_update(&engine, None);
+    server.join().unwrap();
+    assert_eq!(
+        status.map_err(|error| error.to_string()),
+        Ok(AutoUpdateStatus::Success)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), body);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An update whose data file cannot be replaced fails, and leaves no
+/// temporary file beside the data file.
+#[test]
+fn a_failed_update_leaves_no_temporary_file() {
+    // A folder where the data file should be, so it cannot be replaced.
+    let dir = std::env::temp_dir().join(format!("fiftyone-dut-left-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("device.dat");
+    std::fs::create_dir_all(&path).unwrap();
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/datafile", server.server_addr());
+    let handle = std::thread::spawn(move || {
+        if let Ok(request) = server.recv() {
+            let _ = request.respond(tiny_http::Response::from_data(b"new data".to_vec()));
+        }
+    });
+    let config = DataFileConfiguration::builder(&path)
+        .data_update_url(url)
+        .automatic_updates_enabled(false)
+        .file_system_watcher_enabled(false)
+        .decompress_content(false)
+        .build();
+    let engine: Arc<dyn OnPremiseAspectEngine> =
+        Arc::new(TestEngine::new(Arc::new(AspectEngineDataFile::new(config))));
+
+    let error = DataUpdateService::new()
+        .check_for_update(&engine, None)
+        .expect_err("a folder cannot be replaced by a file");
+    handle.join().unwrap();
+    let left: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(error.status, AutoUpdateStatus::NewFileCannotRename, "{error}");
+    assert_eq!(left, ["device.dat"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
