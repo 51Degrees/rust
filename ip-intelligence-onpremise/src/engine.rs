@@ -23,18 +23,20 @@
 //! The [`IpIntelligenceOnPremiseEngine`] flow element.
 //!
 //! The engine wraps a native IP Intelligence [`Manager`](fiftyone_native::ipi::Manager)
-//! and turns each pipeline request into a native lookup, populating an
-//! [`IpIntelligenceDataBase`] with the weighted results. See the crate-level
-//! documentation for the design rationale.
+//! and turns each pipeline request into a native lookup, returning an
+//! [`IpIntelligenceDataBase`] that reads each property from the lookup's native
+//! results the first time it is requested. See the crate-level documentation
+//! for the design rationale.
 
+use std::collections::HashMap;
 use std::os::raw::c_int;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use arc_swap::ArcSwap;
 
 use fiftyone_ip_intelligence_shared::{
-    declared_property_value_type, generated_property_names, IpIntelligenceDataBase, IP_DATA_KEY,
-    IP_DATA_KEY_NAME, WEIGHTED_PROPERTY_VALUE_TYPE,
+    declared_property_value_type, generated_property_names, IpIntelligenceDataBase,
+    IpIntelligencePropertyReader, IP_DATA_KEY, IP_DATA_KEY_NAME, WEIGHTED_PROPERTY_VALUE_TYPE,
 };
 use fiftyone_native::ipi::{Manager, PropertyRead, Results};
 use fiftyone_native::PerformanceProfile;
@@ -84,8 +86,9 @@ pub const IP_EVIDENCE_KEYS: &[&str] = &[
 /// [`ArcSwap`] so [`OnPremiseAspectEngine::refresh`] can hot-swap a reloaded
 /// data set without blocking concurrent requests.
 pub struct IpIntelligenceOnPremiseEngine {
-    /// The reusable engine base. No cache is attached, because native results
-    /// need explicit cleanup and must not be cached.
+    /// The reusable engine base. No cache is attached, because each result
+    /// keeps its native results, and the data set they came from, until it is
+    /// dropped.
     base: AspectEngineBase<IpIntelligenceDataBase>,
     /// The loaded native data set, swapped atomically on refresh.
     manager: Arc<ArcSwap<Manager>>,
@@ -96,6 +99,9 @@ pub struct IpIntelligenceOnPremiseEngine {
     requested_properties: Vec<String>,
     /// The names of the properties actually populated, in declaration order.
     populated_property_names: Vec<String>,
+    /// The populated properties as each lookup's reader finds them, shared by
+    /// every lookup.
+    readable: Arc<ReadableNames>,
     /// The evidence keys of the loaded data file, replaced on refresh.
     evidence_key_filter: DataFileEvidenceKeys,
     /// Core property metadata for the populated properties.
@@ -131,6 +137,7 @@ impl IpIntelligenceOnPremiseEngine {
         let populated_property_names = populated_property_names(&requested_properties);
         let properties = build_core_metadata(&populated_property_names);
         let aspect_properties = build_aspect_metadata(&populated_property_names, &data_source_tier);
+        let readable = Arc::new(ReadableNames::new(&populated_property_names));
 
         IpIntelligenceOnPremiseEngine {
             base: AspectEngineBase::new(),
@@ -139,6 +146,7 @@ impl IpIntelligenceOnPremiseEngine {
             profile,
             requested_properties,
             populated_property_names,
+            readable,
             properties,
             aspect_properties,
             data_source_tier,
@@ -185,31 +193,26 @@ impl IpIntelligenceOnPremiseEngine {
         self.manager.load().available_property_names()
     }
 
-    /// Look up the client IP in `data`'s evidence into a fresh
-    /// [`IpIntelligenceDataBase`], through
-    /// [`Results::process_evidence`](fiftyone_native::ipi::Results::process_evidence).
+    /// Look up the client IP in `data`'s evidence, through
+    /// [`Results::process_evidence`](fiftyone_native::ipi::Results::process_evidence),
+    /// into an [`IpIntelligenceDataBase`] that reads each property from the
+    /// native results the first time it is requested.
     ///
     /// Returns an error when the evidence carries no client IP address that
-    /// reads as one. Native results are created and dropped within this call,
-    /// so nothing native escapes or is cached.
+    /// reads as one. The native results stay with the returned data until it is
+    /// dropped.
     fn lookup(&self, data: &FlowData) -> Result<IpIntelligenceDataBase> {
         // Load the current data set without blocking a concurrent refresh.
         let manager = self.manager.load_full();
         let mut results = manager.create_results()?;
         results.process_evidence(data.evidence())?;
-
-        // Each property is read by its index in the data set snapshot taken
-        // above, so a refresh between lookups cannot pair an index with another
-        // data set. A property the data file does not carry has no index and is
-        // left unset.
-        let mut ip_data = IpIntelligenceDataBase::new(IP_DATA_KEY_NAME);
-        for name in &self.populated_property_names {
-            let Some(index) = manager.required_property_index(name) else {
-                continue;
-            };
-            populate_property(&mut ip_data, &results, name, index)?;
-        }
-        Ok(ip_data)
+        Ok(
+            IpIntelligenceDataBase::new(IP_DATA_KEY_NAME).with_reader(LookupReader {
+                manager,
+                results: Mutex::new(results),
+                readable: Arc::clone(&self.readable),
+            }),
+        )
     }
 
     /// Reopen the data file from disk and atomically swap it in.
@@ -348,6 +351,67 @@ fn build_aspect_metadata(names: &[String], tier: &str) -> Vec<AspectPropertyMeta
                 .with_data_tiers([tier])
         })
         .collect()
+}
+
+/// The properties a lookup can read, found by lowercase name.
+struct ReadableNames {
+    /// Each property's name as the engine populates it.
+    names: Vec<String>,
+    /// Each property's name in lowercase, in the same order.
+    lowercase_names: Vec<String>,
+    /// The position of each property in `names`, by lowercase name.
+    by_name: HashMap<String, usize>,
+}
+
+impl ReadableNames {
+    fn new(names: &[String]) -> Self {
+        let lowercase_names: Vec<String> = names.iter().map(|name| name.to_lowercase()).collect();
+        ReadableNames {
+            names: names.to_vec(),
+            by_name: lowercase_names
+                .iter()
+                .enumerate()
+                .map(|(position, name)| (name.clone(), position))
+                .collect(),
+            lowercase_names,
+        }
+    }
+}
+
+/// Reads the properties of one lookup from its native results when they are
+/// requested.
+struct LookupReader {
+    /// The data set snapshot the results came from, which the property indexes
+    /// belong to.
+    manager: Arc<Manager>,
+    /// The native results. Reading a value writes into them, so each read
+    /// holds the lock.
+    results: Mutex<Results>,
+    readable: Arc<ReadableNames>,
+}
+
+impl IpIntelligencePropertyReader for LookupReader {
+    fn property_names(&self) -> &[String] {
+        &self.readable.lowercase_names
+    }
+
+    fn position(&self, name: &str) -> Option<usize> {
+        self.readable.by_name.get(name).copied()
+    }
+
+    fn read_property(
+        &self,
+        position: usize,
+        data: &mut IpIntelligenceDataBase,
+    ) -> std::result::Result<(), String> {
+        let name = &self.readable.names[position];
+        // A property the data file does not carry has no index and no value.
+        let Some(index) = self.manager.required_property_index(name) else {
+            return Ok(());
+        };
+        let results = self.results.lock().unwrap_or_else(PoisonError::into_inner);
+        populate_property(data, &results, name, index).map_err(|error| error.to_string())
+    }
 }
 
 /// Read one property from the results and store it on `ip_data`, typed by the

@@ -59,9 +59,12 @@
 //! [`ArcSwap`](arc_swap::ArcSwap), so
 //! [`refresh`](fiftyone_pipeline_engines::OnPremiseAspectEngine::refresh) can
 //! atomically replace it with a reloaded data file while in-flight detections
-//! keep using the data set they snapshotted. The engine never caches results,
-//! because native results carry resources that must be cleaned up immediately
-//! after a detection; only the cloud path may use a results cache.
+//! keep using the data set they snapshotted. Each result keeps its detection's
+//! native results and reads a property from them the first time it is
+//! requested, so a caller that reads one property does not pay to read the
+//! rest. Those native results, and the data set they came from, stay alive
+//! until the result is dropped, so the engine never caches results. Only the
+//! cloud path may use a results cache.
 //!
 //! ## Example
 //!

@@ -28,18 +28,19 @@
 //! populate) into the flow data under
 //! [`DEVICE_DATA_KEY`](fiftyone_device_detection_shared::DEVICE_DATA_KEY).
 
+use std::collections::HashMap;
 use std::ffi::CStr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use arc_swap::ArcSwap;
 use chrono::{DateTime, TimeZone, Utc};
 
 use fiftyone_device_detection_shared::{
-    declared_property_value_type, DeviceDataBase, UachJsConversionElement, DEVICE_DATA_KEY,
-    DEVICE_ELEMENT_DATA_KEY, UACH_EVIDENCE_COOKIE_KEY, UACH_EVIDENCE_QUERY_KEY,
+    declared_property_value_type, DeviceDataBase, DevicePropertyReader, UachJsConversionElement,
+    DEVICE_DATA_KEY, DEVICE_ELEMENT_DATA_KEY, UACH_EVIDENCE_COOKIE_KEY, UACH_EVIDENCE_QUERY_KEY,
 };
-use fiftyone_native::dd::Manager;
+use fiftyone_native::dd::{Manager, Results};
 use fiftyone_native::PerformanceProfile;
 use fiftyone_pipeline_core::{
     constants, Error, Evidence, EvidenceKeyFilter, EvidenceKeyFilterWhitelist, FlowData,
@@ -133,11 +134,14 @@ const METRIC_PROPERTIES: &[(&str, PropertyValueType, &str)] = &[
 /// same type and key the cloud engine uses. A consuming application can swap one
 /// engine for the other without changing how it reads the result.
 ///
-/// # No results cache
+/// # Values read on request
 ///
-/// Native results carry resources that must be cleaned up immediately after a
-/// detection, so this engine never caches results. Only the cloud path, whose
-/// data is plain owned values, may use a results cache.
+/// The device data keeps the native results of its detection and reads each
+/// property from them the first time it is requested, so a caller that reads
+/// one property does not pay to read the rest. The results, and the data set
+/// they came from, stay alive until the device data is dropped, so this engine
+/// never caches results. Only the cloud path, whose data is plain owned values,
+/// may use a results cache.
 pub struct DeviceDetectionOnPremiseEngine {
     /// The loaded Hash data set. Swapped atomically on refresh. In-flight
     /// [`fiftyone_native::dd::Results`] hold their own [`Arc`] to the manager
@@ -157,6 +161,10 @@ pub struct DeviceDetectionOnPremiseEngine {
 
     /// Aspect property metadata for [`AspectEngine::aspect_properties`].
     aspect_properties: Vec<AspectPropertyMetaData>,
+
+    /// The data file properties a detection reads on request, shared by every
+    /// detection's reader.
+    readable: Arc<ReadableProperties>,
 
     /// The evidence keys this engine reads, replaced on refresh.
     evidence_key_filter: HashEvidenceKeyFilter,
@@ -195,6 +203,7 @@ impl DeviceDetectionOnPremiseEngine {
             .unwrap_or_else(|| DEFAULT_DATA_SOURCE_TIER.to_owned());
         let (properties, aspect_properties) =
             build_property_metadata(&manager, &Some(data_source_tier.clone()));
+        let readable = Arc::new(ReadableProperties::new(&aspect_properties));
         let evidence_key_filter = HashEvidenceKeyFilter::new(named_evidence_keys(&manager));
 
         let data_file = Arc::new(AspectEngineDataFile::new(data_file_config));
@@ -211,6 +220,7 @@ impl DeviceDetectionOnPremiseEngine {
             requested_properties,
             properties,
             aspect_properties,
+            readable,
             evidence_key_filter,
             data_source_tier,
             concurrency,
@@ -240,14 +250,13 @@ impl DeviceDetectionOnPremiseEngine {
             .collect()
     }
 
-    /// Run a detection for `data` and populate `device` from the results.
+    /// Run a detection for `data` into new device data.
     ///
     /// Builds a native evidence set from the flow data (preferring the decoded
-    /// UACH element-data `sec-ch-ua*` values over the raw headers), processes
-    /// it, then reads every available property as a string and stores it on the
-    /// device data, wrapping match metrics and any other requested property in
-    /// the device data's typed view through the shared accessors.
-    fn detect(&self, data: &FlowData, device: &mut DeviceDataBase) -> Result<()> {
+    /// UACH element-data `sec-ch-ua*` values over the raw headers) and processes
+    /// it. The match metrics are stored straight away, and each data file
+    /// property is read from the results the first time it is requested.
+    fn detect(&self, data: &FlowData) -> Result<DeviceDataBase> {
         // Snapshot the current data set. The snapshot is an `Arc`, so an
         // in-flight detection keeps the data set alive even if `refresh` swaps a
         // new one in mid-flight.
@@ -259,50 +268,19 @@ impl DeviceDetectionOnPremiseEngine {
         let evidence = self.collect_evidence(data);
         results.process_evidence(&evidence)?;
 
-        // Read each available property as a string and store it, converting to
-        // the natural value type so the typed accessors (is_mobile, screen
-        // dimensions, the integer match metrics) read back correctly. Each is
-        // read by its index in the snapshot taken above, so a refresh between
-        // detections cannot pair an index with another data set. The match
-        // metrics have no index and are read further down.
-        for meta in &self.aspect_properties {
-            let name = meta.name();
-            let Some(index) = manager.required_property_index(name) else {
-                continue;
-            };
-            match results.value_as_string_by_index(index, NATIVE_VALUE_SEPARATOR)? {
-                Some(raw) => {
-                    let raw = if name.eq_ignore_ascii_case(JAVASCRIPT_HARDWARE_PROFILE) {
-                        wrap_hardware_profile(raw)
-                    } else {
-                        raw
-                    };
-                    // A typed property whose value does not parse (the `Unknown` /
-                    // `N/A` no-value sentinels, say) yields `None` and is left
-                    // unwritten, so its accessor reports a clean no-value.
-                    if let Some(value) = native_value(&raw, meta.core().value_type) {
-                        device.insert(name, value);
-                    }
-                }
-                None => {
-                    // Absent properties are simply not written. A typed accessor
-                    // then reports a no-value rather than a stale value.
-                }
-            }
-        }
+        let mut device = DeviceDataBase::new();
 
         // The device id is a match metric, not a data-file property, so the
-        // by-name value reader above does not return it. Read it through the
-        // dedicated native getter and store it under its metric name so the
-        // shared `device_id` accessor resolves it. An absent id (no match) is
-        // simply not written.
+        // reader does not return it. Read it through the dedicated native
+        // getter and store it under its metric name so the shared `device_id`
+        // accessor resolves it. An absent id (no match) is simply not written.
         if let Some(device_id) = results.device_id()? {
             device.insert("DeviceId", PropertyValue::String(device_id));
         }
 
         // The numeric match metrics and the match method are also computed
         // during detection and live on the result, not in the data file's
-        // property values, so the by-name reader above does not return them.
+        // property values, so the reader does not return them.
         // Read them from the result and store them under their metric names so
         // the shared accessors (difference, method, and so on) resolve them.
         if let Some(metrics) = results.match_metrics() {
@@ -329,7 +307,11 @@ impl DeviceDetectionOnPremiseEngine {
             PropertyValue::StringList(results.matched_user_agents()),
         );
 
-        Ok(())
+        Ok(device.with_reader(DetectionReader {
+            manager,
+            results: Mutex::new(results),
+            readable: Arc::clone(&self.readable),
+        }))
     }
 
     /// Collect the evidence the engine reads into a single [`Evidence`] set.
@@ -402,8 +384,7 @@ impl FlowElement for DeviceDetectionOnPremiseEngine {
         // Build the device data outside the get_or_add closure so the detection
         // (which borrows the flow data immutably for evidence) finishes before
         // the mutable element-data borrow begins.
-        let mut device = DeviceDataBase::new();
-        self.detect(data, &mut device)?;
+        let device = self.detect(data)?;
         data.get_or_add(DEVICE_DATA_KEY, || device)?;
         Ok(())
     }
@@ -486,6 +467,91 @@ pub(crate) fn open_manager(
         Some(requested_properties.iter().map(String::as_str).collect())
     };
     Manager::open_with_options(path, profile, requested.as_deref(), concurrency)
+}
+
+/// The data file properties a detection can read, each with the value type its
+/// rendered value is converted to.
+struct ReadableProperties {
+    /// Each property's name as the metadata spells it, and its value type.
+    properties: Vec<(String, PropertyValueType)>,
+    /// Each property's name in lowercase, in the same order.
+    lowercase_names: Vec<String>,
+    /// The position of each property in `properties`, by lowercase name.
+    by_name: HashMap<String, usize>,
+}
+
+impl ReadableProperties {
+    /// Every property in the engine's metadata except the match metrics, which
+    /// the engine reads from each result straight away.
+    fn new(aspect_properties: &[AspectPropertyMetaData]) -> Self {
+        let properties: Vec<(String, PropertyValueType)> = aspect_properties
+            .iter()
+            .filter(|meta| {
+                !METRIC_PROPERTIES
+                    .iter()
+                    .any(|(metric, _, _)| metric.eq_ignore_ascii_case(meta.name()))
+            })
+            .map(|meta| (meta.name().to_owned(), meta.core().value_type))
+            .collect();
+        let lowercase_names: Vec<String> = properties
+            .iter()
+            .map(|(name, _)| name.to_lowercase())
+            .collect();
+        let by_name = lowercase_names
+            .iter()
+            .enumerate()
+            .map(|(position, name)| (name.clone(), position))
+            .collect();
+        ReadableProperties {
+            properties,
+            lowercase_names,
+            by_name,
+        }
+    }
+}
+
+/// Reads the properties of one detection from its native results when they are
+/// requested.
+struct DetectionReader {
+    /// The data set snapshot the results came from, which the property indexes
+    /// belong to.
+    manager: Arc<Manager>,
+    /// The native results. Reading a value writes into them, so each read
+    /// holds the lock.
+    results: Mutex<Results>,
+    readable: Arc<ReadableProperties>,
+}
+
+impl DevicePropertyReader for DetectionReader {
+    fn property_names(&self) -> &[String] {
+        &self.readable.lowercase_names
+    }
+
+    fn position(&self, name: &str) -> Option<usize> {
+        self.readable.by_name.get(name).copied()
+    }
+
+    fn read_property(&self, position: usize) -> std::result::Result<Option<PropertyValue>, String> {
+        let (name, value_type) = &self.readable.properties[position];
+        let Some(index) = self.manager.required_property_index(name) else {
+            return Ok(None);
+        };
+        let results = self.results.lock().unwrap_or_else(PoisonError::into_inner);
+        let raw = results
+            .value_as_string_by_index(index, NATIVE_VALUE_SEPARATOR)
+            .map_err(|error| error.to_string())?;
+        Ok(raw.and_then(|raw| {
+            let raw = if name.eq_ignore_ascii_case(JAVASCRIPT_HARDWARE_PROFILE) {
+                wrap_hardware_profile(raw)
+            } else {
+                raw
+            };
+            // A typed property whose value does not parse (the `Unknown` or
+            // `N/A` no-value sentinels, say) has no value, so its accessor
+            // reports a clean no-value.
+            native_value(&raw, *value_type)
+        }))
+    }
 }
 
 /// Build the core and aspect property metadata for the loaded data set.

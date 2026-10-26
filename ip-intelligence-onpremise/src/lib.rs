@@ -48,11 +48,13 @@
 //!
 //! # On-premise specifics
 //!
-//! - **No results cache.** Native results need explicit cleanup and are not
-//!   safe to cache, so this engine never attaches a results cache (per the
-//!   coordination notes, only the cloud path may cache). It still embeds an
-//!   `AspectEngineBase` with no cache so its `process` flow matches the rest of
-//!   the engine layer.
+//! - **Values read on request, no results cache.** Each result keeps its
+//!   lookup's native results and reads a property from them the first time it
+//!   is requested, so a caller that reads one property does not pay to read the
+//!   rest. The native results, and the data set they came from, stay alive
+//!   until the result is dropped, so this engine never attaches a results
+//!   cache. It still embeds an `AspectEngineBase` with no cache so its
+//!   `process` flow matches the rest of the engine layer.
 //! - **Evidence keys from the data file.** The engine accepts the client IP
 //!   keys its data file defines, for example `query.client-ip-51d` and
 //!   `server.client-ip`, and reads them again when it refreshes

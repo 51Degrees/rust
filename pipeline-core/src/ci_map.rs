@@ -36,8 +36,43 @@ use ahash::RandomState;
 /// case-insensitively.
 ///
 /// The fast path tries the key exactly as supplied (most keys are already
-/// lowercase, so this hits without allocating). Only on a miss does it allocate
-/// a lowercased copy and retry.
+/// lowercase, so this hits without allocating). Only on a miss for a key that
+/// has uppercase letters does it allocate a lowercased copy and retry, because
+/// a lowercase key that missed would miss again.
 pub(crate) fn ci_get<'a, V>(map: &'a HashMap<String, V, RandomState>, key: &str) -> Option<&'a V> {
-    map.get(key).or_else(|| map.get(&key.to_lowercase()))
+    map.get(key).or_else(|| {
+        let has_uppercase = !key.is_ascii() || key.bytes().any(|byte| byte.is_ascii_uppercase());
+        if has_uppercase {
+            map.get(&key.to_lowercase())
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lowercased_map() -> HashMap<String, u32, RandomState> {
+        let mut map = HashMap::with_hasher(RandomState::new());
+        map.insert("ismobile".to_owned(), 1);
+        map.insert("ärger".to_owned(), 2);
+        map
+    }
+
+    #[test]
+    fn finds_a_key_in_any_case() {
+        let map = lowercased_map();
+        assert_eq!(ci_get(&map, "ismobile"), Some(&1));
+        assert_eq!(ci_get(&map, "IsMobile"), Some(&1));
+        assert_eq!(ci_get(&map, "ÄRGER"), Some(&2));
+    }
+
+    #[test]
+    fn a_missing_key_is_none_in_any_case() {
+        let map = lowercased_map();
+        assert_eq!(ci_get(&map, "platformname"), None);
+        assert_eq!(ci_get(&map, "PlatformName"), None);
+    }
 }
