@@ -63,12 +63,14 @@ pub fn run(options: ExampleOptions) -> Result<()> {
     // Build the on-premise pipeline. Usage sharing is off because this is a
     // console example, whose evidence 51Degrees already holds. In normal
     // operation leave it on, which is the builder's default. Automatic
-    // data-file updates are off here too; see the update-data-file example.
+    // data-file updates are off too, so no licence key is needed; see the
+    // update-data-file example for them.
     let pipeline = DeviceDetectionPipelineBuilder::on_premise(&options.data_file)
         // The low-memory profile streams data from disk on demand. It is enough
         // for this example; see the performance example for the trade-offs.
         .performance_profile(options.profile)
         .share_usage(false)
+        .auto_update(false)
         .build()
         .context("failed to build the on-premise device-detection pipeline")?;
 

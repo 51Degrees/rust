@@ -108,6 +108,17 @@ path, so cloud-only users and most of CI build without a C compiler.
   [usage sharing](https://51degrees.com/documentation/_pipeline_api__features__usage_sharing.html?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=readme.md&utm_term=usage-sharing)
   documentation for what is shared, and the `fiftyone-pipeline-engines-fiftyone`
   crate docs for the feature detail.
+- Automatic data file updates are on by default in the facades' on-premise
+  pipeline builders, as they are in .NET and Java. The pipeline owns a
+  data update service that polls the 51Degrees Distributor every thirty
+  minutes, staggered by up to ten minutes, with the licence keys given through
+  `.data_update_license_keys(..)`, and that refreshes the engine when the data
+  file changes on disk. The Distributor serves nothing without a licence key,
+  so a build with polling on and no key fails with an error that says so, as
+  it does in .NET, and a deployment of the free Lite file turns polling off
+  with `.auto_update(false)`. `.file_system_watcher(false)` turns the watcher
+  off, and `pipeline.resource::<DataUpdateService>()` reaches the service for
+  a check on demand.
 - JavaScript minification in `fiftyone-javascript-builder` is opt-in behind the
   `minify` feature and off by default. See ARCHITECTURE.md for why.
 
@@ -153,6 +164,8 @@ use fiftyone_device_detection::{
 
 let pipeline = DeviceDetectionPipelineBuilder::on_premise("51Degrees-LiteV4.1.hash")
     .performance_profile(PerformanceProfile::HighPerformance)
+    // Off because the free Lite file has no licence key for updates.
+    .auto_update(false)
     .build()?;
 
 let mut data = pipeline.create_flow_data_with(
@@ -200,6 +213,8 @@ use fiftyone_ip_intelligence::{
 // data repository (see its README).
 let pipeline = IpIntelligencePipelineBuilder::on_premise("51Degrees-IPIV4AsnIpiV41.ipi")
     .performance_profile(PerformanceProfile::HighPerformance)
+    // Off because the free ASN file has no licence key for updates.
+    .auto_update(false)
     .build()?;
 ```
 

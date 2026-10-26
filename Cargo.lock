@@ -853,6 +853,7 @@ dependencies = [
  "fiftyone-caching",
  "fiftyone-pipeline-core",
  "flate2",
+ "log",
  "md-5",
  "notify",
  "reqwest",
