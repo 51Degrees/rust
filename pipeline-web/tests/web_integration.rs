@@ -499,6 +499,51 @@ fn non_matching_if_none_match_returns_200() {
     assert_eq!(response.status, WebResponse::STATUS_OK);
 }
 
+/// Set in the environment of the second process the ETag test starts, which
+/// then prints its ETag rather than comparing.
+const ETAG_CHILD_VARIABLE: &str = "FIFTYONE_WEB_ETAG_CHILD";
+
+#[test]
+fn the_same_evidence_gives_the_same_etag_in_another_process() {
+    // A browser revalidates against whichever process answers, which is a
+    // different one after a restart or behind a load balancer, so the ETag for
+    // the same evidence must not depend on the process that computed it.
+    let web = web_pipeline(false);
+    let options = EndpointOptions::new(web.vary_whitelist().clone());
+    let data = processed(
+        web.pipeline(),
+        Evidence::builder().add("header.user-agent", "abc").build(),
+    );
+    let response = serve_json(&data, &TestRequest::default(), &options);
+    let etag = response.header("ETag").expect("an ETag").to_owned();
+
+    if std::env::var_os(ETAG_CHILD_VARIABLE).is_some() {
+        println!("etag={etag}");
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args([
+            "the_same_evidence_gives_the_same_etag_in_another_process",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(ETAG_CHILD_VARIABLE, "1")
+        .output()
+        .expect("the test binary runs a second time");
+    // The test harness prints the test's name on the same line as its output,
+    // so the ETag is found anywhere in the second process's output.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let other = stdout
+        .split_once("etag=")
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("the second process printed no ETag:\n{stdout}"));
+    assert_eq!(
+        other, etag,
+        "the same evidence gave a different ETag in another process"
+    );
+}
+
 // ----------------------------------------------------------------------------
 // Access-Control-Allow-Origin echo (present / absent / null).
 // ----------------------------------------------------------------------------

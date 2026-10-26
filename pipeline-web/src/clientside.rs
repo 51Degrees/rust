@@ -49,9 +49,9 @@
 //!   evidence-key whitelist supplied through [`EndpointOptions`], with the
 //!   `header.` prefix stripped and the names de-duplicated case-insensitively.
 //!   Omitted when the list is empty or no whitelist was supplied.
-//! - `ETag`: a stable per-process digest of the cache key the flow data's
-//!   evidence produces under the pipeline filter. The digest is opaque and
-//!   non-portable (see [`compute_etag`]).
+//! - `ETag`: a digest of the cache key the flow data's evidence produces
+//!   under the pipeline filter, the same in every process running the same
+//!   build. The digest is opaque and non-portable (see [`compute_etag`]).
 //! - `Access-Control-Allow-Origin`: the request `Origin` header echoed back,
 //!   but only when an origin is present and is not the literal string `null`.
 //!
@@ -66,9 +66,9 @@
 //! the endpoint through [`EndpointOptions`]. An adapter with its own view of
 //! the headers that change the result can pass a different list.
 
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 
-use ahash::AHasher;
+use ahash::RandomState;
 use fiftyone_javascript_builder::JAVASCRIPT_BUILDER_DATA_KEY;
 use fiftyone_json_builder::JSON_BUILDER_DATA_KEY;
 use fiftyone_pipeline_core::constants::EVIDENCE_HTTP_HEADER_PREFIX;
@@ -269,15 +269,17 @@ pub fn vary_header(whitelist: &EvidenceKeyFilterWhitelist) -> String {
     names.join(",")
 }
 
-/// Compute the stable per-process `ETag` for a flow data.
+/// Compute the `ETag` for a flow data.
 ///
 /// The tag is a hex digest of the deterministic [`fiftyone_pipeline_core::DataKey`]
 /// the flow data's evidence produces under the pipeline filter, rendered as a
 /// quoted string per the HTTP `ETag` grammar.
 ///
-/// The digest is produced with [`ahash::AHasher`] seeded with the four fixed
-/// constants in this module, so it is **stable within a process and across
-/// processes built from this code**, but it is deliberately **opaque and
+/// The digest is produced by an [`ahash::RandomState`] hasher built from the
+/// four fixed seeds in this module, so the same evidence gives the same tag in
+/// every process running the same build. A browser revalidates against
+/// whichever process answers, which after a restart or behind a load balancer
+/// is not the one that made the tag. The tag is deliberately **opaque and
 /// non-portable**: callers must treat it as a meaningless validator and never
 /// parse it, compare it across language ports, or persist it expecting another
 /// implementation to reproduce it. Only equality against a value this same code
@@ -285,15 +287,10 @@ pub fn vary_header(whitelist: &EvidenceKeyFilterWhitelist) -> String {
 pub fn compute_etag(flow_data: &FlowData, filter: &dyn EvidenceKeyFilter) -> String {
     let key = flow_data.generate_key(filter);
 
-    let mut hasher = AHasher::default();
-    // Hash a fixed domain seed first so the digest is stable and seeded by this
-    // code rather than by the default hasher state. AHasher::default uses
-    // compile-time-fixed seeds (it is not randomised), so two runs of the same
-    // binary agree, and mixing our own constants documents and pins that intent.
-    ETAG_SEED_0.hash(&mut hasher);
-    ETAG_SEED_1.hash(&mut hasher);
-    ETAG_SEED_2.hash(&mut hasher);
-    ETAG_SEED_3.hash(&mut hasher);
+    // The seeds are given explicitly because ahash draws the seeds of its
+    // default hasher at run time on native targets, once per process.
+    let mut hasher =
+        RandomState::with_seeds(ETAG_SEED_0, ETAG_SEED_1, ETAG_SEED_2, ETAG_SEED_3).build_hasher();
 
     // Hash the ordered entries. The key's entry order is already deterministic.
     for (name, value) in key.entries() {
