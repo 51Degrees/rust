@@ -608,11 +608,14 @@ extern "C" {
         length: usize,
     ) -> usize;
 
-    /// Reads the match metrics (method, difference, drift, iterations and
-    /// matched-node count) from the primary result into the output pointers and
-    /// returns 1, or returns 0 when there is no result. `method` receives the
-    /// match-method enum value (0 None, 1 Performance, 2 Combined, 3 Predictive).
-    /// Any output pointer may be null to skip that metric. See `src/shim.c`.
+    /// Reads the match metrics of the results into the output pointers and
+    /// returns 1, or returns 0 when `results` is null. The results hold one
+    /// result for each component, each from the header that matched it. As in
+    /// the C++ results, `method` receives the highest match-method enum value
+    /// of any result (0 None, 1 Performance, 2 Combined, 3 Predictive), and the
+    /// difference, drift, iterations and matched-node count are summed across
+    /// the results. With no results every metric is zero. Any output pointer
+    /// may be null to skip that metric. See `src/shim.c`.
     ///
     /// # Safety
     /// `results` must be an initialized Hash results structure. Each non-null
@@ -625,6 +628,47 @@ extern "C" {
         iterations: *mut i32,
         matched_nodes: *mut i32,
     ) -> c_int;
+
+    /// Returns the number of results, one for each component, or zero when
+    /// `results` is null. See `src/shim.c`.
+    ///
+    /// # Safety
+    /// `results` must be an initialized Hash results structure or null.
+    pub fn fiftyoneDegreesShimHashGetResultCount(results: *mut ResultsHash) -> u32;
+
+    /// Reads the match metrics of the single result at `result_index` into the
+    /// output pointers and returns 1, or returns 0 when the index is out of
+    /// range. Any output pointer may be null to skip that metric. See
+    /// `src/shim.c`.
+    ///
+    /// # Safety
+    /// `results` must be an initialized Hash results structure or null. Each
+    /// non-null output pointer must be writable.
+    pub fn fiftyoneDegreesShimHashGetResultMetricsAt(
+        results: *mut ResultsHash,
+        result_index: u32,
+        method: *mut i32,
+        difference: *mut i32,
+        drift: *mut i32,
+        iterations: *mut i32,
+        matched_nodes: *mut i32,
+    ) -> c_int;
+
+    /// Writes the matched User-Agent of the result at `result_index` into
+    /// `buffer` as a null terminated string and returns the number of
+    /// characters written, excluding the terminator. Returns zero when the
+    /// index is out of range or the result records no matched User-Agent, and
+    /// cuts the value short when the buffer is too small. See `src/shim.c`.
+    ///
+    /// # Safety
+    /// `results` must be an initialized Hash results structure. `buffer` must
+    /// point to `length` writable bytes.
+    pub fn fiftyoneDegreesShimHashGetMatchedUserAgent(
+        results: *mut ResultsHash,
+        result_index: u32,
+        buffer: *mut c_char,
+        length: usize,
+    ) -> usize;
 }
 
 #[cfg(test)]

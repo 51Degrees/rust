@@ -11,10 +11,15 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-# IP-intelligence facade. Default features (cloud + on-premise) are kept so the
-# example binaries can build either deployment from a single dependency, plus
-# `reqwest-client` so the cloud examples use the built-in reqwest HTTP client.
-fiftyone-ip-intelligence = { version = "4.5.2", features = ["reqwest-client"] }
+# IP-intelligence facade. Both deployments are enabled so the example binaries
+# can build either from a single dependency, plus `reqwest-client` so the
+# cloud examples use the built-in reqwest HTTP client.
+# The facade's default `share-usage` feature is left out, so its pipeline
+# builders keep usage sharing off in these examples. Every crate in this
+# workspace leaves it out, because Cargo merges a dependency's features across
+# the workspace. In normal operation keep the default features, which turn
+# usage sharing on.
+fiftyone-ip-intelligence = { version = "4.5.2", default-features = false, features = ["cloud", "on-premise", "reqwest-client"] }
 
 # Cloud engines and the cloud request engine, used by the mixed cloud example to
 # compose Device Detection and IP Intelligence into one pipeline over a single

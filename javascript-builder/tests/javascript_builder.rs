@@ -526,3 +526,11 @@ fn without_a_sequence_element_the_evidence_is_used() {
     assert_eq!(rendered_session_id(&js), "abc");
     assert!(js.contains("var sequence = 4;"));
 }
+
+#[test]
+fn the_json_builder_leaves_out_this_builders_data() {
+    // The JSON builder names this builder's data key in its exclusion list
+    // without depending on this crate, so the two keys are checked here.
+    assert!(fiftyone_json_builder::DEFAULT_ELEMENT_EXCLUSION_LIST
+        .contains(&fiftyone_javascript_builder::JAVASCRIPT_BUILDER_ELEMENT_DATA_KEY));
+}

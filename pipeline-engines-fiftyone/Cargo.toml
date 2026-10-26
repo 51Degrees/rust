@@ -18,6 +18,15 @@ fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
 fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines", default-features = false }
 thiserror.workspace = true
 ahash.workspace = true
+# The usage-sharing tracker keeps recently shared evidence in the sharded LRU
+# cache, so it is bounded and concurrent requests mostly take different locks.
+fiftyone-caching = { version = "4.5.2", path = "../caching", default-features = false }
+# Usage sharing logs failures (a full queue, a failed send) through the log
+# facade, which does nothing until the application installs a logger.
+log = "0.4"
+# Picks which requests are in the usage-sharing sample. Each thread has its own
+# generator, so sampling shares no state between threads.
+fastrand = "2"
 # GUID generation for the session id created by the Sequence element. The v4
 # feature gives random GUIDs.
 uuid = { version = "1", features = ["v4"] }

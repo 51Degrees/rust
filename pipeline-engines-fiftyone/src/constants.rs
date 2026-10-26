@@ -120,8 +120,8 @@ pub const SHARE_USAGE_DEFAULT_REPEAT_EVIDENCE_INTERVAL_MINUTES: u64 = 20;
 /// The default share percentage. `1.0` means every request is shared.
 pub const SHARE_USAGE_DEFAULT_SHARE_PERCENTAGE: f64 = 1.0;
 
-/// The default (and minimum permitted) number of entries per usage-sharing
-/// message. No data is sent until this many entries are queued.
+/// The default number of entries per usage-sharing message. No data is sent
+/// until this many entries are queued, except when the element is dropped.
 pub const SHARE_USAGE_DEFAULT_MIN_ENTRIES_PER_MESSAGE: usize = 50;
 
 /// The default usage-sharing endpoint.
