@@ -89,10 +89,14 @@ pub struct Options {
 /// discovery up front so the build does no cloud call, which the integration test
 /// uses to assemble the app offline. Passing `None` lets the builder fetch the
 /// discovery from the cloud, which is the live path the binary takes.
+///
+/// `share_usage` is true when the binary serves the page. The tests pass false,
+/// so a test run sends nothing to 51Degrees.
 pub fn build_app(
     resource_key: &str,
     endpoint: Option<&str>,
     state: Option<CloudEngineState>,
+    share_usage: bool,
 ) -> anyhow::Result<Router> {
     // Assemble the cloud IP-intelligence elements by hand rather than through the
     // facade's `build()`, because a web deployment must add the ShareUsageElement
@@ -114,11 +118,10 @@ pub fn build_app(
         .build()
         .context("building the IP-intelligence cloud engine")?;
 
-    let elements: Vec<Arc<dyn FlowElement>> = vec![
-        Arc::new(ShareUsageElement::with_defaults()),
-        request_engine,
-        Arc::new(ipi_engine),
-    ];
+    let mut elements: Vec<Arc<dyn FlowElement>> = vec![request_engine, Arc::new(ipi_engine)];
+    if share_usage {
+        elements.insert(0, Arc::new(ShareUsageElement::with_defaults()));
+    }
 
     // WebPipeline wraps these application elements with the sequence, set-headers,
     // JSON and JavaScript elements the web integration needs.
@@ -152,7 +155,12 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     // panic.
     // No injected state on the live path: the builder fetches discovery from the
     // cloud as it builds.
-    let app = build_app(&options.resource_key, options.endpoint.as_deref(), None)?;
+    let app = build_app(
+        &options.resource_key,
+        options.endpoint.as_deref(),
+        None,
+        true,
+    )?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -288,9 +296,9 @@ mod tests {
     ///
     /// A clone is used (cloning a `Router` is cheap, sharing the same `Arc`
     /// elements) so the owning `app` the caller holds outlives the request. That
-    /// matters because the cloud engine and the usage-sharing element wrap a
-    /// blocking `reqwest` client whose backing runtime must not be dropped from
-    /// inside an async context. Keeping the owning `app` in the synchronous test
+    /// matters because the cloud engine, and the usage-sharing element when it is
+    /// on, wrap a blocking `reqwest` client whose backing runtime must not be
+    /// dropped from inside an async context. Keeping the owning `app` in the synchronous test
     /// body ensures the final drop happens outside the runtime.
     async fn get(app: Router, uri: &str) -> Response {
         app.oneshot(
@@ -330,6 +338,7 @@ mod tests {
             "resource-key-placeholder",
             None,
             Some(CloudEngineState::default()),
+            false,
         )
         .expect("cloud app builds offline from an injected state");
 

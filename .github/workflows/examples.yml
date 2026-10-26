@@ -36,6 +36,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          # The test step versions the crates from the release tags.
+          fetch-depth: 0
       # The examples reach the 51Degrees crates through crates.io, and
       # source.toml is the one route to this tree. The script fails on a path
       # dependency into the workspace, a crate missing from source.toml or a
@@ -53,10 +55,62 @@ jobs:
         shell: pwsh
         working-directory: .
         run: ./ci/copy-owid-source.ps1
-      # Build and test the examples against the local crates via the patch file.
-      # Data-file and resource-key gated tests skip cleanly when those are
-      # absent, so this validates the build and the offline tests.
-      - run: cargo test --config source.toml
+      # The data files the on-premise examples read come from the C repositories
+      # at the commits the vendored sources record, so they are in a format
+      # those sources read. Each checkout sits inside the workspace under the
+      # name the examples look for in the directories above their own.
+      - name: Read the vendored C commits
+        id: vendored
+        shell: bash
+        working-directory: .
+        run: |
+          echo "device-detection=$(sed -n 's/^commit=//p' device-detection-sys/vendor/UPSTREAM.txt)" >> "$GITHUB_OUTPUT"
+          echo "ip-intelligence=$(sed -n 's/^commit=//p' ip-intelligence-sys/vendor/UPSTREAM.txt)" >> "$GITHUB_OUTPUT"
+      - name: Checkout device-detection-cxx
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/device-detection-cxx
+          ref: ${{ steps.vendored.outputs.device-detection }}
+          path: device-detection-cxx
+          submodules: recursive
+      - name: Checkout ip-intelligence-cxx
+        uses: actions/checkout@v4
+        with:
+          repository: 51Degrees/ip-intelligence-cxx
+          ref: ${{ steps.vendored.outputs.ip-intelligence }}
+          path: ip-intelligence-cxx
+          submodules: recursive
+      # The data files are Git LFS content inside the data submodules, which
+      # actions/checkout leaves as pointers, so fetch them. A file that is
+      # missing, or is still a pointer, fails the job here, because the
+      # examples' tests would skip without it.
+      - name: Fetch the data files
+        shell: bash
+        working-directory: .
+        run: |
+          for d in device-detection-cxx ip-intelligence-cxx; do
+            git -C "$d" lfs install --local
+            git -C "$d" lfs pull
+            git -C "$d" submodule foreach --recursive 'git lfs install --local && git lfs pull'
+          done
+          for file in \
+            device-detection-cxx/device-detection-data/51Degrees-LiteV4.1.hash \
+            ip-intelligence-cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi; do
+            if [ ! -f "$file" ] || head -c 64 "$file" | grep -q 'git-lfs'; then
+              echo "::error::$file is missing or is a Git LFS pointer, so the on-premise examples' tests would skip"
+              exit 1
+            fi
+          done
+      # Build and test the examples against this tree's crates. The script gives
+      # the crates the next patch above the latest release, so Cargo takes them
+      # through source.toml in place of the published ones, and fails if any
+      # example still takes one from crates.io. The on-premise examples' tests
+      # read the Lite Hash and ASN files checked out above. The tests that need
+      # a resource key or an Enterprise file skip, because the job has neither.
+      - name: Test the examples against this tree's crates
+        shell: pwsh
+        working-directory: .
+        run: ./ci/test-examples-against-source.ps1
 
   # The check publish.yml runs after a release, here so that it can be run by
   # hand on a branch before one: gh workflow run Examples --ref <branch>. It

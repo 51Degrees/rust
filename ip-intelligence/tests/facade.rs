@@ -91,6 +91,10 @@ fn on_premise_facade_resolves_asn() {
     let pipeline = IpIntelligencePipelineBuilder::on_premise(&data_file)
         .performance_profile(PerformanceProfile::HighPerformance)
         .property("Asn")
+        // Off so the test sends nothing to 51Degrees.
+        .share_usage(false)
+        // Off so the build needs no licence key.
+        .auto_update(false)
         .build()
         .expect("the on-premise facade pipeline builds");
 
@@ -145,6 +149,8 @@ fn cloud_facade_resolves_country_code() {
     };
 
     let pipeline = IpIntelligencePipelineBuilder::cloud(resource_key)
+        // Off so the test sends nothing to 51Degrees.
+        .share_usage(false)
         .build()
         .expect("the cloud facade pipeline builds");
 

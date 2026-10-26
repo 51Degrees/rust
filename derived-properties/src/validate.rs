@@ -1665,13 +1665,27 @@ fn is_identifier(text: &str) -> bool {
     characters.all(|character| character.is_ascii_alphanumeric())
 }
 
-/// Whether text names a source property as `elementKey.PropertyName`, with both
-/// halves an identifier and exactly one dot.
+/// Whether text names a source property as `elementKey.PropertyName`, with
+/// exactly one dot, an element key and an identifier.
 fn is_source_property(text: &str) -> bool {
     match text.split_once('.') {
-        Some((element, property)) => is_identifier(element) && is_identifier(property),
+        Some((element, property)) => is_element_key(element) && is_identifier(property),
         None => false,
     }
+}
+
+/// Whether text matches `^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$`, being an
+/// identifier that may carry single hyphens, as `agent-signature` does.
+fn is_element_key(text: &str) -> bool {
+    let mut parts = text.split('-');
+    let first = parts.next().unwrap_or_default();
+    is_identifier(first)
+        && parts.all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric())
+        })
 }
 
 /// Whether text is a semantic version, being three numbers, then an optional

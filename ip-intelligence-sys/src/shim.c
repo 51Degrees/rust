@@ -21,20 +21,22 @@
  * ********************************************************************* */
 
 /*
- * Property enumeration shim for fiftyone-ip-intelligence-sys.
+ * Property and header enumeration shim for fiftyone-ip-intelligence-sys.
  *
- * The set of properties an IP Intelligence data set was initialized with lives
- * in the `available` member of the base data set, several layers of nested
- * structures deep (DataSetIpi -> DataSetIpiBase b -> DataSetBase b). Reaching it
- * from Rust would require mirroring every intermediate C struct exactly, which
- * is fragile across platforms and compiler versions. The helpers below read
- * those private layouts from C, where the headers describe them, and present a
- * flat C ABI to the Rust crate. They use only the public IP Intelligence and
- * common-cxx headers, so they stay correct as the upstream layouts change.
+ * The set of properties an IP Intelligence data set was initialized with, and
+ * the headers it reads the client IP from, live in the `available` and
+ * `uniqueHeaders` members of the base data set, several layers of nested
+ * structures deep (DataSetIpi -> DataSetIpiBase b -> DataSetBase b). Reaching
+ * them from Rust would require mirroring every intermediate C struct exactly,
+ * which is fragile across platforms and compiler versions. The helpers below
+ * read those private layouts from C, where the headers describe them, and
+ * present a flat C ABI to the Rust crate. They use only the public IP
+ * Intelligence and common-cxx headers, so they stay correct as the upstream
+ * layouts change.
  *
  * This mirrors the equivalent shim in fiftyone-device-detection-sys. The Hash
  * data set nests as DataSetHash -> DataSetHashBase b -> DataSetBase b, so the
- * `dataSet->b.b.available` access path is the same in both engines.
+ * `dataSet->b.b` access path is the same in both engines.
  */
 
 #include "ipi.h"
@@ -208,4 +210,65 @@ int fiftyoneDegreesShimIpiGetDataSetPublished(
     }
     fiftyoneDegreesDataSetIpiRelease(dataSet);
     return 1;
+}
+
+/*
+ * Returns the number of headers the data set reads the client IP from, or zero
+ * when no data set is available. Their names are read one at a time with
+ * fiftyoneDegreesShimIpiGetUniqueHeaderName, in the data set's priority order.
+ */
+uint32_t fiftyoneDegreesShimIpiGetUniqueHeaderCount(
+    fiftyoneDegreesResourceManager *manager) {
+    fiftyoneDegreesDataSetIpi *dataSet =
+        fiftyoneDegreesDataSetIpiGet(manager);
+    if (dataSet == NULL) {
+        return 0;
+    }
+    uint32_t count = 0;
+    if (dataSet->b.b.uniqueHeaders != NULL) {
+        count = dataSet->b.b.uniqueHeaders->count;
+    }
+    fiftyoneDegreesDataSetIpiRelease(dataSet);
+    return count;
+}
+
+/*
+ * Writes the name of the header at `headerIndex` into `buffer` as a null
+ * terminated string and returns the number of characters written, excluding
+ * the terminator. Returns zero when the index is out of range or no data set is
+ * available, and cuts the name short when the buffer is too small. The buffer
+ * is always null terminated when `length` is at least one.
+ */
+size_t fiftyoneDegreesShimIpiGetUniqueHeaderName(
+    fiftyoneDegreesResourceManager *manager,
+    uint32_t headerIndex,
+    char *buffer,
+    size_t length) {
+    if (buffer != NULL && length > 0) {
+        buffer[0] = '\0';
+    }
+
+    fiftyoneDegreesDataSetIpi *dataSet =
+        fiftyoneDegreesDataSetIpiGet(manager);
+    if (dataSet == NULL) {
+        return 0;
+    }
+
+    size_t written = 0;
+    fiftyoneDegreesHeaders *headers = dataSet->b.b.uniqueHeaders;
+    if (headers != NULL && headerIndex < headers->count) {
+        const char *value = headers->items[headerIndex].name;
+        if (value != NULL && buffer != NULL && length > 0) {
+            size_t i = 0;
+            while (value[i] != '\0' && i < length - 1) {
+                buffer[i] = value[i];
+                i++;
+            }
+            buffer[i] = '\0';
+            written = i;
+        }
+    }
+
+    fiftyoneDegreesDataSetIpiRelease(dataSet);
+    return written;
 }

@@ -79,9 +79,11 @@ pub fn run(options: ExampleOptions) -> Result<()> {
     if let Some(endpoint) = options.endpoint {
         builder = builder.endpoint(endpoint);
     }
-    // No ShareUsageElement: usage sharing is forbidden for console examples and
-    // required only for web examples.
+    // Usage sharing is off because this is a console example, whose evidence
+    // 51Degrees already holds. In normal operation leave it on, which is the
+    // builder's default.
     let pipeline = builder
+        .share_usage(false)
         .build()
         .context("failed to build the cloud device-detection pipeline")?;
 
@@ -205,8 +207,9 @@ mod tests {
  * Long values are truncated to a fixed length for readability, a 200-character
  * cut-off.
  *
- * No `ShareUsageElement` is added, because this is a console example. A
- * production web deployment should enable usage sharing.
+ * Usage sharing is turned off with `.share_usage(false)`, because this is a
+ * console example. In normal operation leave it on, which is the builder's
+ * default, so 51Degrees receives evidence that improves detection.
  *
  * The resource key is read from the first command-line argument or the
  * `51DEGREES_RESOURCE_KEY` environment variable. To see the widest set of

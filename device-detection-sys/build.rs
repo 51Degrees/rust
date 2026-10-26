@@ -105,6 +105,23 @@ fn main() {
 
     build.compile("fiftyone-device-detection-c");
 
+    // Check the hand-written declarations in src/lib.rs against the C headers
+    // being compiled (see src/declarations.c). The object is not linked.
+    // GCC and Clang reject a conflicting redeclaration outright. MSVC only
+    // warns about one, with C4028 for a different parameter type and C4030 or
+    // C4031 for a longer or shorter parameter list, so those are made errors.
+    let declarations = PathBuf::from(env("CARGO_MANIFEST_DIR")).join("src/declarations.c");
+    println!("cargo:rerun-if-changed={}", declarations.display());
+    let mut check = cc::Build::new();
+    check
+        .file(&declarations)
+        .include(&src)
+        .cargo_metadata(false);
+    if check.get_compiler().is_like_msvc() {
+        check.flag("/we4028").flag("/we4030").flag("/we4031");
+    }
+    check.compile("fiftyone-device-detection-declarations");
+
     // On non MSVC platforms the Hash math routines pull in libm. The resource
     // manager's double-width (128-bit) compare-exchange lowers to a
     // `__atomic_compare_exchange_16` call on Linux, which libatomic provides.

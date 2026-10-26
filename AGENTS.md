@@ -84,22 +84,31 @@ published crates while the library workspace builds from source.
 
 - **Default (crates.io):** `cd examples && cargo run --bin <name>` resolves the
   released `fiftyone-*` packages from crates.io.
-- **Local source:** `cd examples && cargo test --config source.toml` applies a
-  `[patch.crates-io]` mapping every `fiftyone-*` crate to its local path, so
-  the examples build against the working tree. The patch paths in
-  `examples/source.toml` are relative to the **repository root**, not to
-  `examples/`.
+- **Local source:** `pwsh ci/test-examples-against-source.ps1` builds and tests
+  the examples against the working tree, which is what the examples workflow
+  runs. `examples/source.toml` maps every `fiftyone-*` crate to its local path
+  through `[patch.crates-io]`, but Cargo only takes a patch whose version is the
+  one it would pick, so a plain `cargo test --config source.toml` builds the
+  published crates, which are newer than the 4.5.2 in the manifests. The script
+  gives the crates a version above the published ones for the run, moves the
+  examples' lock to the local copies, fails if any still comes from crates.io,
+  and puts the files back afterwards. The patch paths in `examples/source.toml`
+  are relative to the **repository root**, not to `examples/`.
 
 Example binaries live in `<crate>/src/bin/*.rs` (run with `--bin`), not in an
 `examples/` directory.
 
 ## Releasing to crates.io
 
-Releases are automated. To cut one: bump the shared version (the literal
-`version = "x.y.z"` in every member `[package]` and on every internal
-path-dependency requirement, so the path-dep versions match) and push to
-`main`. `.github/workflows/publish.yml` and `ci/publish-crates.sh` publish each
-crate to crates.io in dependency order, skipping any version already published.
+Releases are automated, and every push to `main` releases. The version is never
+committed. `.github/workflows/publish.yml` works it out from the release tags
+with GitVersion and common-ci's `GitVersion.yml`, which gives `main` the next
+plain patch, such as 4.5.9 after 4.5.8, and `ci/set-crate-versions.ps1` writes
+it into every manifest on the build machine. The workflow refuses a major or
+minor move unless a person dispatches it with `allow-version-bump`, tests the
+examples against the crates at that version, publishes each crate to crates.io
+in dependency order with `ci/publish-crates.sh`, skipping any version already
+published, and tags the commit.
 
 Authentication uses crates.io **Trusted Publishing**: the publish workflow
 exchanges the run's GitHub OIDC identity for a short-lived token, so no API
