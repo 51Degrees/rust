@@ -105,6 +105,7 @@
 
 mod builder;
 mod engine;
+mod retained;
 
 pub use builder::{DeviceDetectionOnPremiseEngineBuilder, DATA_DOWNLOAD_TYPE};
 pub use engine::DeviceDetectionOnPremiseEngine;

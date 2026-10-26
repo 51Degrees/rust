@@ -33,6 +33,7 @@ use std::os::raw::c_int;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arc_swap::ArcSwap;
+use chrono::{TimeZone, Utc};
 
 use fiftyone_ip_intelligence_shared::{
     declared_property_value_type, generated_property_names, IpIntelligenceDataBase,
@@ -50,6 +51,7 @@ use fiftyone_pipeline_engines::{
 };
 
 use crate::builder::IpIntelligenceOnPremiseEngineBuilder;
+use crate::retained::Retained;
 
 /// The default data-source tier reported by the engine.
 ///
@@ -104,13 +106,52 @@ pub struct IpIntelligenceOnPremiseEngine {
     evidence_key_filter: DataFileEvidenceKeys,
     /// Core property metadata for the populated properties.
     properties: Vec<PropertyMetaData>,
-    /// Aspect property metadata for the populated properties.
-    aspect_properties: Vec<AspectPropertyMetaData>,
-    /// The data-source tier reported by the engine.
-    data_source_tier: String,
+    /// The tier of the loaded data set and the aspect property metadata, which
+    /// names that tier, for [`AspectEngine::data_source_tier`] and
+    /// [`AspectEngine::aspect_properties`].
+    metadata: Retained<TierMetadata>,
+    /// The tier the builder set, which every data set loaded reports, or
+    /// `None` to report the tier each data file names.
+    tier_override: Option<String>,
+    /// Held while a refresh loads a data set, so refreshes run one at a time.
+    refresh_lock: Mutex<()>,
     /// The single data file this engine reads, as shared run-time state for the
     /// data update service.
     data_files: Vec<Arc<AspectEngineDataFile>>,
+}
+
+/// The tier of a loaded data set and the aspect property metadata that names
+/// it.
+#[derive(PartialEq)]
+struct TierMetadata {
+    tier: String,
+    aspect_properties: Vec<AspectPropertyMetaData>,
+}
+
+impl TierMetadata {
+    /// The metadata of the data set `manager` holds, reporting `tier_override`
+    /// when it is set, otherwise the tier the data file names, then
+    /// [`DEFAULT_DATA_SOURCE_TIER`] when it names none.
+    fn new(manager: &Manager, tier_override: &Option<String>, populated: &[String]) -> Self {
+        let tier = tier_override
+            .clone()
+            .or_else(|| manager.data_set_name())
+            .unwrap_or_else(|| DEFAULT_DATA_SOURCE_TIER.to_owned());
+        TierMetadata {
+            aspect_properties: build_aspect_metadata(populated, &tier),
+            tier,
+        }
+    }
+}
+
+/// Record the publish date in `manager`'s data file header on `data_file`,
+/// for the metadata and the update service's `If-Modified-Since` header.
+pub(crate) fn record_published(manager: &Manager, data_file: &AspectEngineDataFile) {
+    if let Some((year, month, day)) = manager.data_set_published() {
+        if let Some(published) = Utc.with_ymd_and_hms(year, month, day, 0, 0, 0).single() {
+            data_file.set_data_published(published);
+        }
+    }
 }
 
 impl IpIntelligenceOnPremiseEngine {
@@ -129,12 +170,12 @@ impl IpIntelligenceOnPremiseEngine {
         manager: Arc<Manager>,
         profile: PerformanceProfile,
         requested_properties: Vec<String>,
-        data_source_tier: String,
+        tier_override: Option<String>,
         data_file: Arc<AspectEngineDataFile>,
     ) -> Self {
         let populated_property_names = populated_property_names(&requested_properties);
         let properties = build_core_metadata(&populated_property_names);
-        let aspect_properties = build_aspect_metadata(&populated_property_names, &data_source_tier);
+        let metadata = TierMetadata::new(&manager, &tier_override, &populated_property_names);
 
         IpIntelligenceOnPremiseEngine {
             base: AspectEngineBase::new(),
@@ -144,8 +185,9 @@ impl IpIntelligenceOnPremiseEngine {
             requested_properties,
             populated_property_names,
             properties,
-            aspect_properties,
-            data_source_tier,
+            metadata: Retained::new(metadata),
+            tier_override,
+            refresh_lock: Mutex::new(()),
             data_files: vec![data_file],
         }
     }
@@ -214,8 +256,14 @@ impl IpIntelligenceOnPremiseEngine {
     /// Reopen the data file from disk and atomically swap it in.
     ///
     /// Shared by [`OnPremiseAspectEngine::refresh`]. A concurrent `process` call
-    /// keeps using the old data set until this swap completes.
+    /// keeps using the old data set until this swap completes. The evidence
+    /// keys, the tier and the publish date follow the new data file, which can
+    /// differ from the old one. A failed reload changes nothing.
     fn reload_from_disk(&self) -> Result<()> {
+        let _refreshing = self
+            .refresh_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let path = self
             .data_files
             .first()
@@ -238,11 +286,20 @@ impl IpIntelligenceOnPremiseEngine {
         };
         let manager = Manager::open_with_properties(&path, self.profile, property_refs.as_deref())?;
         let evidence_keys = DataFileEvidenceKeys::whitelist(&manager);
+        let metadata = TierMetadata::new(
+            &manager,
+            &self.tier_override,
+            &self.populated_property_names,
+        );
+        if let Some(data_file) = self.data_files.first() {
+            record_published(&manager, data_file);
+        }
         self.loaded.store(Arc::new(LoadedDataSet::new(
             manager,
             &self.populated_property_names,
         )));
         self.evidence_key_filter.keys.store(Arc::new(evidence_keys));
+        self.metadata.replace(metadata);
         Ok(())
     }
 }
@@ -552,7 +609,7 @@ impl FlowElement for IpIntelligenceOnPremiseEngine {
 
 impl AspectEngine for IpIntelligenceOnPremiseEngine {
     fn data_source_tier(&self) -> &str {
-        &self.data_source_tier
+        &self.metadata.current().tier
     }
 
     fn deployment(&self) -> EngineDeployment {
@@ -560,7 +617,7 @@ impl AspectEngine for IpIntelligenceOnPremiseEngine {
     }
 
     fn aspect_properties(&self) -> &[AspectPropertyMetaData] {
-        &self.aspect_properties
+        &self.metadata.current().aspect_properties
     }
 }
 

@@ -30,7 +30,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::{TimeZone, Utc};
 use fiftyone_native::ipi::Manager;
 use fiftyone_native::PerformanceProfile;
 use fiftyone_pipeline_core::{Error, Result};
@@ -39,7 +38,7 @@ use fiftyone_pipeline_engines::{
     OnPremiseAspectEngine, DISTRIBUTOR_URL,
 };
 
-use crate::engine::{IpIntelligenceOnPremiseEngine, DEFAULT_DATA_SOURCE_TIER};
+use crate::engine::{record_published, IpIntelligenceOnPremiseEngine};
 
 /// The download type the Distributor serves IP Intelligence data files as,
 /// sent in the update URL's `Type` parameter.
@@ -144,7 +143,7 @@ impl IpIntelligenceOnPremiseEngineBuilder {
     ///
     /// By default the engine reads the tier from the data file header (for
     /// example `Lite`, `Enterprise` or `TAC`), falling back to
-    /// [`DEFAULT_DATA_SOURCE_TIER`] only when the header cannot be read. This
+    /// [`crate::DEFAULT_DATA_SOURCE_TIER`] only when the header cannot be read. This
     /// override forces a specific tier, which an application can use when it
     /// knows better than the file metadata.
     pub fn data_source_tier(mut self, tier: impl Into<String>) -> Self {
@@ -283,30 +282,14 @@ impl IpIntelligenceOnPremiseEngineBuilder {
             property_refs.as_deref(),
         )?;
 
-        // Report the tier from an explicit override first, then the data file
-        // header, then the fixed default when the header carries no name.
-        let data_source_tier = self
-            .data_source_tier
-            .clone()
-            .or_else(|| manager.data_set_name())
-            .unwrap_or_else(|| DEFAULT_DATA_SOURCE_TIER.to_owned());
-
         let data_file = Arc::new(AspectEngineDataFile::new(configuration));
-
-        // Record the data file's embedded publish date, read from its header, so
-        // the metadata reports it and the update service can use it for the
-        // `If-Modified-Since` decision.
-        if let Some((year, month, day)) = manager.data_set_published() {
-            if let Some(published) = Utc.with_ymd_and_hms(year, month, day, 0, 0, 0).single() {
-                data_file.set_data_published(published);
-            }
-        }
+        record_published(&manager, &data_file);
 
         Ok(IpIntelligenceOnPremiseEngine::from_parts(
             manager,
             self.profile,
             self.requested_properties,
-            data_source_tier,
+            self.data_source_tier,
             data_file,
         ))
     }
