@@ -105,6 +105,7 @@
 
 mod builder;
 mod engine;
+mod operational_copy;
 mod retained;
 
 pub use builder::{IpIntelligenceOnPremiseEngineBuilder, DATA_DOWNLOAD_TYPE};

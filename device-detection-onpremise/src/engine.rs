@@ -51,6 +51,7 @@ use fiftyone_pipeline_engines::{
     EngineDeployment, OnPremiseAspectEngine,
 };
 
+use crate::operational_copy::OperationalCopy;
 use crate::retained::Retained;
 
 /// The separator used to join multiple values of a list-typed property into a
@@ -183,10 +184,14 @@ pub struct DeviceDetectionOnPremiseEngine {
     data_files: Vec<Arc<AspectEngineDataFile>>,
 }
 
-/// A loaded Hash data set and the properties a detection reads from it.
+/// A loaded Hash data set, the properties a detection reads from it and the
+/// copy of the data file it was read from, if any.
 struct LoadedDataSet {
     manager: Arc<Manager>,
     readable: Arc<ReadableProperties>,
+    /// Declared after the manager, so it is removed after the data set that
+    /// has it open is freed.
+    copy: Option<OperationalCopy>,
 }
 
 /// The property metadata and tier of a loaded data set.
@@ -197,10 +202,12 @@ struct EngineMetadata {
     tier: String,
 }
 
-/// The data set `manager` holds and its metadata, reporting `tier_override`
-/// when it is set, otherwise the tier the data file names.
+/// The data set `manager` holds, read from `copy` when there is one, and its
+/// metadata, reporting `tier_override` when it is set, otherwise the tier the
+/// data file names.
 fn describe(
     manager: Arc<Manager>,
+    copy: Option<OperationalCopy>,
     tier_override: &Option<String>,
 ) -> (LoadedDataSet, EngineMetadata) {
     // An explicit builder override wins, then the tier read from the native
@@ -213,7 +220,11 @@ fn describe(
     let (properties, aspect_properties) = build_property_metadata(&manager, &Some(tier.clone()));
     let readable = Arc::new(ReadableProperties::new(&aspect_properties));
     (
-        LoadedDataSet { manager, readable },
+        LoadedDataSet {
+            manager,
+            readable,
+            copy,
+        },
         EngineMetadata {
             properties,
             aspect_properties,
@@ -225,11 +236,13 @@ fn describe(
 impl DeviceDetectionOnPremiseEngine {
     /// Build an engine from an already-loaded manager and its configuration.
     ///
-    /// Called by the builder once it has opened the data file. Derives the
-    /// property and evidence-key metadata from the data set, records the
-    /// data-file publish time from the file on disk, and assembles the engine.
+    /// Called by the builder once it has opened the data file, or `copy` of
+    /// it. Derives the property and evidence-key metadata from the data set,
+    /// records the data-file publish time from the file on disk, and assembles
+    /// the engine.
     pub(crate) fn from_manager(
         manager: Arc<Manager>,
+        copy: Option<OperationalCopy>,
         profile: PerformanceProfile,
         requested_properties: Vec<String>,
         data_file_config: DataFileConfiguration,
@@ -237,7 +250,7 @@ impl DeviceDetectionOnPremiseEngine {
         concurrency: Option<u16>,
     ) -> Self {
         let evidence_key_filter = HashEvidenceKeyFilter::new(named_evidence_keys(&manager));
-        let (loaded, metadata) = describe(manager, &data_source_tier);
+        let (loaded, metadata) = describe(manager, copy, &data_source_tier);
 
         let data_file = Arc::new(AspectEngineDataFile::new(data_file_config));
         // Record the publish time from the data file on disk, the best signal
@@ -342,9 +355,8 @@ impl DeviceDetectionOnPremiseEngine {
         );
 
         Ok(device.with_reader(DetectionReader {
-            manager: Arc::clone(&loaded.manager),
             results: Mutex::new(results),
-            readable: Arc::clone(&loaded.readable),
+            loaded,
         }))
     }
 
@@ -400,15 +412,18 @@ impl DeviceDetectionOnPremiseEngine {
             .refresh_lock
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        let copy = self.data_files.first().and_then(|file| {
+            OperationalCopy::when_needed(path, self.profile, file.configuration())
+        });
         let manager = open_manager(
-            path,
+            copy.as_ref().map_or(path, OperationalCopy::path),
             self.profile,
             &self.requested_properties,
             self.concurrency,
         )?;
         self.evidence_key_filter
             .replace(named_evidence_keys(&manager));
-        let (loaded, metadata) = describe(manager, &self.tier_override);
+        let (loaded, metadata) = describe(manager, copy, &self.tier_override);
         self.loaded.store(Arc::new(loaded));
         self.metadata.replace(metadata);
 
@@ -556,27 +571,27 @@ impl ReadableProperties {
 /// Reads the properties of one detection from its native results when they are
 /// requested.
 struct DetectionReader {
+    /// The native results. Reading a value writes into them, so each read
+    /// holds the lock. Declared first, so they are freed before the data set
+    /// they came from.
+    results: Mutex<Results>,
     /// The data set snapshot the results came from, which the property indexes
     /// belong to.
-    manager: Arc<Manager>,
-    /// The native results. Reading a value writes into them, so each read
-    /// holds the lock.
-    results: Mutex<Results>,
-    readable: Arc<ReadableProperties>,
+    loaded: Arc<LoadedDataSet>,
 }
 
 impl DevicePropertyReader for DetectionReader {
     fn property_names(&self) -> &[String] {
-        &self.readable.lowercase_names
+        &self.loaded.readable.lowercase_names
     }
 
     fn position(&self, name: &str) -> Option<usize> {
-        self.readable.by_name.get(name).copied()
+        self.loaded.readable.by_name.get(name).copied()
     }
 
     fn read_property(&self, position: usize) -> std::result::Result<Option<PropertyValue>, String> {
-        let (name, value_type) = &self.readable.properties[position];
-        let Some(index) = self.manager.required_property_index(name) else {
+        let (name, value_type) = &self.loaded.readable.properties[position];
+        let Some(index) = self.loaded.manager.required_property_index(name) else {
             return Ok(None);
         };
         let results = self.results.lock().unwrap_or_else(PoisonError::into_inner);

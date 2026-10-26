@@ -38,6 +38,7 @@ use fiftyone_pipeline_engines::{
 };
 
 use crate::engine::{open_manager, DeviceDetectionOnPremiseEngine};
+use crate::operational_copy::OperationalCopy;
 
 /// The download type the Distributor serves Hash data files as, sent in the
 /// update URL's `Type` parameter.
@@ -219,9 +220,14 @@ impl DeviceDetectionOnPremiseEngineBuilder {
         };
         data_file_config.check_license_keys()?;
 
-        // Open the data set with the requested property restriction.
+        // Open the data set with the requested property restriction, from a
+        // copy of the data file when updates can replace the file while it is
+        // open.
+        let copy =
+            OperationalCopy::when_needed(&self.data_file_path, self.profile, &data_file_config);
         let manager = open_manager(
-            &self.data_file_path,
+            copy.as_ref()
+                .map_or(self.data_file_path.as_path(), OperationalCopy::path),
             self.profile,
             &self.requested_properties,
             self.concurrency,
@@ -229,6 +235,7 @@ impl DeviceDetectionOnPremiseEngineBuilder {
 
         let engine = Arc::new(DeviceDetectionOnPremiseEngine::from_manager(
             manager,
+            copy,
             self.profile,
             self.requested_properties,
             data_file_config,
