@@ -41,7 +41,7 @@
 //! time.
 
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::Path;
 use std::ptr::NonNull;
@@ -398,12 +398,15 @@ impl Manager {
     /// The lookup is case sensitive, matching the native data set, so callers
     /// should pass the canonical property spelling.
     pub fn required_property_index(&self, property_name: &str) -> Option<c_int> {
-        // The first caller builds the map and racing callers wait for it. Once
-        // it is set, a lookup takes no lock and writes no shared memory.
+        self.property_index_map().get(property_name).copied()
+    }
+
+    /// The property name to required-property-index map, built on first use.
+    /// The first caller builds it and racing callers wait for it. Once it is
+    /// set, a lookup takes no lock and writes no shared memory.
+    fn property_index_map(&self) -> &HashMap<String, c_int> {
         self.property_index
             .get_or_init(|| self.build_property_index())
-            .get(property_name)
-            .copied()
     }
 
     /// Build the property name to index map by enumerating the data set.
@@ -628,6 +631,53 @@ impl Results {
                         buffer,
                         length,
                         separator_c.as_ptr(),
+                        &mut exception,
+                    )
+                },
+                |text| text.to_owned(),
+            )
+        };
+        exception.check()?;
+        Ok(value)
+    }
+
+    /// Read the value(s) of a required property by the index
+    /// [`Manager::required_property_index`] returned for it, joining multiple
+    /// values with `separator`.
+    ///
+    /// The same values as [`value_as_string`](Self::value_as_string), without
+    /// a name lookup on either side of the native boundary and without
+    /// allocating the property name and separator on each call, for callers
+    /// that read the same properties on every detection. An index belongs to
+    /// the data set it came from, so look it up again after a reload. Returns
+    /// [`None`] when the results carry no value, and an error for an index
+    /// outside this data set's required properties.
+    pub fn value_as_string_by_index(
+        &self,
+        index: c_int,
+        separator: &CStr,
+    ) -> Result<Option<String>> {
+        let count = self.manager.property_index_map().len();
+        if index < 0 || index as usize >= count {
+            return Err(Error::Native {
+                status: String::from("InvalidInput"),
+                message: format!("{index} is not a required property index (0..{count})"),
+            });
+        }
+        let results = self.as_ptr();
+        let mut exception = sys::Exception::cleared();
+        // Safety: the writer only touches the buffer it is given and returns the
+        // native available-character count. The separator outlives every
+        // invocation and the index is in range for this data set.
+        let value = unsafe {
+            with_value_string(
+                |buffer, length| {
+                    sys::fiftyoneDegreesResultsHashGetValuesStringByRequiredPropertyIndex(
+                        results,
+                        index,
+                        buffer,
+                        length,
+                        separator.as_ptr(),
                         &mut exception,
                     )
                 },
@@ -937,6 +987,51 @@ mod tests {
             for (kept, original) in user_agent.chars().zip(CHROME_ON_WINDOWS.chars()) {
                 assert!(kept == '_' || kept == original, "{user_agent}");
             }
+        }
+    }
+
+    #[test]
+    fn reading_by_index_gives_the_values_reading_by_name_gives() {
+        let Some(path) = data_file() else {
+            eprintln!("no Hash data file found; skipping reads by index");
+            return;
+        };
+        let manager = Manager::open(&path, PerformanceProfile::Default).expect("data file loads");
+        let mobile = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) \
+            AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+        let names = manager.property_names();
+        assert!(!names.is_empty());
+        for user_agent in [CHROME_ON_WINDOWS, mobile] {
+            let results = detect(&manager, "header.user-agent", user_agent);
+            for name in &names {
+                let index = manager
+                    .required_property_index(name)
+                    .expect("a listed property has an index");
+                assert_eq!(
+                    results
+                        .value_as_string_by_index(index, c"|")
+                        .expect("read by index"),
+                    results.value_as_string(name, "|").expect("read by name"),
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_index_outside_the_data_set_is_an_error() {
+        let Some(path) = data_file() else {
+            eprintln!("no Hash data file found; skipping index range");
+            return;
+        };
+        let manager = Manager::open(&path, PerformanceProfile::Default).expect("data file loads");
+        let results = detect(&manager, "header.user-agent", CHROME_ON_WINDOWS);
+        let count = manager.property_count() as c_int;
+        for index in [-1, count] {
+            let err = results
+                .value_as_string_by_index(index, c"|")
+                .expect_err("an index outside the data set should be refused");
+            assert!(matches!(err, Error::Native { ref status, .. } if status == "InvalidInput"));
         }
     }
 }

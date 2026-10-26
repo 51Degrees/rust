@@ -43,7 +43,9 @@
 //!   into GZip-compressed XML and POSTs it to a configurable 51Degrees endpoint
 //!   on a background thread, with repeat-evidence deduplication. Transmission is
 //!   gated behind the [`share-usage-transport`](#cargo-features) feature, which
-//!   is off by default, so a default build collects nothing over the network.
+//!   is off by default in this crate, so a default build of this crate sends
+//!   nothing. The Device Detection and IP Intelligence facade crates turn it on
+//!   through their default `share-usage` feature.
 //!   See the
 //!   [usage-sharing-element specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/pipeline-elements/usage-sharing-element.md).
 //!
@@ -61,7 +63,8 @@
 //!   is a no-op: each batch is dropped instead of being transmitted, so **no
 //!   network connection to 51Degrees is ever made**. There are therefore two
 //!   independent opt-ins before any data leaves the process: the element must be
-//!   added to the pipeline *and* this feature must be enabled. The feature is
+//!   added to the pipeline *and* this feature must be enabled. The facade
+//!   crates' default `share-usage` feature does both. The feature is
 //!   also what `reqwest` (which does not build for `wasm32-wasip1`) is gated
 //!   behind, so a wasm consumer leaves it off and the element runs with its
 //!   no-op transport. The destination endpoint is
