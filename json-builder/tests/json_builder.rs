@@ -263,11 +263,16 @@ fn serialises_property_values() {
 
 #[test]
 fn excludes_internal_elements_by_default() {
-    // The cloud-response, set-headers and usage-sharing elements are excluded
-    // by default and must not appear in the output.
-    let cloud = TestElement::new("cloud-response").with_value("any", "x");
-    let headers = TestElement::new("set-headers").with_value("any", "x");
-    let usage = TestElement::new("usage-sharing").with_value("any", "x");
+    // The cloud request engine, set-headers and usage-sharing elements are
+    // excluded by default and must not appear in the output. Each test element
+    // takes the real element's data key.
+    use fiftyone_pipeline_engines_fiftyone::constants::{
+        SET_HEADERS_DEFAULT_ELEMENT_DATA_KEY, SHARE_USAGE_DEFAULT_ELEMENT_DATA_KEY,
+    };
+    let cloud_key = fiftyone_cloud_request_engine::ELEMENT_DATA_KEY;
+    let cloud = TestElement::new(cloud_key).with_value("json-response", "{}");
+    let headers = TestElement::new(SET_HEADERS_DEFAULT_ELEMENT_DATA_KEY).with_value("any", "x");
+    let usage = TestElement::new(SHARE_USAGE_DEFAULT_ELEMENT_DATA_KEY).with_value("any", "x");
     let device = TestElement::new("device").with_value("ismobile", true);
 
     let json = run(
@@ -281,9 +286,15 @@ fn excludes_internal_elements_by_default() {
     );
     let value = parse(&json);
 
-    assert!(value.get("cloud-response").is_none(), "cloud excluded");
-    assert!(value.get("set-headers").is_none(), "set-headers excluded");
-    assert!(value.get("usage-sharing").is_none(), "usage excluded");
+    assert!(value.get(cloud_key).is_none(), "cloud excluded");
+    assert!(
+        value.get(SET_HEADERS_DEFAULT_ELEMENT_DATA_KEY).is_none(),
+        "set-headers excluded"
+    );
+    assert!(
+        value.get(SHARE_USAGE_DEFAULT_ELEMENT_DATA_KEY).is_none(),
+        "usage excluded"
+    );
     assert!(value.get("device").is_some(), "device retained");
     // The builder must never serialize its own element data.
     assert!(

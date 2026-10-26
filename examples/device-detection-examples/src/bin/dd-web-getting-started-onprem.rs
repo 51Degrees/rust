@@ -72,7 +72,13 @@ pub struct Options {
 /// 28/30 days old) can be read with [`examples_shared::check_data_file`] and
 /// shown on the page, and the very same engine instance is then used as the
 /// application element of the web pipeline.
-pub fn build_app(data_file: &std::path::Path) -> anyhow::Result<(Router, Vec<String>)> {
+///
+/// `share_usage` is true when the binary serves the page. The tests pass false,
+/// so a test run sends nothing to 51Degrees.
+pub fn build_app(
+    data_file: &std::path::Path,
+    share_usage: bool,
+) -> anyhow::Result<(Router, Vec<String>)> {
     // Build the Hash engine. The HighPerformance profile suits a long-running
     // web server. Every property the data file supports is loaded by default.
     let engine = DeviceDetectionOnPremiseEngineBuilder::new(data_file.to_path_buf())
@@ -89,11 +95,11 @@ pub fn build_app(data_file: &std::path::Path) -> anyhow::Result<(Router, Vec<Str
     // uses: usage sharing first (REQUIRED for a web example), then the UA-CH
     // high-entropy decoder, then the Hash engine. WebPipeline wraps these with
     // the sequence, set-headers, JSON and JavaScript elements.
-    let elements: Vec<Arc<dyn FlowElement>> = vec![
-        Arc::new(ShareUsageElement::with_defaults()),
-        Arc::new(UachJsConversionElement::new()),
-        engine,
-    ];
+    let mut elements: Vec<Arc<dyn FlowElement>> =
+        vec![Arc::new(UachJsConversionElement::new()), engine];
+    if share_usage {
+        elements.insert(0, Arc::new(ShareUsageElement::with_defaults()));
+    }
     let web = WebPipeline::build(elements, WebIntegrationOptions::default())
         .context("assembling the web pipeline")?;
     let state = FiftyOneState::from_web_pipeline(&web);
@@ -118,7 +124,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
     // runtime's async context, so doing this work outside block_on avoids that
     // panic. The warnings are baked into each page render, so capture them here
     // and store them in a process-wide slot the handler reads per request.
-    let (app, warnings) = build_app(&options.data_file)?;
+    let (app, warnings) = build_app(&options.data_file, true)?;
     store_warnings(warnings);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -263,14 +269,15 @@ mod tests {
     /// Build the app for the test, skipping when no data file is available.
     fn test_app() -> Option<Router> {
         let data_file = examples_shared::dd_data_path()?;
-        let (app, _warnings) = build_app(&data_file).expect("on-premise app builds");
+        let (app, _warnings) = build_app(&data_file, false).expect("on-premise app builds");
         Some(app)
     }
 
     /// Dispatch one request and capture the response. Driven from a `#[test]`
-    /// (not `#[tokio::test]`): the share-usage element holds a blocking reqwest
-    /// client whose drop must not happen on a tokio worker thread, so the app is
-    /// owned and dropped on the plain test thread around a `Runtime::block_on`.
+    /// (not `#[tokio::test]`): with usage sharing on, the app holds a blocking
+    /// reqwest client whose drop must not happen on a tokio worker thread, so the
+    /// app is owned and dropped on the plain test thread around a
+    /// `Runtime::block_on`.
     async fn dispatch(app: &Router, uri: &str) -> Captured {
         let response = app
             .clone()

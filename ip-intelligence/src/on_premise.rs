@@ -22,9 +22,9 @@
 
 //! The on-premise IP-intelligence pipeline builder.
 //!
-//! It opens a local `.ipi` data file and assembles a pipeline containing a
-//! single [`IpIntelligenceOnPremiseEngine`], which looks IP Intelligence up
-//! from the client IP carried in a request's evidence.
+//! It opens a local `.ipi` data file and assembles a pipeline around an
+//! [`IpIntelligenceOnPremiseEngine`], which looks IP Intelligence up from the
+//! client IP carried in a request's evidence.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,6 +32,8 @@ use std::sync::Arc;
 use fiftyone_ip_intelligence_onpremise::IpIntelligenceOnPremiseEngine;
 use fiftyone_native::PerformanceProfile;
 use fiftyone_pipeline_core::{Pipeline, Result};
+use fiftyone_pipeline_engines::DataUpdateService;
+use fiftyone_pipeline_engines_fiftyone::{SequenceElement, ShareUsageElement};
 
 /// A fluent builder that opens an `.ipi` data file and assembles an on-premise
 /// IP-intelligence [`Pipeline`](fiftyone_pipeline_core::Pipeline).
@@ -41,8 +43,10 @@ use fiftyone_pipeline_core::{Pipeline, Result};
 /// [`IpIntelligenceOnPremiseEngineBuilder`](fiftyone_ip_intelligence_onpremise::IpIntelligenceOnPremiseEngineBuilder)),
 /// then call [`build`](OnPremiseIpIntelligencePipelineBuilder::build).
 ///
-/// The built pipeline contains a single on-premise engine. Unlike the cloud
-/// deployment there is no request engine, because the lookup is local.
+/// The built pipeline contains the on-premise engine, with a sequence element
+/// before it and a usage-sharing element after it when usage sharing is on.
+/// Unlike the cloud deployment there is no request engine, because the lookup
+/// is local.
 pub struct OnPremiseIpIntelligencePipelineBuilder {
     data_file_path: PathBuf,
     profile: PerformanceProfile,
@@ -50,8 +54,14 @@ pub struct OnPremiseIpIntelligencePipelineBuilder {
     data_source_tier: Option<String>,
     auto_update: bool,
     file_system_watcher: bool,
+    update_on_startup: bool,
     data_update_url: Option<String>,
+    data_update_license_keys: Vec<String>,
+    polling_interval_seconds: Option<u64>,
+    max_randomisation_seconds: Option<u64>,
+    data_update_service: Option<Arc<DataUpdateService>>,
     suppress_process_exceptions: bool,
+    share_usage: bool,
 }
 
 impl OnPremiseIpIntelligencePipelineBuilder {
@@ -63,10 +73,16 @@ impl OnPremiseIpIntelligencePipelineBuilder {
             profile: PerformanceProfile::Default,
             requested_properties: Vec::new(),
             data_source_tier: None,
-            auto_update: false,
-            file_system_watcher: false,
+            auto_update: true,
+            file_system_watcher: true,
+            update_on_startup: false,
             data_update_url: None,
+            data_update_license_keys: Vec::new(),
+            polling_interval_seconds: None,
+            max_randomisation_seconds: None,
+            data_update_service: None,
             suppress_process_exceptions: false,
+            share_usage: cfg!(feature = "share-usage"),
         }
     }
 
@@ -106,23 +122,70 @@ impl OnPremiseIpIntelligencePipelineBuilder {
         self
     }
 
-    /// Enable or disable automatic data-file updates. Disabled by default.
+    /// Enable or disable automatic data file updates. On by default, as in
+    /// .NET and Java. When on, the pipeline owns a [`DataUpdateService`] that
+    /// polls the update URL on the polling interval and refreshes the engine
+    /// with each new file. The 51Degrees Distributor serves nothing without a
+    /// licence key, so [`Self::build`] refuses with this on and no key set, as
+    /// .NET does, and a deployment without one turns this off or sets
+    /// [`Self::data_update_license_keys`].
     pub fn auto_update(mut self, enabled: bool) -> Self {
         self.auto_update = enabled;
         self
     }
 
-    /// Enable or disable the file-system watcher for the data file. Disabled by
-    /// default.
+    /// Enable or disable the file-system watcher, which refreshes the engine
+    /// when the data file changes on disk. On by default.
     pub fn file_system_watcher(mut self, enabled: bool) -> Self {
         self.file_system_watcher = enabled;
         self
     }
 
-    /// Set the remote update URL for the data file, used by the update service
-    /// when automatic updates are enabled.
+    /// Set whether the update service polls once while the pipeline is built,
+    /// so the engine starts with the newest data. Off by default.
+    pub fn update_on_startup(mut self, enabled: bool) -> Self {
+        self.update_on_startup = enabled;
+        self
+    }
+
+    /// Set the URL polled for a new data file. The 51Degrees Distributor by
+    /// default.
     pub fn data_update_url(mut self, url: impl Into<String>) -> Self {
         self.data_update_url = Some(url.into());
+        self
+    }
+
+    /// Set the licence keys the update URL carries, which the Distributor
+    /// needs before it serves a file. One is required when automatic updates
+    /// or update on startup are on.
+    pub fn data_update_license_keys<I, S>(mut self, keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.data_update_license_keys = keys.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Set the interval between polls of the update URL, in seconds. Thirty
+    /// minutes by default.
+    pub fn polling_interval_seconds(mut self, seconds: u64) -> Self {
+        self.polling_interval_seconds = Some(seconds);
+        self
+    }
+
+    /// Set the most that is added at random to each polling interval, in
+    /// seconds, so many instances do not poll together. Ten minutes by default.
+    pub fn max_randomisation_seconds(mut self, seconds: u64) -> Self {
+        self.max_randomisation_seconds = Some(seconds);
+        self
+    }
+
+    /// Register the engine with `service` instead of a service this builder
+    /// creates, so several pipelines share one. The pipeline keeps it alive
+    /// as well.
+    pub fn data_update_service(mut self, service: Arc<DataUpdateService>) -> Self {
+        self.data_update_service = Some(service);
         self
     }
 
@@ -134,26 +197,73 @@ impl OnPremiseIpIntelligencePipelineBuilder {
         self
     }
 
+    /// Toggle usage sharing. On by default with the `share-usage` feature,
+    /// which is a default feature, so evidence from the requests the pipeline
+    /// processes reaches 51Degrees. A console or off-line tool turns it off.
+    ///
+    /// When enabled, a [`SequenceElement`] is added first, so each shared
+    /// record carries its session id and sequence, and a [`ShareUsageElement`]
+    /// with default settings is added last. The element only transmits if the
+    /// `fiftyone-pipeline-engines-fiftyone/share-usage-transport` feature is
+    /// enabled, which the `share-usage` feature does.
+    pub fn share_usage(mut self, enabled: bool) -> Self {
+        self.share_usage = enabled;
+        self
+    }
+
     /// Open the data file, build the engine and assemble the pipeline.
     ///
-    /// Returns the native error if the data file fails to load.
+    /// Returns the native error if the data file fails to load. Refuses when
+    /// automatic updates or update on startup are on and no licence key is
+    /// set.
     pub fn build(self) -> Result<Arc<Pipeline>> {
+        // The service that keeps the data file current: the one the caller
+        // shares, or one of this pipeline's own when any automatic mode is on.
+        let updates_wanted = self.auto_update || self.file_system_watcher || self.update_on_startup;
+        let service = match (self.data_update_service, updates_wanted) {
+            (Some(service), _) => Some(service),
+            (None, true) => Some(Arc::new(DataUpdateService::new())),
+            (None, false) => None,
+        };
+
         let mut engine_builder = IpIntelligenceOnPremiseEngine::builder(self.data_file_path)
             .performance_profile(self.profile)
             .properties(self.requested_properties)
             .auto_update(self.auto_update)
-            .file_system_watcher(self.file_system_watcher);
+            .file_system_watcher(self.file_system_watcher)
+            .update_on_startup(self.update_on_startup)
+            .data_update_license_keys(self.data_update_license_keys);
         if let Some(tier) = self.data_source_tier {
             engine_builder = engine_builder.data_source_tier(tier);
         }
         if let Some(url) = self.data_update_url {
             engine_builder = engine_builder.data_update_url(url);
         }
+        if let Some(seconds) = self.polling_interval_seconds {
+            engine_builder = engine_builder.polling_interval_seconds(seconds);
+        }
+        if let Some(seconds) = self.max_randomisation_seconds {
+            engine_builder = engine_builder.max_randomisation_seconds(seconds);
+        }
+        if let Some(service) = &service {
+            engine_builder = engine_builder.data_update_service(Arc::clone(service));
+        }
 
-        let engine = engine_builder.build()?;
+        let engine = engine_builder.build_shared()?;
 
-        Pipeline::builder()
-            .add_element(Arc::new(engine))
+        let mut pipeline_builder = Pipeline::builder();
+        if let Some(service) = service {
+            pipeline_builder = pipeline_builder.add_resource(service);
+        }
+        if self.share_usage {
+            pipeline_builder = pipeline_builder.add_element(Arc::new(SequenceElement::new()));
+        }
+        pipeline_builder = pipeline_builder.add_element(engine);
+        if self.share_usage {
+            pipeline_builder =
+                pipeline_builder.add_element(Arc::new(ShareUsageElement::with_defaults()));
+        }
+        pipeline_builder
             .suppress_process_exceptions(self.suppress_process_exceptions)
             .build()
     }
@@ -214,6 +324,48 @@ mod tests {
         candidates.into_iter().find(|p| p.is_file())
     }
 
+    /// Data updates are on by default, so a build with no licence key refuses
+    /// and says which switch turns them off. With a key the pipeline owns a
+    /// data update service with the engine's data file registered. With every
+    /// automatic mode off, no service is created.
+    #[test]
+    fn on_premise_pipeline_owns_a_data_update_service_by_default() {
+        use fiftyone_pipeline_engines::DataUpdateService;
+
+        let Some(path) = asn_data_file() else {
+            eprintln!("no ASN data file found; skipping the data update service test");
+            return;
+        };
+
+        let error = IpIntelligencePipelineBuilder::on_premise(&path)
+            .properties(ASN_PROPERTIES.iter().copied())
+            .share_usage(false)
+            .build()
+            .err()
+            .expect("the default build needs a licence key");
+        assert!(error.to_string().contains("auto_update(false)"), "{error}");
+
+        let pipeline = IpIntelligencePipelineBuilder::on_premise(&path)
+            .properties(ASN_PROPERTIES.iter().copied())
+            .share_usage(false)
+            .data_update_license_keys(["KEY1"])
+            .build()
+            .expect("the on-premise pipeline should build with a licence key");
+        let service = pipeline
+            .resource::<DataUpdateService>()
+            .expect("the pipeline owns a data update service");
+        assert_eq!(service.registered_count(), 1);
+
+        let quiet = IpIntelligencePipelineBuilder::on_premise(&path)
+            .properties(ASN_PROPERTIES.iter().copied())
+            .share_usage(false)
+            .auto_update(false)
+            .file_system_watcher(false)
+            .build()
+            .expect("the quiet pipeline should build");
+        assert!(quiet.resource::<DataUpdateService>().is_none());
+    }
+
     #[test]
     fn on_premise_builder_assembles_a_single_engine_pipeline() {
         let Some(data_file) = asn_data_file() else {
@@ -226,6 +378,10 @@ mod tests {
         let pipeline = IpIntelligencePipelineBuilder::on_premise(&data_file)
             .performance_profile(PerformanceProfile::HighPerformance)
             .properties(ASN_PROPERTIES.iter().copied())
+            // Off so the test sends nothing to 51Degrees.
+            .share_usage(false)
+            // Off so the build needs no licence key.
+            .auto_update(false)
             .build()
             .expect("the ASN data file should build an on-premise pipeline");
 
