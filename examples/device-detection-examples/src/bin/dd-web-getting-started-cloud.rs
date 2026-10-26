@@ -92,9 +92,10 @@ pub fn build_app(
     state: Option<CloudEngineState>,
     share_usage: bool,
 ) -> anyhow::Result<Router> {
-    // Build the cloud device-detection pipeline. Usage sharing is REQUIRED for a
-    // web example (it lets 51Degrees improve detection for everyone), so the
-    // binary turns it on, unlike the console examples where it must stay off.
+    // Build the cloud device-detection pipeline. Usage sharing is required for
+    // a web example, because it lets 51Degrees improve detection. It is on by
+    // default, and is set here from the caller so the binary turns it on and
+    // the tests turn it off. The console examples turn it off.
     let mut builder = DeviceDetectionPipelineBuilder::cloud(resource_key)
         .set_state_opt(state)
         .share_usage(share_usage);
@@ -469,9 +470,9 @@ mod tests {
  *      the resulting `complete` event and appends a refreshed results table into
  *      `#content`, so Apple models and screen dimensions become available.
  *
- * Usage sharing is enabled (`.share_usage(true)`), which web deployments are
- * expected to do so anonymous evidence improves detection for everyone. The
- * console examples in this crate deliberately leave it off.
+ * Usage sharing is on (`.share_usage(true)`), as web deployments are expected
+ * to have it, so evidence from real requests improves detection. The console
+ * examples in this crate turn it off.
  *
  * The page is written to the shared 51Degrees example design system: it
  * references the vendored `examples-main.min.css` and `examples.min.js`

@@ -103,6 +103,14 @@ pub struct DataUpdateService {
     scheduler: Mutex<Option<JoinHandle<()>>>,
 }
 
+impl std::fmt::Debug for DataUpdateService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DataUpdateService")
+            .field("registered", &self.registered_count())
+            .finish_non_exhaustive()
+    }
+}
+
 impl DataUpdateService {
     /// Create a new data update service with a default HTTP client.
     pub fn new() -> Self {
@@ -502,8 +510,9 @@ impl ServiceHandle {
             };
 
             if due <= now {
-                // Poll now (ignoring errors; the next interval will retry).
-                let _ = self.check_for_update_from_url(&registration);
+                // Poll now. A failure is logged, and the next interval retries.
+                let result = self.check_for_update_from_url(&registration);
+                log_poll(&registration, result);
                 let interval = Duration::from_secs(
                     registration
                         .data_file
@@ -542,9 +551,20 @@ impl ServiceHandle {
             }
         }
         registration.data_file.set_last_applied_modified(modified);
-        let _ = registration
+        let engine = registration.engine.data_key();
+        match registration
             .engine
-            .refresh(Some(registration.data_file.identifier()));
+            .refresh(Some(registration.data_file.identifier()))
+        {
+            Ok(()) => log::info!(
+                "The data file for {engine} was refreshed from '{}'.",
+                path.display()
+            ),
+            Err(error) => log::warn!(
+                "An error occurred while refreshing {engine} from '{}'. Error detail: {error}",
+                path.display()
+            ),
+        }
     }
 
     /// Poll the remote update URL, verify, decompress, write and refresh.
@@ -556,8 +576,15 @@ impl ServiceHandle {
             None => return Ok(AutoUpdateStatus::NotNeeded),
         };
 
+        // The formatter adds the Distributor's query parameters, the licence
+        // keys among them, so the formatted URL is used for the request alone
+        // and never written into an error.
+        let request_url = data_file
+            .formatted_update_url()
+            .unwrap_or_else(|| url.clone());
+
         // Build the request, adding If-Modified-Since when configured.
-        let mut request = self.client.get(&url);
+        let mut request = self.client.get(&request_url);
         if config.verify_modified_since {
             if let Some(published) = data_file.data_published() {
                 request = request.header(
@@ -691,6 +718,24 @@ impl ServiceHandle {
         data_file.set_data_published(Utc::now());
 
         Ok(AutoUpdateStatus::Success)
+    }
+}
+
+/// Log the outcome of a scheduled poll, with the messages the specification's
+/// logging section gives. The URL logged is the configured one, which carries
+/// no licence key.
+fn log_poll(registration: &Arc<Registration>, result: DataUpdateResult) {
+    let engine = registration.engine.data_key();
+    let url = registration.data_file.data_update_url().unwrap_or("");
+    match result {
+        Ok(AutoUpdateStatus::Success) => {
+            log::info!("A data file update for {engine} was downloaded from '{url}' and applied.")
+        }
+        Ok(_) => {}
+        Err(error) => log::warn!(
+            "An error occurred while downloading a data file update for {engine} from '{url}'. \
+             Update will be attempted again later. Error detail: {error}"
+        ),
     }
 }
 

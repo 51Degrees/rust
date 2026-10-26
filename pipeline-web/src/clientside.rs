@@ -59,13 +59,12 @@
 //! endpoints instead return `304 Not Modified` with an empty body and no other
 //! headers.
 //!
-//! # Why the `Vary` whitelist is supplied, not discovered
+//! # Where the `Vary` whitelist comes from
 //!
-//! The pipeline's evidence-key filter is an opaque trait object (the union of
-//! every element's filter) that cannot enumerate its keys. So the header
-//! whitelist used for `Vary` is supplied to the endpoint through
-//! [`EndpointOptions`]. The [`crate::WebPipeline`] builder computes it for the
-//! standard element set and hands it to the adapter, which passes it here.
+//! The [`crate::WebPipeline`] builder collects the header keys every element
+//! names through its evidence key filter, and the adapter passes that list to
+//! the endpoint through [`EndpointOptions`]. An adapter with its own view of
+//! the headers that change the result can pass a different list.
 
 use std::hash::{Hash, Hasher};
 
