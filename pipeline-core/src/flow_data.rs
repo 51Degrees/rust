@@ -93,7 +93,7 @@ impl FlowData {
         &self.errors
     }
 
-    /// True once [`FlowData::process`] has run.
+    /// True once [`FlowData::process`] has been called.
     pub fn is_processed(&self) -> bool {
         self.processed
     }
@@ -103,8 +103,21 @@ impl FlowData {
     /// Each element is run in order. Whether errors propagate or are recorded
     /// is governed by the pipeline's `suppress_process_exceptions` flag (see
     /// [`crate::Pipeline::is_suppress_process_exceptions`] for the exact
-    /// behavior). Processing more than once is allowed but unusual.
+    /// behavior).
+    ///
+    /// A flow data is processed once, as the
+    /// [automated testing specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/automated-testing.md#test-cases)
+    /// requires. A second call runs no element and returns
+    /// [`Error::PipelineConfiguration`], so create a new flow data for each
+    /// set of evidence.
     pub fn process(&mut self) -> Result<()> {
+        if self.processed {
+            return Err(Error::configuration(
+                "This flow data has already been processed. A flow data is \
+                 processed once, so create a new one for each set of evidence.",
+            ));
+        }
+        self.processed = true;
         // Clone the Arc so we do not hold an immutable borrow of `self` (via
         // `self.pipeline`) while `process` needs `&mut self`.
         let pipeline = Arc::clone(&self.pipeline);
@@ -115,11 +128,6 @@ impl FlowData {
     /// element fails and exceptions are being suppressed.
     pub(crate) fn add_error(&mut self, error: FlowError) {
         self.errors.push(error);
-    }
-
-    /// Mark this flow data as processed. Called by the pipeline.
-    pub(crate) fn set_processed(&mut self) {
-        self.processed = true;
     }
 
     /// Get the element data stored under the given string data key, if any.
