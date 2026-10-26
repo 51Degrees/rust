@@ -44,6 +44,9 @@ $Index = "https://index.crates.io"
 $UserAgent = "51degrees-rust-publish (support@51degrees.com)"
 $IndexWaitMinutes = 60
 $IndexPollSeconds = 15
+$RequestTimeoutSeconds = 30
+$RequestAttempts = 5
+$RequestRetrySeconds = 20
 
 # Keep the runner's secrets and the GitHub token out of reach of the build
 # scripts cargo runs.
@@ -60,12 +63,32 @@ function Get-IndexPath([string]$Crate) {
     }
 }
 
+# Fetch a URL, or $null when it answers 404. Any other failure is retried and
+# then stops the run, because a request that failed must never be read as a
+# crate that is not there.
+function Get-Response([string]$Uri) {
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            return Invoke-WebRequest -UseBasicParsing -Uri $Uri -TimeoutSec $RequestTimeoutSeconds `
+                -Headers @{ "User-Agent" = $UserAgent; "Cache-Control" = "no-cache" }
+        } catch {
+            $status = $_.Exception.Response.StatusCode
+            if ($null -ne $status -and [int]$status -eq 404) {
+                return $null
+            }
+            if ($attempt -ge $RequestAttempts) {
+                throw "Fetching $Uri failed $attempt times, last with: $($_.Exception.Message)"
+            }
+            Write-Host "  retrying $Uri after: $($_.Exception.Message)"
+            Start-Sleep -Seconds $RequestRetrySeconds
+        }
+    }
+}
+
 # Whether the sparse index cargo resolves from lists the version.
 function Test-Indexed([string]$Crate) {
-    try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "$Index/$(Get-IndexPath $Crate)" `
-            -Headers @{ "User-Agent" = $UserAgent; "Cache-Control" = "no-cache" }
-    } catch {
+    $response = Get-Response "$Index/$(Get-IndexPath $Crate)"
+    if ($null -eq $response) {
         return $false
     }
     $pattern = '"vers":"' + [regex]::Escape($Version) + '"'
@@ -74,13 +97,7 @@ function Test-Indexed([string]$Crate) {
 
 # Whether crates.io has accepted the version, indexed or not.
 function Test-Uploaded([string]$Crate) {
-    try {
-        Invoke-RestMethod -Uri "$Registry/api/v1/crates/$Crate/$Version" `
-            -Headers @{ "User-Agent" = $UserAgent } | Out-Null
-        return $true
-    } catch {
-        return $false
-    }
+    return $null -ne (Get-Response "$Registry/api/v1/crates/$Crate/$Version")
 }
 
 # Wait until the index lists the version, failing the run if it never does.
