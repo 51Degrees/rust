@@ -106,6 +106,8 @@
 // it is only needed when at least one product feature is on.
 #[cfg(any(feature = "dd", feature = "ipi"))]
 mod buffer;
+#[cfg(any(feature = "dd", feature = "ipi"))]
+mod source;
 mod status;
 
 // Device Detection is gated behind the `dd` feature and IP Intelligence behind
@@ -146,9 +148,14 @@ mod tests {
             PerformanceProfile::parse("LOW MEMORY"),
             Some(PerformanceProfile::LowMemory)
         );
+        assert_eq!(
+            PerformanceProfile::parse("Memory-Mapped"),
+            Some(PerformanceProfile::MemoryMapped)
+        );
         assert_eq!(PerformanceProfile::parse("nonsense"), None);
         assert_eq!(PerformanceProfile::default(), PerformanceProfile::Default);
         assert_eq!(PerformanceProfile::Balanced.as_str(), "balanced");
+        assert_eq!(PerformanceProfile::MemoryMapped.as_str(), "memorymapped");
     }
 
     /// `Manager` is `Send + Sync` and `Results` is `Send` but not `Sync`, the

@@ -30,9 +30,10 @@ homepage.workspace = true
 # links Device Detection's common-cxx (via fiftyone-common-sys) and the Hash
 # engine. "ipi" links IP Intelligence (with its prefixed common-cxx). A consumer
 # that needs only one product can disable the default features and enable just
-# that one to avoid compiling the other engine.
-dd = ["dep:fiftyone-common-sys", "dep:fiftyone-device-detection-sys"]
-ipi = ["dep:fiftyone-ip-intelligence-sys"]
+# that one to avoid compiling the other engine. Both map data files for the
+# MemoryMapped profile, so both bring in memmap2.
+dd = ["dep:fiftyone-common-sys", "dep:fiftyone-device-detection-sys", "dep:memmap2"]
+ipi = ["dep:fiftyone-ip-intelligence-sys", "dep:memmap2"]
 
 # Both products are enabled by default and genuinely coexist in one binary now
 # that IP Intelligence's common-cxx is namespaced. The combined smoke tests load
@@ -45,6 +46,7 @@ fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
 fiftyone-common-sys = { version = "4.5.2", path = "../common-sys", optional = true }
 fiftyone-device-detection-sys = { version = "4.5.2", path = "../device-detection-sys", optional = true }
 fiftyone-ip-intelligence-sys = { version = "4.5.2", path = "../ip-intelligence-sys", optional = true }
+memmap2 = { version = "0.9", optional = true }
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the

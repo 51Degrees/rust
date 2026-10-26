@@ -33,7 +33,9 @@
 ///
 /// The variants mirror the predefined native configuration globals exported by
 /// each engine (`...InMemoryConfig`, `...HighPerformanceConfig`,
-/// `...LowMemoryConfig`, `...BalancedConfig` and `...DefaultConfig`).
+/// `...LowMemoryConfig`, `...BalancedConfig` and `...DefaultConfig`), apart
+/// from [`PerformanceProfile::MemoryMapped`], which uses the in-memory
+/// configuration over a mapping of the data file.
 ///
 /// [`PerformanceProfile::Default`] is the recommended starting point. It uses a
 /// balanced operating mode without creating a temporary copy of the data file.
@@ -43,6 +45,17 @@ pub enum PerformanceProfile {
     /// not held open after initialization. This is the fastest to query but uses
     /// the most memory.
     InMemory,
+    /// Map the data file into memory read only, rather than reading it in. The
+    /// data set reads the mapping as [`PerformanceProfile::InMemory`] reads its
+    /// copy, but a page of the file takes memory only once a lookup touches it,
+    /// and the operating system can reclaim it again. Suits a large data file,
+    /// a container with a memory limit, or properties held in a small part of
+    /// the file.
+    ///
+    /// Replace the data file by moving a new file into place, as the data
+    /// update service does, never by writing over it. The mapping reads the
+    /// file as it is on disk.
+    MemoryMapped,
     /// Load everything into memory and drop the connection to the source file.
     /// The highest sustained query performance.
     HighPerformance,
@@ -65,6 +78,7 @@ impl PerformanceProfile {
     pub fn as_str(&self) -> &'static str {
         match self {
             PerformanceProfile::InMemory => "inmemory",
+            PerformanceProfile::MemoryMapped => "memorymapped",
             PerformanceProfile::HighPerformance => "highperformance",
             PerformanceProfile::LowMemory => "lowmemory",
             PerformanceProfile::Balanced => "balanced",
@@ -86,6 +100,7 @@ impl PerformanceProfile {
             .collect();
         match normalized.as_str() {
             "inmemory" => Some(PerformanceProfile::InMemory),
+            "memorymapped" => Some(PerformanceProfile::MemoryMapped),
             "highperformance" => Some(PerformanceProfile::HighPerformance),
             "lowmemory" => Some(PerformanceProfile::LowMemory),
             "balanced" => Some(PerformanceProfile::Balanced),

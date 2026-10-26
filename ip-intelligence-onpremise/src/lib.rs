@@ -67,6 +67,11 @@
 //!   a freshly reloaded data set while concurrent `process` calls keep using the
 //!   old one until the swap completes, as the data-updates specification
 //!   requires.
+//! - **A data file larger than the memory to spare.**
+//!   [`fiftyone_native::PerformanceProfile::MemoryMapped`] maps the data file
+//!   rather than reading it in, so only the parts of the file that lookups
+//!   touch take memory. After a refresh the old data set keeps its mapping of
+//!   the old file until it is released.
 //!
 //! # Example
 //!

@@ -66,6 +66,13 @@
 //! until the result is dropped, so the engine never caches results. Only the
 //! cloud path may use a results cache.
 //!
+//! ## A data file larger than the memory to spare
+//!
+//! [`PerformanceProfile::MemoryMapped`](fiftyone_native::PerformanceProfile::MemoryMapped)
+//! maps the data file rather than reading it in, so only the parts of the file
+//! that detections touch take memory. After a refresh the old data set keeps
+//! its mapping of the old file until it is released.
+//!
 //! ## Example
 //!
 //! ```no_run

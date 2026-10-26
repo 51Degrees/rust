@@ -42,7 +42,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int, c_void};
+use std::os::raw::{c_char, c_int, c_long, c_void};
 use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::{Arc, OnceLock};
@@ -53,6 +53,7 @@ use fiftyone_pipeline_core::{constants, Error, Result};
 use crate::buffer::with_value_string;
 use crate::evidence::with_native_evidence;
 use crate::profile::PerformanceProfile;
+use crate::source::{DataSource, MappedFile};
 use crate::status::{status_name, status_to_result, NativeException, NativeStatus};
 
 /// The character a data set puts between the header names it joins into one
@@ -107,7 +108,9 @@ fn config_for(profile: PerformanceProfile) -> *mut sys::ConfigHash {
     // The address is stable for the program lifetime, and the pointer is only
     // read through (not dereferenced for writing) by the init functions.
     match profile {
-        PerformanceProfile::InMemory => {
+        // The in-memory configuration leaves `free_data` off, so the data set
+        // never frees the mapping a memory-mapped manager passes it.
+        PerformanceProfile::InMemory | PerformanceProfile::MemoryMapped => {
             std::ptr::addr_of_mut!(sys::fiftyoneDegreesHashInMemoryConfig)
         }
         PerformanceProfile::HighPerformance => {
@@ -155,7 +158,8 @@ fn set_pool_concurrency(config: &mut sys::ConfigHash, concurrency: u16) {
 
 /// A loaded Hash device detection data set.
 ///
-/// Owns a native [`sys::ResourceManager`] initialized from a data file. Cloning
+/// Owns a native [`sys::ResourceManager`] initialized from a data file, or
+/// from a mapping of it under [`PerformanceProfile::MemoryMapped`]. Cloning
 /// the [`Arc`] returned by [`Manager::open`] shares one loaded data set across
 /// threads cheaply. The data set is freed when the last reference is dropped,
 /// after every [`Results`] referencing it has also been dropped (the [`Arc`]
@@ -169,6 +173,10 @@ pub struct Manager {
     /// lookup. Every later lookup reads it with no lock, so concurrent readers
     /// never contend.
     property_index: OnceLock<HashMap<String, c_int>>,
+    /// The mapping the native data set reads under the memory-mapped profile,
+    /// which this side only holds. Fields drop after [`Drop::drop`] has freed
+    /// the native manager, so the mapping outlives the data set.
+    _mapping: Option<MappedFile>,
 }
 
 // Safety: the native resource manager is internally reference counted and
@@ -208,22 +216,29 @@ impl Manager {
     /// under the `LowMemory` and `Balanced` profiles, so it should be at least
     /// the number of threads that will process through the data set at once.
     /// [`None`] keeps the profile's default. It has no effect on the in-memory
-    /// profiles, where every collection is already resident.
+    /// and memory-mapped profiles, which use no file handles.
     pub fn open_with_options(
         path: impl AsRef<Path>,
         profile: PerformanceProfile,
         properties: Option<&[&str]>,
         concurrency: Option<u16>,
     ) -> Result<Arc<Manager>> {
-        let path = path.as_ref();
-        let path_string = path.to_str().ok_or_else(|| Error::Native {
-            status: String::from("InvalidInput"),
-            message: format!("data file path is not valid UTF-8: {}", path.display()),
-        })?;
-        let path_c = CString::new(path_string).map_err(|_| Error::Native {
-            status: String::from("InvalidInput"),
-            message: String::from("data file path contains an interior nul byte"),
-        })?;
+        let source = DataSource::open(path.as_ref(), profile)?;
+        // The Hash memory initializer takes the length as a C `long`, which is
+        // 32 bits on Windows.
+        let mapped_len = match &source {
+            DataSource::Mapped(mapping) => {
+                c_long::try_from(mapping.len()).map_err(|_| Error::Native {
+                    status: String::from("InvalidInput"),
+                    message: format!(
+                        "the data file is {} bytes, more than the Hash memory \
+                         initializer takes on this platform",
+                        mapping.len()
+                    ),
+                })?
+            }
+            DataSource::File(_) => 0,
+        };
 
         // A separated property list, kept alive for the duration of the init
         // call because `PropertiesRequired` only borrows the string pointer.
@@ -257,16 +272,31 @@ impl Manager {
         }
 
         let mut exception = sys::Exception::cleared();
-        // Safety: all pointers are valid for the duration of the call. The
-        // config is read only for the call and the path is null terminated.
-        let status = unsafe {
-            sys::fiftyoneDegreesHashInitManagerFromFile(
-                manager_ptr,
-                &mut config,
-                &mut required,
-                path_c.as_ptr(),
-                &mut exception,
-            )
+        let status = match &source {
+            // Safety: all pointers are valid for the duration of the call. The
+            // config is read only for the call and the path is null terminated.
+            DataSource::File(path_c) => unsafe {
+                sys::fiftyoneDegreesHashInitManagerFromFile(
+                    manager_ptr,
+                    &mut config,
+                    &mut required,
+                    path_c.as_ptr(),
+                    &mut exception,
+                )
+            },
+            // Safety: all pointers are valid for the call, the mapping is
+            // readable for its whole length, and the manager keeps it until
+            // the data set has been freed.
+            DataSource::Mapped(mapping) => unsafe {
+                sys::fiftyoneDegreesHashInitManagerFromMemory(
+                    manager_ptr,
+                    &mut config,
+                    &mut required,
+                    mapping.as_ptr(),
+                    mapped_len,
+                    &mut exception,
+                )
+            },
         };
 
         if let Err(err) = status_to_result(status, || exception_detail(&mut exception)) {
@@ -289,6 +319,7 @@ impl Manager {
         Ok(Arc::new(Manager {
             manager,
             property_index: OnceLock::new(),
+            _mapping: source.into_mapping(),
         }))
     }
 

@@ -64,6 +64,7 @@ use fiftyone_pipeline_core::{constants, Error, Evidence, Result};
 use crate::buffer::with_value_string;
 use crate::evidence::parse_client_ip;
 use crate::profile::PerformanceProfile;
+use crate::source::{DataSource, MappedFile};
 use crate::status::{status_name, status_to_result, NativeException, NativeStatus};
 
 // ---------------------------------------------------------------------------
@@ -110,7 +111,9 @@ fn config_for(profile: PerformanceProfile) -> *mut sys::ConfigIpi {
     // Taking the address of a `static mut` exported by the C library is safe.
     // The pointer is only read through by the init functions.
     match profile {
-        PerformanceProfile::InMemory => {
+        // The in-memory configuration leaves `freeData` off, so the data set
+        // never frees the mapping a memory-mapped manager passes it.
+        PerformanceProfile::InMemory | PerformanceProfile::MemoryMapped => {
             std::ptr::addr_of_mut!(sys::fiftyoneDegreesIpiInMemoryConfig)
         }
         PerformanceProfile::HighPerformance => {
@@ -134,10 +137,11 @@ fn config_for(profile: PerformanceProfile) -> *mut sys::ConfigIpi {
 
 /// A loaded IP Intelligence data set.
 ///
-/// Owns a native [`sys::ResourceManager`] initialized from an `.ipi` data file.
-/// Shared across threads behind the [`Arc`] returned by [`Manager::open`]. The
-/// data set is freed once the last reference and every referencing [`Results`]
-/// have been dropped.
+/// Owns a native [`sys::ResourceManager`] initialized from an `.ipi` data file,
+/// or from a mapping of it under [`PerformanceProfile::MemoryMapped`]. Shared
+/// across threads behind the [`Arc`] returned by [`Manager::open`]. The data
+/// set is freed once the last reference and every referencing [`Results`] have
+/// been dropped.
 pub struct Manager {
     manager: NonNull<sys::ResourceManager>,
     /// The evidence keys the data file defines, in the order the native lookup
@@ -146,6 +150,10 @@ pub struct Manager {
     /// The required property name to index map, built on first use so a read
     /// by name costs one hash lookup rather than a native name search.
     property_index: OnceLock<HashMap<String, c_int>>,
+    /// The mapping the native data set reads under the memory-mapped profile,
+    /// which this side only holds. Fields drop after [`Drop::drop`] has freed
+    /// the native manager, so the mapping outlives the data set.
+    _mapping: Option<MappedFile>,
 }
 
 /// One evidence key the data file defines, split into the parts the native
@@ -179,15 +187,7 @@ impl Manager {
         profile: PerformanceProfile,
         properties: Option<&[&str]>,
     ) -> Result<Arc<Manager>> {
-        let path = path.as_ref();
-        let path_string = path.to_str().ok_or_else(|| Error::Native {
-            status: String::from("InvalidInput"),
-            message: format!("data file path is not valid UTF-8: {}", path.display()),
-        })?;
-        let path_c = CString::new(path_string).map_err(|_| Error::Native {
-            status: String::from("InvalidInput"),
-            message: String::from("data file path contains an interior nul byte"),
-        })?;
+        let source = DataSource::open(path.as_ref(), profile)?;
 
         let property_list = properties.map(|names| names.join(","));
         let property_list_c = property_list
@@ -208,16 +208,31 @@ impl Manager {
         let manager_ptr = Box::into_raw(boxed);
 
         let mut exception = sys::Exception::cleared();
-        // Safety: all pointers are valid for the call and the path is null
-        // terminated.
-        let status = unsafe {
-            sys::fiftyoneDegreesIpiInitManagerFromFile(
-                manager_ptr,
-                config_for(profile),
-                &mut required,
-                path_c.as_ptr(),
-                &mut exception,
-            )
+        let status = match &source {
+            // Safety: all pointers are valid for the call and the path is null
+            // terminated.
+            DataSource::File(path_c) => unsafe {
+                sys::fiftyoneDegreesIpiInitManagerFromFile(
+                    manager_ptr,
+                    config_for(profile),
+                    &mut required,
+                    path_c.as_ptr(),
+                    &mut exception,
+                )
+            },
+            // Safety: all pointers are valid for the call, the mapping is
+            // readable for its whole length, and the manager keeps it until
+            // the data set has been freed.
+            DataSource::Mapped(mapping) => unsafe {
+                sys::fiftyoneDegreesIpiInitManagerFromMemory(
+                    manager_ptr,
+                    config_for(profile),
+                    &mut required,
+                    mapping.as_ptr(),
+                    mapping.len() as sys::FileOffset,
+                    &mut exception,
+                )
+            },
         };
 
         if let Err(err) = status_to_result(status, || exception_detail(&mut exception)) {
@@ -241,6 +256,7 @@ impl Manager {
             manager,
             evidence_keys,
             property_index: OnceLock::new(),
+            _mapping: source.into_mapping(),
         }))
     }
 
