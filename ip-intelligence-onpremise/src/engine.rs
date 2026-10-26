@@ -90,8 +90,9 @@ pub struct IpIntelligenceOnPremiseEngine {
     /// keeps its native results, and the data set they came from, until it is
     /// dropped.
     base: AspectEngineBase<IpIntelligenceDataBase>,
-    /// The loaded native data set, swapped atomically on refresh.
-    manager: Arc<ArcSwap<Manager>>,
+    /// The loaded native data set and the populated properties it carries,
+    /// swapped together atomically on refresh.
+    loaded: ArcSwap<LoadedDataSet>,
     /// The performance profile used to (re)open the data file on refresh.
     profile: PerformanceProfile,
     /// The properties the engine was restricted to, lowercased. Empty means all
@@ -99,9 +100,6 @@ pub struct IpIntelligenceOnPremiseEngine {
     requested_properties: Vec<String>,
     /// The names of the properties actually populated, in declaration order.
     populated_property_names: Vec<String>,
-    /// The populated properties as each lookup's reader finds them, shared by
-    /// every lookup.
-    readable: Arc<ReadableNames>,
     /// The evidence keys of the loaded data file, replaced on refresh.
     evidence_key_filter: DataFileEvidenceKeys,
     /// Core property metadata for the populated properties.
@@ -137,16 +135,14 @@ impl IpIntelligenceOnPremiseEngine {
         let populated_property_names = populated_property_names(&requested_properties);
         let properties = build_core_metadata(&populated_property_names);
         let aspect_properties = build_aspect_metadata(&populated_property_names, &data_source_tier);
-        let readable = Arc::new(ReadableNames::new(&populated_property_names));
 
         IpIntelligenceOnPremiseEngine {
             base: AspectEngineBase::new(),
             evidence_key_filter: DataFileEvidenceKeys::new(&manager),
-            manager: Arc::new(ArcSwap::from(manager)),
+            loaded: ArcSwap::from_pointee(LoadedDataSet::new(manager, &populated_property_names)),
             profile,
             requested_properties,
             populated_property_names,
-            readable,
             properties,
             aspect_properties,
             data_source_tier,
@@ -161,8 +157,9 @@ impl IpIntelligenceOnPremiseEngine {
     /// server value. Every query value is tried before any server value, and
     /// the first that reads as an IP address is looked up.
     pub fn evidence_keys(&self) -> Vec<String> {
-        self.manager
+        self.loaded
             .load()
+            .manager
             .evidence_keys()
             .map(str::to_owned)
             .collect()
@@ -190,7 +187,7 @@ impl IpIntelligenceOnPremiseEngine {
     /// file additionally lists the location and behavioural ones. Intended for
     /// introspection, such as the metadata example.
     pub fn available_property_names(&self) -> Vec<String> {
-        self.manager.load().available_property_names()
+        self.loaded.load().manager.available_property_names()
     }
 
     /// Look up the client IP in `data`'s evidence, through
@@ -203,14 +200,13 @@ impl IpIntelligenceOnPremiseEngine {
     /// dropped.
     fn lookup(&self, data: &FlowData) -> Result<IpIntelligenceDataBase> {
         // Load the current data set without blocking a concurrent refresh.
-        let manager = self.manager.load_full();
-        let mut results = manager.create_results()?;
+        let loaded = self.loaded.load_full();
+        let mut results = loaded.manager.create_results()?;
         results.process_evidence(data.evidence())?;
         Ok(
             IpIntelligenceDataBase::new(IP_DATA_KEY_NAME).with_reader(LookupReader {
-                manager,
                 results: Mutex::new(results),
-                readable: Arc::clone(&self.readable),
+                readable: Arc::clone(&loaded.readable),
             }),
         )
     }
@@ -242,7 +238,10 @@ impl IpIntelligenceOnPremiseEngine {
         };
         let manager = Manager::open_with_properties(&path, self.profile, property_refs.as_deref())?;
         let evidence_keys = DataFileEvidenceKeys::whitelist(&manager);
-        self.manager.store(manager);
+        self.loaded.store(Arc::new(LoadedDataSet::new(
+            manager,
+            &self.populated_property_names,
+        )));
         self.evidence_key_filter.keys.store(Arc::new(evidence_keys));
         Ok(())
     }
@@ -353,27 +352,53 @@ fn build_aspect_metadata(names: &[String], tier: &str) -> Vec<AspectPropertyMeta
         .collect()
 }
 
-/// The properties a lookup can read, found by lowercase name.
+/// A loaded data set, with the populated properties it carries.
+struct LoadedDataSet {
+    manager: Arc<Manager>,
+    readable: Arc<ReadableNames>,
+}
+
+impl LoadedDataSet {
+    fn new(manager: Arc<Manager>, populated: &[String]) -> Self {
+        let readable = Arc::new(ReadableNames::new(populated, &manager));
+        LoadedDataSet { manager, readable }
+    }
+}
+
+/// The populated properties a data set carries, each with its index in that
+/// data set, found by lowercase name. A property the data file does not carry
+/// has no value, so a lookup never reads it.
 struct ReadableNames {
     /// Each property's name as the engine populates it.
     names: Vec<String>,
     /// Each property's name in lowercase, in the same order.
     lowercase_names: Vec<String>,
+    /// Each property's required property index in the data set.
+    indexes: Vec<c_int>,
     /// The position of each property in `names`, by lowercase name.
     by_name: HashMap<String, usize>,
 }
 
 impl ReadableNames {
-    fn new(names: &[String]) -> Self {
+    fn new(populated: &[String], manager: &Manager) -> Self {
+        let (names, indexes): (Vec<String>, Vec<c_int>) = populated
+            .iter()
+            .filter_map(|name| {
+                manager
+                    .required_property_index(name)
+                    .map(|index| (name.clone(), index))
+            })
+            .unzip();
         let lowercase_names: Vec<String> = names.iter().map(|name| name.to_lowercase()).collect();
         ReadableNames {
-            names: names.to_vec(),
             by_name: lowercase_names
                 .iter()
                 .enumerate()
                 .map(|(position, name)| (name.clone(), position))
                 .collect(),
+            names,
             lowercase_names,
+            indexes,
         }
     }
 }
@@ -381,12 +406,10 @@ impl ReadableNames {
 /// Reads the properties of one lookup from its native results when they are
 /// requested.
 struct LookupReader {
-    /// The data set snapshot the results came from, which the property indexes
-    /// belong to.
-    manager: Arc<Manager>,
     /// The native results. Reading a value writes into them, so each read
     /// holds the lock.
     results: Mutex<Results>,
+    /// The properties of the data set the results came from.
     readable: Arc<ReadableNames>,
 }
 
@@ -405,10 +428,7 @@ impl IpIntelligencePropertyReader for LookupReader {
         data: &mut IpIntelligenceDataBase,
     ) -> std::result::Result<(), String> {
         let name = &self.readable.names[position];
-        // A property the data file does not carry has no index and no value.
-        let Some(index) = self.manager.required_property_index(name) else {
-            return Ok(());
-        };
+        let index = self.readable.indexes[position];
         let results = self.results.lock().unwrap_or_else(PoisonError::into_inner);
         populate_property(data, &results, name, index).map_err(|error| error.to_string())
     }
@@ -634,6 +654,51 @@ mod tests {
     #[test]
     fn data_key_name() {
         assert_eq!(IP_DATA_KEY_NAME, "ip");
+    }
+
+    /// Asserts the reader of the loaded data set covers exactly the populated
+    /// properties the data file carries, each with its index in the data set.
+    fn assert_reader_covers_carried_properties(engine: &IpIntelligenceOnPremiseEngine) {
+        let loaded = engine.loaded.load();
+        let readable = &loaded.readable;
+        for (name, index) in readable.names.iter().zip(&readable.indexes) {
+            assert_eq!(
+                loaded.manager.required_property_index(name),
+                Some(*index),
+                "{name}"
+            );
+        }
+        for name in engine.populated_property_names() {
+            let carried = loaded.manager.required_property_index(name).is_some();
+            assert_eq!(readable.names.contains(name), carried, "{name}");
+        }
+    }
+
+    /// With no properties requested the engine populates the whole typed set,
+    /// and each lookup reads only the part of it the data file carries.
+    #[test]
+    fn reader_covers_only_the_populated_properties_the_file_carries() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no usable IP-intelligence data file; skipping readable properties");
+            return;
+        };
+        let engine = IpIntelligenceOnPremiseEngine::builder(&data_file)
+            .performance_profile(PerformanceProfile::HighPerformance)
+            .auto_update(false)
+            .build()
+            .expect("the IP Intelligence data file should build an engine");
+        assert_reader_covers_carried_properties(&engine);
+    }
+
+    /// With properties requested each lookup reads only those.
+    #[test]
+    fn reader_covers_only_the_requested_properties() {
+        let Some(engine) = asn_engine() else {
+            eprintln!("no usable IP-intelligence data file; skipping requested properties");
+            return;
+        };
+        assert_reader_covers_carried_properties(&engine);
+        assert_eq!(engine.loaded.load().readable.names, ASN_PROPERTIES);
     }
 
     /// The engine accepts the keys its data file defines, ignoring case, in
