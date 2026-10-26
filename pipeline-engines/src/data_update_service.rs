@@ -55,7 +55,7 @@
 //! and a `429` response surfaces the server's `Retry-After` in the error but the
 //! next poll still uses the configured interval rather than that delay.
 
-use std::collections::hash_map::DefaultHasher;
+use std::collections::hash_map::RandomState;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::Path;
@@ -279,30 +279,32 @@ impl DataUpdateService {
                     .unwrap_or_else(|_| Duration::from_secs(0));
                 return Instant::now()
                     + wait
-                    + self.randomisation(data_file.configuration().max_randomisation_seconds);
+                    + Self::randomisation(data_file.configuration().max_randomisation_seconds);
             }
         }
-        Instant::now() + self.poll_interval(data_file)
+        Instant::now() + Self::poll_interval(data_file)
     }
 
-    /// The base polling interval for a file plus randomisation.
-    fn poll_interval(&self, data_file: &AspectEngineDataFile) -> Duration {
+    /// The polling interval for a file plus a random delay of up to its
+    /// maximum randomisation, as each poll waits.
+    fn poll_interval(data_file: &AspectEngineDataFile) -> Duration {
         let config = data_file.configuration();
         Duration::from_secs(config.polling_interval_seconds)
-            + self.randomisation(config.max_randomisation_seconds)
+            + Self::randomisation(config.max_randomisation_seconds)
     }
 
-    /// A pseudo-random extra delay between zero and `max_seconds`.
+    /// A random delay between zero and `max_seconds`, so instances that start
+    /// together poll at different times.
     ///
-    /// A hash of the current time seeds the choice, which is enough to stagger
-    /// many instances without pulling in a random-number-generator dependency.
-    fn randomisation(&self, max_seconds: u64) -> Duration {
+    /// Each `RandomState` has its own keys, which the standard library draws
+    /// from the operating system, so the delay differs between calls and
+    /// between processes without a random number generator dependency.
+    fn randomisation(max_seconds: u64) -> Duration {
         if max_seconds == 0 {
             return Duration::from_secs(0);
         }
-        let mut hasher = DefaultHasher::new();
-        Instant::now().elapsed().as_nanos().hash(&mut hasher);
-        std::thread::current().id().hash(&mut hasher);
+        let mut hasher = std::hash::BuildHasher::build_hasher(&RandomState::new());
+        std::time::SystemTime::now().hash(&mut hasher);
         Duration::from_secs(hasher.finish() % max_seconds)
     }
 
@@ -513,12 +515,7 @@ impl ServiceHandle {
                 // Poll now. A failure is logged, and the next interval retries.
                 let result = self.check_for_update_from_url(&registration);
                 log_poll(&registration, result);
-                let interval = Duration::from_secs(
-                    registration
-                        .data_file
-                        .configuration()
-                        .polling_interval_seconds,
-                );
+                let interval = DataUpdateService::poll_interval(&registration.data_file);
                 let next = now + interval;
                 *registration
                     .next_poll
