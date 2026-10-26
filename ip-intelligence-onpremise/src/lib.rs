@@ -79,6 +79,8 @@
 //! # fn main() -> fiftyone_pipeline_core::Result<()> {
 //! let engine = IpIntelligenceOnPremiseEngine::builder("51Degrees-IPIV4AsnIpiV41.ipi")
 //!     .performance_profile(PerformanceProfile::HighPerformance)
+//!     // Off because the free ASN file has no licence key for updates.
+//!     .auto_update(false)
 //!     .build()?;
 //!
 //! let pipeline = Pipeline::builder().add_element(Arc::new(engine)).build()?;
@@ -102,7 +104,7 @@
 mod builder;
 mod engine;
 
-pub use builder::IpIntelligenceOnPremiseEngineBuilder;
+pub use builder::{IpIntelligenceOnPremiseEngineBuilder, DATA_DOWNLOAD_TYPE};
 #[allow(deprecated)]
 pub use engine::IP_EVIDENCE_KEYS;
 pub use engine::{IpIntelligenceOnPremiseEngine, DEFAULT_DATA_SOURCE_TIER};

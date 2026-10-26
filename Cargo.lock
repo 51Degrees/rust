@@ -757,6 +757,7 @@ dependencies = [
  "fiftyone-native",
  "fiftyone-pipeline-core",
  "fiftyone-pipeline-engines",
+ "fiftyone-pipeline-engines-fiftyone",
 ]
 
 [[package]]
@@ -852,6 +853,7 @@ dependencies = [
  "fiftyone-caching",
  "fiftyone-pipeline-core",
  "flate2",
+ "log",
  "md-5",
  "notify",
  "reqwest",
@@ -864,10 +866,13 @@ name = "fiftyone-pipeline-engines-fiftyone"
 version = "4.5.2"
 dependencies = [
  "ahash",
+ "fastrand",
+ "fiftyone-caching",
  "fiftyone-pipeline-core",
  "fiftyone-pipeline-engines",
  "fiftyone-pipeline-engines-fiftyone",
  "flate2",
+ "log",
  "quick-xml",
  "reqwest",
  "thiserror 2.0.18",
