@@ -523,12 +523,20 @@ impl Results {
     /// Run a detection from a 51Degrees device id. Returns the number of valid
     /// profiles parsed from the id.
     pub fn process_device_id(&mut self, device_id: &str) -> Result<i32> {
+        // The native parser reads each profile id up to the first byte that
+        // is not a digit, whatever the length it is given, so the id is
+        // passed as a null terminated copy. A Rust string slice is not null
+        // terminated, and digits just past it would join the last profile id.
+        let device_id_c = CString::new(device_id).map_err(|_| Error::Native {
+            status: String::from("InvalidInput"),
+            message: String::from("device id contains an interior nul byte"),
+        })?;
         let mut exception = sys::Exception::cleared();
-        // Safety: the device id bytes are valid for the duration of the call.
+        // Safety: `device_id_c` is null terminated and valid for the call.
         let profiles = unsafe {
             sys::fiftyoneDegreesResultsHashFromDeviceId(
                 self.as_ptr(),
-                device_id.as_ptr() as *const c_char,
+                device_id_c.as_ptr(),
                 device_id.len(),
                 &mut exception,
             )
@@ -1016,6 +1024,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A device id read from a slice ends where the slice ends, however the
+    /// bytes after it in memory read.
+    #[test]
+    fn a_device_id_ends_where_its_slice_ends() {
+        let Some(path) = data_file() else {
+            eprintln!("no Hash data file found; skipping device id slices");
+            return;
+        };
+        let manager = Manager::open(&path, PerformanceProfile::Default).expect("data file loads");
+        let detected = detect(&manager, "header.user-agent", CHROME_ON_WINDOWS);
+        let device_id = detected
+            .device_id()
+            .expect("the device id reads")
+            .expect("a detection has a device id");
+        let profiles = device_id.split('-').filter(|id| *id != "0").count() as i32;
+
+        // Digits straight after the slice, as a larger buffer holding the id
+        // can have.
+        let held = format!("{device_id}5-1");
+        let mut results = manager.create_results().expect("results allocate");
+        let found = results
+            .process_device_id(&held[..device_id.len()])
+            .expect("the device id is processed");
+        assert_eq!(found, profiles, "{device_id}");
+        assert_eq!(
+            results.device_id().expect("the device id reads"),
+            Some(device_id)
+        );
     }
 
     #[test]
