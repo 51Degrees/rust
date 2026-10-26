@@ -28,6 +28,7 @@
 //! populate) into the flow data under
 //! [`DEVICE_DATA_KEY`](fiftyone_device_detection_shared::DEVICE_DATA_KEY).
 
+use std::ffi::CStr;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -55,6 +56,9 @@ use fiftyone_pipeline_engines::{
 /// splits back out if needed.
 const VALUE_SEPARATOR: &str = "|";
 
+/// [`VALUE_SEPARATOR`] as the C string the native reader takes.
+const NATIVE_VALUE_SEPARATOR: &CStr = c"|";
+
 /// The data-source tier reported when the native tier could not be read from the
 /// data set. The Lite data file is the free tier, so this is the safe default
 /// for a freely distributed engine.
@@ -64,10 +68,11 @@ const DEFAULT_DATA_SOURCE_TIER: &str = "Lite";
 /// data file's own properties. Each is read from the native results just like a
 /// data-file property and carries the value type used to store it.
 ///
-/// `DeviceId` and `Method` are strings; the remaining metrics are integers. They
-/// are advertised so a caller enumerating [`AspectEngine::aspect_properties`]
-/// sees them, and so the typed match-metric accessors on
-/// [`fiftyone_device_detection_shared::DeviceData`] resolve.
+/// `DeviceId` and `Method` are strings, `UserAgents` is a list of strings and
+/// the remaining metrics are integers. They are advertised so a caller
+/// enumerating [`AspectEngine::aspect_properties`] sees them, and so the typed
+/// match-metric accessors on [`fiftyone_device_detection_shared::DeviceData`]
+/// resolve.
 const METRIC_PROPERTIES: &[(&str, PropertyValueType, &str)] = &[
     (
         "MatchedNodes",
@@ -100,8 +105,13 @@ const METRIC_PROPERTIES: &[(&str, PropertyValueType, &str)] = &[
     (
         "Method",
         PropertyValueType::String,
-        "The method used to determine the match result, for example Exact or \
-         Performance.",
+        "The method used to determine the match result: NONE, PERFORMANCE, \
+         COMBINED or PREDICTIVE.",
+    ),
+    (
+        "UserAgents",
+        PropertyValueType::StringList,
+        "The matched User-Agents.",
     ),
 ];
 
@@ -251,10 +261,16 @@ impl DeviceDetectionOnPremiseEngine {
 
         // Read each available property as a string and store it, converting to
         // the natural value type so the typed accessors (is_mobile, screen
-        // dimensions, the integer match metrics) read back correctly.
+        // dimensions, the integer match metrics) read back correctly. Each is
+        // read by its index in the snapshot taken above, so a refresh between
+        // detections cannot pair an index with another data set. The match
+        // metrics have no index and are read further down.
         for meta in &self.aspect_properties {
             let name = meta.name();
-            match results.value_as_string(name, VALUE_SEPARATOR)? {
+            let Some(index) = manager.required_property_index(name) else {
+                continue;
+            };
+            match results.value_as_string_by_index(index, NATIVE_VALUE_SEPARATOR)? {
                 Some(raw) => {
                     let raw = if name.eq_ignore_ascii_case(JAVASCRIPT_HARDWARE_PROFILE) {
                         wrap_hardware_profile(raw)
@@ -308,6 +324,10 @@ impl DeviceDetectionOnPremiseEngine {
                 PropertyValue::String(metrics.method_name().to_owned()),
             );
         }
+        device.insert(
+            "UserAgents",
+            PropertyValue::StringList(results.matched_user_agents()),
+        );
 
         Ok(())
     }
@@ -641,6 +661,12 @@ impl EvidenceKeyFilter for HashEvidenceKeyFilter {
             .order(key)
             .or_else(|| Self::is_client_side_value(key).then_some(0))
     }
+
+    /// The named keys alone. The client-side values are accepted by pattern
+    /// and are query keys, which the list is not used for.
+    fn named_keys(&self) -> Option<Vec<String>> {
+        self.named.load().named_keys()
+    }
 }
 
 /// The evidence keys the engine accepts by name for `manager`'s data set, being
@@ -724,6 +750,11 @@ mod tests {
                 "iPhone 15".to_owned()
             ]))
         );
+    }
+
+    #[test]
+    fn the_native_separator_is_the_value_separator() {
+        assert_eq!(NATIVE_VALUE_SEPARATOR.to_str(), Ok(VALUE_SEPARATOR));
     }
 
     #[test]

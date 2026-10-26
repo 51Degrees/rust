@@ -27,6 +27,7 @@
 //! [`IpIntelligenceDataBase`] with the weighted results. See the crate-level
 //! documentation for the design rationale.
 
+use std::os::raw::c_int;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
@@ -197,9 +198,16 @@ impl IpIntelligenceOnPremiseEngine {
         let mut results = manager.create_results()?;
         results.process_evidence(data.evidence())?;
 
+        // Each property is read by its index in the data set snapshot taken
+        // above, so a refresh between lookups cannot pair an index with another
+        // data set. A property the data file does not carry has no index and is
+        // left unset.
         let mut ip_data = IpIntelligenceDataBase::new(IP_DATA_KEY_NAME);
         for name in &self.populated_property_names {
-            populate_property(&mut ip_data, &results, name)?;
+            let Some(index) = manager.required_property_index(name) else {
+                continue;
+            };
+            populate_property(&mut ip_data, &results, name, index)?;
         }
         Ok(ip_data)
     }
@@ -264,6 +272,10 @@ impl EvidenceKeyFilter for DataFileEvidenceKeys {
 
     fn order(&self, key: &str) -> Option<i32> {
         self.keys.load().order(key)
+    }
+
+    fn named_keys(&self) -> Option<Vec<String>> {
+        self.keys.load().named_keys()
     }
 }
 
@@ -354,6 +366,7 @@ fn populate_property(
     ip_data: &mut IpIntelligenceDataBase,
     results: &Results,
     name: &str,
+    index: c_int,
 ) -> Result<()> {
     let declared = declared_property_value_type(name);
 
@@ -363,7 +376,7 @@ fn populate_property(
     // native value type alone would misclassify them as plain). The declared
     // metadata type is the source of truth for weighted-ness.
     if declared == Some(WEIGHTED_PROPERTY_VALUE_TYPE) {
-        let pairs = results.values_weighted(name)?;
+        let pairs = results.values_weighted_by_index(index)?;
         if !pairs.is_empty() {
             let values = pairs
                 .into_iter()
@@ -374,7 +387,7 @@ fn populate_property(
         return Ok(());
     }
 
-    match results.read_property(name)? {
+    match results.read_property_by_index(index)? {
         PropertyRead::Absent => {}
         PropertyRead::Weighted(pairs) => {
             let values = pairs
@@ -545,6 +558,8 @@ mod tests {
         let engine = IpIntelligenceOnPremiseEngine::builder(&data_file)
             .performance_profile(PerformanceProfile::HighPerformance)
             .properties(ASN_PROPERTIES.iter().copied())
+            // Off so the build needs no licence key.
+            .auto_update(false)
             .build()
             .unwrap_or_else(|err| {
                 panic!("the ASN IP Intelligence data file should build an engine: {err}")

@@ -370,6 +370,26 @@ fn client_hints_sent_as_query_values_are_used() {
     assert_eq!(version, "11.0");
 }
 
+/// The match method is written as the specification names it, and the matched
+/// User-Agents are written as a list.
+#[test]
+fn method_and_user_agents_are_written() {
+    let Some(engine) = build_engine() else {
+        eprintln!("no Lite Hash data file found; skipping match metrics test");
+        return;
+    };
+    let device = detect(engine, DESKTOP_USER_AGENT);
+    let method = device.method();
+    let method = method.value().expect("Method should have a value");
+    assert!(
+        ["NONE", "PERFORMANCE", "COMBINED", "PREDICTIVE"].contains(&method.as_str()),
+        "{method}"
+    );
+    let user_agents = device.user_agents();
+    let user_agents = user_agents.value().expect("UserAgents should have a value");
+    assert!(!user_agents.is_empty());
+}
+
 #[test]
 fn paid_tier_data_resolves_hardware_vendor() {
     // Uses whatever `51DEGREES_DD_PATH` points at (or the bundled Lite file as a
