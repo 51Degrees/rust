@@ -31,13 +31,54 @@
 //! update service touches them from background threads while the owning engine
 //! reads them on the request path.
 
+use std::fmt::Debug;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
+use fiftyone_pipeline_core::{Error, Result};
 
 /// The default polling interval, 30 minutes.
 pub const DEFAULT_POLLING_INTERVAL_SECONDS: u64 = 30 * 60;
+
+/// The 51Degrees Distributor's download endpoint, the update URL the 51Degrees
+/// engines use unless another is configured.
+pub const DISTRIBUTOR_URL: &str = "https://distributor.51degrees.com/api/v2/download";
+
+/// Adds query parameters to a data file's update URL before each request.
+///
+/// The update service asks the formatter for the URL it requests, so a
+/// download service that needs the licence key or the file type in the query
+/// string gets them without the configured URL carrying them. A static URL
+/// that serves a file needs no formatter.
+pub trait DataUpdateUrlFormatter: Debug + Send + Sync {
+    /// The URL to request for `data_file`, built from its configured update URL.
+    fn format_url(&self, data_file: &AspectEngineDataFile) -> String;
+}
+
+/// The formatter for the 51Degrees Distributor.
+///
+/// Appends `LicenseKeys`, with the configured keys separated by `|`,
+/// `Download=True`, and `Type` with the data file's download type, as the .NET
+/// and Java implementations do.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FiftyOneUrlFormatter;
+
+impl DataUpdateUrlFormatter for FiftyOneUrlFormatter {
+    fn format_url(&self, data_file: &AspectEngineDataFile) -> String {
+        let config = data_file.configuration();
+        let url = config.data_update_url.as_deref().unwrap_or_default();
+        let mut formatted = format!(
+            "{url}?LicenseKeys={}&Download=True",
+            config.data_update_license_keys.join("|")
+        );
+        if let Some(download_type) = &config.data_download_type {
+            formatted.push_str("&Type=");
+            formatted.push_str(download_type);
+        }
+        formatted
+    }
+}
 
 /// The default maximum polling randomisation, 10 minutes.
 pub const DEFAULT_MAX_RANDOMISATION_SECONDS: u64 = 10 * 60;
@@ -49,8 +90,9 @@ pub const DEFAULT_IDENTIFIER: &str = "Default";
 ///
 /// Build one with [`DataFileConfiguration::builder`]. The defaults are that
 /// automatic updates and the file-system watcher are on, MD5 verification and
-/// the `If-Modified-Since` header are on, update-on-startup is off, and the
-/// content is assumed gzip-compressed.
+/// the `If-Modified-Since` header are on, update-on-startup is off, the
+/// content is assumed gzip-compressed, and a licence key is required before
+/// automatic updates or update on startup run.
 #[derive(Debug, Clone)]
 pub struct DataFileConfiguration {
     /// Identifier used to tell apart the data files of a multi-file engine.
@@ -84,10 +126,18 @@ pub struct DataFileConfiguration {
     /// Whether the poll request carries an `If-Modified-Since` header so the
     /// server can answer `304 Not Modified` when nothing is newer.
     pub verify_modified_since: bool,
-    /// License keys appended to the update URL by a URL formatter. The keys are
-    /// stored but this crate does not format the URL itself; that is the
-    /// engine's responsibility through its update URL.
+    /// License keys the URL formatter adds to the update URL.
     pub data_update_license_keys: Vec<String>,
+    /// The formatter that turns [`Self::data_update_url`] into the URL each poll
+    /// requests. `None` requests the URL as configured.
+    pub url_formatter: Option<Arc<dyn DataUpdateUrlFormatter>>,
+    /// The download type the URL formatter sends, which names the data file
+    /// format the Distributor should serve, such as `HashV41` or `IPIV41`.
+    pub data_download_type: Option<String>,
+    /// Whether an engine refuses to build with automatic updates or update on
+    /// startup on and no licence key, as the Distributor serves nothing
+    /// without one. On unless the update source needs no key.
+    pub license_key_required_for_updates: bool,
 }
 
 impl DataFileConfiguration {
@@ -100,6 +150,43 @@ impl DataFileConfiguration {
     /// disk).
     pub fn memory_builder() -> DataFileConfigurationBuilder {
         DataFileConfigurationBuilder::new(None)
+    }
+
+    /// Checks that the licence key the update source needs is set.
+    ///
+    /// Fails when [`Self::license_key_required_for_updates`] is on, automatic
+    /// updates or update on startup are on, and no key is set or every key is
+    /// blank. The engine builders call this before they open the data file,
+    /// as .NET does, so a deployment without a key fails at startup instead
+    /// of being refused at every poll.
+    pub fn check_license_keys(&self) -> Result<()> {
+        if !self.license_key_required_for_updates {
+            return Ok(());
+        }
+        let wanted: Vec<&str> = [
+            (self.automatic_updates_enabled, "automatic updates"),
+            (self.update_on_startup, "update on startup"),
+        ]
+        .into_iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, name)| name)
+        .collect();
+        let has_key = self
+            .data_update_license_keys
+            .iter()
+            .any(|key| !key.trim().is_empty());
+        if wanted.is_empty() || has_key {
+            return Ok(());
+        }
+        Err(Error::configuration(format!(
+            "A licence key is needed for {} and none is set. Set it with \
+             data_update_license_keys, or turn the updates off, with auto_update(false) \
+             and update_on_startup(false) on a pipeline or engine builder or with \
+             automatic_updates_enabled(false) and update_on_startup(false) on a data \
+             file configuration, for a data file no licence serves, such as the free \
+             Lite file.",
+            wanted.join(" and ")
+        )))
     }
 }
 
@@ -125,6 +212,9 @@ impl DataFileConfigurationBuilder {
                 verify_md5: true,
                 verify_modified_since: true,
                 data_update_license_keys: Vec::new(),
+                url_formatter: None,
+                data_download_type: None,
+                license_key_required_for_updates: true,
             },
         }
     }
@@ -189,13 +279,34 @@ impl DataFileConfigurationBuilder {
         self
     }
 
-    /// Set the license keys recorded for the update URL.
+    /// Set the license keys the URL formatter adds to the update URL.
     pub fn data_update_license_keys<I, S>(mut self, keys: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
         self.config.data_update_license_keys = keys.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Set the formatter that builds the URL each poll requests, or `None` to
+    /// request the configured URL as it is.
+    pub fn url_formatter(mut self, formatter: Option<Arc<dyn DataUpdateUrlFormatter>>) -> Self {
+        self.config.url_formatter = formatter;
+        self
+    }
+
+    /// Set the download type the URL formatter sends.
+    pub fn data_download_type(mut self, download_type: impl Into<String>) -> Self {
+        self.config.data_download_type = Some(download_type.into());
+        self
+    }
+
+    /// Set whether an engine refuses to build with automatic updates or update
+    /// on startup on and no licence key. On by default. Turn it off for an
+    /// update source that serves the file without one.
+    pub fn license_key_required_for_updates(mut self, required: bool) -> Self {
+        self.config.license_key_required_for_updates = required;
         self
     }
 
@@ -262,6 +373,21 @@ impl AspectEngineDataFile {
     /// The remote update URL, if configured.
     pub fn data_update_url(&self) -> Option<&str> {
         self.configuration.data_update_url.as_deref()
+    }
+
+    /// The URL a poll requests: the configured update URL as the configured
+    /// formatter rewrites it, or as it is when there is no formatter. `None`
+    /// when no update URL is configured.
+    pub fn formatted_update_url(&self) -> Option<String> {
+        self.data_update_url()?;
+        Some(match &self.configuration.url_formatter {
+            Some(formatter) => formatter.format_url(self),
+            None => self
+                .configuration
+                .data_update_url
+                .clone()
+                .unwrap_or_default(),
+        })
     }
 
     /// Whether automatic remote updates are enabled for this file.
@@ -337,10 +463,56 @@ mod tests {
         assert!(cfg.decompress_content);
         assert!(cfg.verify_md5);
         assert!(cfg.verify_modified_since);
+        assert!(cfg.license_key_required_for_updates);
         assert_eq!(
             cfg.data_file_path.as_deref(),
             Some(std::path::Path::new("data.dat"))
         );
+    }
+
+    /// A licence key is required once automatic updates or update on startup
+    /// are on, a blank key counts as none, and a source that needs no key or a
+    /// configuration with both off passes.
+    #[test]
+    fn a_licence_key_is_required_for_updates() {
+        let missing = DataFileConfiguration::builder("d.dat")
+            .build()
+            .check_license_keys()
+            .expect_err("automatic updates need a key")
+            .to_string();
+        assert!(missing.contains("automatic updates"), "{missing}");
+        assert!(missing.contains("auto_update(false)"), "{missing}");
+
+        assert!(DataFileConfiguration::builder("d.dat")
+            .data_update_license_keys([" "])
+            .build()
+            .check_license_keys()
+            .is_err());
+
+        let startup = DataFileConfiguration::builder("d.dat")
+            .automatic_updates_enabled(false)
+            .update_on_startup(true)
+            .build()
+            .check_license_keys()
+            .expect_err("update on startup needs a key")
+            .to_string();
+        assert!(startup.contains("update on startup"), "{startup}");
+
+        assert!(DataFileConfiguration::builder("d.dat")
+            .data_update_license_keys(["KEY1"])
+            .build()
+            .check_license_keys()
+            .is_ok());
+        assert!(DataFileConfiguration::builder("d.dat")
+            .license_key_required_for_updates(false)
+            .build()
+            .check_license_keys()
+            .is_ok());
+        assert!(DataFileConfiguration::builder("d.dat")
+            .automatic_updates_enabled(false)
+            .build()
+            .check_license_keys()
+            .is_ok());
     }
 
     #[test]
@@ -362,6 +534,63 @@ mod tests {
         assert_eq!(cfg.polling_interval_seconds, 60);
         assert!(!cfg.verify_md5);
         assert_eq!(cfg.data_update_license_keys, ["KEY1", "KEY2"]);
+        assert!(cfg.url_formatter.is_none());
+        assert!(cfg.data_download_type.is_none());
+    }
+
+    /// The Distributor formatter writes the licence keys, the download flag
+    /// and the type as the .NET and Java formatters do.
+    #[test]
+    fn fiftyone_formatter_writes_the_distributor_query() {
+        let file = AspectEngineDataFile::new(
+            DataFileConfiguration::builder("d.dat")
+                .data_update_url(DISTRIBUTOR_URL)
+                .data_update_license_keys(["KEY1", "KEY2"])
+                .data_download_type("HashV41")
+                .url_formatter(Some(Arc::new(FiftyOneUrlFormatter)))
+                .build(),
+        );
+        assert_eq!(
+            file.formatted_update_url().as_deref(),
+            Some(
+                "https://distributor.51degrees.com/api/v2/download\
+                 ?LicenseKeys=KEY1|KEY2&Download=True&Type=HashV41"
+            )
+        );
+    }
+
+    /// Without keys or a type the parameters are still present, as .NET writes
+    /// them, so the Distributor answers with its own refusal.
+    #[test]
+    fn fiftyone_formatter_without_keys_or_type() {
+        let file = AspectEngineDataFile::new(
+            DataFileConfiguration::builder("d.dat")
+                .data_update_url("https://example.invalid/d")
+                .url_formatter(Some(Arc::new(FiftyOneUrlFormatter)))
+                .build(),
+        );
+        assert_eq!(
+            file.formatted_update_url().as_deref(),
+            Some("https://example.invalid/d?LicenseKeys=&Download=True")
+        );
+    }
+
+    /// With no formatter the configured URL is requested as it is, and with
+    /// no URL nothing is.
+    #[test]
+    fn no_formatter_requests_the_configured_url() {
+        let file = AspectEngineDataFile::new(
+            DataFileConfiguration::builder("d.dat")
+                .data_update_url("https://example.invalid/file.hash")
+                .data_update_license_keys(["KEY1"])
+                .build(),
+        );
+        assert_eq!(
+            file.formatted_update_url().as_deref(),
+            Some("https://example.invalid/file.hash")
+        );
+        let none = AspectEngineDataFile::new(DataFileConfiguration::builder("d.dat").build());
+        assert!(none.formatted_update_url().is_none());
     }
 
     #[test]

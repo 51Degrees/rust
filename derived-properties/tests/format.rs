@@ -556,6 +556,50 @@ fn every_fault_in_a_script_is_reported_together() {
     assert_eq!(faults.faults()[1].path, "Rules[0].When");
 }
 
+#[test]
+fn an_element_key_may_carry_single_hyphens() {
+    let script = compile(
+        "Checks:\n\
+         \x20 Signed: { Property: 'agent-signature.AgentSignature', Eq: Verified }\n\
+         Rules:\n\
+         \x20 - When: { Check: Signed }\n\
+         \x20   Then: signed\n\
+         \x20 - Else: unsigned\n",
+    );
+    let source = MapSource::new().with("agent-signature.AgentSignature", text("Verified"));
+    assert_eq!(value_of(&script, &source), "signed");
+    let source = MapSource::new().with("agent-signature.AgentSignature", text("Absent"));
+    assert_eq!(value_of(&script, &source), "unsigned");
+}
+
+#[test]
+fn a_malformed_element_key_is_not_a_source_property() {
+    for property in [
+        "-agent.Signature",
+        "agent-.Signature",
+        "agent--signature.Signature",
+        "agent.Sig-nature",
+        "agent-signature",
+    ] {
+        let faults = refuse(&format!(
+            "Checks:\n\
+             \x20 First: {{ Property: '{property}', Eq: true }}\n\
+             Rules:\n\
+             \x20 - When: {{ Check: First }}\n\
+             \x20   Then: yes\n\
+             \x20 - Else: no\n"
+        ));
+        assert!(
+            faults
+                .faults()
+                .iter()
+                .any(|fault| fault.path == "Checks.First.Property"
+                    && fault.message.contains("is not a source property")),
+            "'{property}' was not refused as a source property:\n{faults}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------
 // Output, the property definition.
 // ---------------------------------------------------------------------
