@@ -319,6 +319,15 @@ pub trait EvidenceKeyFilter: Send + Sync {
             None
         }
     }
+
+    /// The keys this filter names, lowercased, when it has a list of them,
+    /// so a caller can advertise them or name the headers among them in a
+    /// `Vary` header. `None` when the filter decides key by key and has no
+    /// list. A filter that lists its keys may still accept further keys by
+    /// pattern, as the Device Detection engine accepts any `query.51d_` value.
+    fn named_keys(&self) -> Option<Vec<String>> {
+        None
+    }
 }
 
 /// An [`EvidenceKeyFilter`] that includes only the keys present in a fixed
@@ -377,6 +386,10 @@ impl EvidenceKeyFilter for EvidenceKeyFilterWhitelist {
     fn order(&self, key: &str) -> Option<i32> {
         ci_get(&self.inclusion, key).copied()
     }
+
+    fn named_keys(&self) -> Option<Vec<String>> {
+        Some(self.inclusion.keys().cloned().collect())
+    }
 }
 
 /// An [`EvidenceKeyFilter`] that aggregates several child filters with a
@@ -412,5 +425,18 @@ impl EvidenceKeyFilter for EvidenceKeyFilterAggregator {
 
     fn order(&self, key: &str) -> Option<i32> {
         self.filters.iter().find_map(|f| f.order(key))
+    }
+
+    /// The union of the children's named keys, or `None` when any child has
+    /// no list, because a union missing one child's keys would misname what
+    /// the aggregate accepts.
+    fn named_keys(&self) -> Option<Vec<String>> {
+        let mut keys = Vec::new();
+        for filter in &self.filters {
+            keys.extend(filter.named_keys()?);
+        }
+        keys.sort();
+        keys.dedup();
+        Some(keys)
     }
 }

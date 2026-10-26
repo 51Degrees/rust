@@ -100,4 +100,14 @@ pub trait FlowElement: Send + Sync {
     fn is_concurrent(&self) -> bool {
         false
     }
+
+    /// The fully qualified name of the element's type, for example
+    /// `fiftyone_pipeline_engines_fiftyone::share_usage_element::ShareUsageElement`.
+    ///
+    /// Usage sharing reports it for each element in the pipeline. The default
+    /// is the implementing type's name, so an element only overrides this when
+    /// it wraps another and should report the inner type.
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
 }

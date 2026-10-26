@@ -91,8 +91,9 @@ pub use aspect_engine::{
 pub use aspect_property_metadata::AspectPropertyMetaData;
 pub use aspect_property_value::{AspectPropertyValue, DEFAULT_NO_VALUE_MESSAGE};
 pub use data_file::{
-    AspectEngineDataFile, DataFileConfiguration, DataFileConfigurationBuilder, DEFAULT_IDENTIFIER,
-    DEFAULT_MAX_RANDOMISATION_SECONDS, DEFAULT_POLLING_INTERVAL_SECONDS,
+    AspectEngineDataFile, DataFileConfiguration, DataFileConfigurationBuilder,
+    DataUpdateUrlFormatter, FiftyOneUrlFormatter, DEFAULT_IDENTIFIER,
+    DEFAULT_MAX_RANDOMISATION_SECONDS, DEFAULT_POLLING_INTERVAL_SECONDS, DISTRIBUTOR_URL,
 };
 #[cfg(feature = "data-update")]
 pub use data_update_service::DataUpdateService;
