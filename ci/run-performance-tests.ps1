@@ -72,16 +72,17 @@ foreach ($example in $performanceExamples) {
     Remove-Item -Path $example.Results -Force -ErrorAction SilentlyContinue
 }
 
-# The example crates live in their own workspace under examples/.
-Push-Location (Join-Path $RepoName "examples")
-try {
+# The examples depend on the published crates. ci/test-examples-against-source.ps1
+# points them at this checkout for the run and puts the manifests and the lock
+# back afterwards, so the figures are for the code being tested and not for the
+# last release. The closure carries the list above into that script.
+$runExamples = {
     foreach ($example in $performanceExamples) {
         Write-Host "Running performance example '$($example.Bin)'..."
         cargo run --release --config source.toml -p $example.Package --bin $example.Bin -- --json-output $example.Results
     }
-} finally {
-    Pop-Location
-}
+}.GetNewClosure()
+& (Join-Path $PSScriptRoot "test-examples-against-source.ps1") -Command $runExamples
 
 foreach ($example in $performanceExamples) {
     & $publishStep -SourceFile $example.Results -Name $example.Name -RepoName $RepoName -SummaryDir $OutputDir

@@ -8,7 +8,8 @@ The examples depend on the published crates, and examples/source.toml patches
 each one to its path in this tree. Cargo uses a patch only when its version is
 the one it would pick, so this first writes a version above every published
 release into the crates, then moves each patched crate in the examples' lock to
-the copy in this tree, then checks the lock and runs the tests.
+the copy in this tree, then checks the lock and runs the command, which by
+default builds and tests every example.
 
 The manifests and the lock are put back as they were when the script ends, so a
 run leaves the working tree unchanged.
@@ -20,10 +21,16 @@ such as 4.5.9 after 4.5.8.
 
 .PARAMETER Root
 The workspace root. Defaults to the repository this script sits in.
+
+.PARAMETER Command
+What to run in examples/ while the crates point at this tree. Each cargo
+command in it needs `--config source.toml`. ci/run-performance-tests.ps1 passes
+the performance examples here, so the nightly figures are for this tree.
 #>
 param (
     [string]$Version,
-    [string]$Root = (Join-Path $PSScriptRoot "..")
+    [string]$Root = (Join-Path $PSScriptRoot ".."),
+    [scriptblock]$Command = { cargo test --config source.toml }
 )
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
@@ -41,7 +48,7 @@ if (-not $Version) {
     }
     $Version = "$($released.Major).$($released.Minor).$($released.Build + 1)"
 }
-Write-Output "Testing the examples against this tree's crates at $Version."
+Write-Output "Running the examples against this tree's crates at $Version."
 
 $examples = Join-Path $Root "examples"
 $patched = Get-Content -Path (Join-Path $examples "source.toml") |
@@ -94,7 +101,7 @@ try {
         throw "These crates still come from crates.io, not this tree:`n$($fromRegistry -join "`n")"
     }
 
-    cargo test --config source.toml
+    & $Command
 } finally {
     Pop-Location
     foreach ($path in $originals.Keys) {
