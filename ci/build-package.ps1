@@ -51,8 +51,9 @@ try {
     Pop-Location
 }
 
+$target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "$repo/target" }
 foreach ($crate in $crates) {
-    Copy-Item -Path "$repo/target/package/$crate-$Version.crate" -Destination $package
+    Copy-Item -Path "$target/package/$crate-$Version.crate" -Destination $package
 }
 git -C $repo rev-parse HEAD | Set-Content -Path (Join-Path $package "commit.txt") -NoNewline
 Write-Output "Packaged $($crates.Count) crates at $Version from $(Get-Content -Raw (Join-Path $package "commit.txt"))."
