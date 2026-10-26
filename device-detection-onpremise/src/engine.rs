@@ -661,6 +661,12 @@ impl EvidenceKeyFilter for HashEvidenceKeyFilter {
             .order(key)
             .or_else(|| Self::is_client_side_value(key).then_some(0))
     }
+
+    /// The named keys alone. The client-side values are accepted by pattern
+    /// and are query keys, which the list is not used for.
+    fn named_keys(&self) -> Option<Vec<String>> {
+        self.named.load().named_keys()
+    }
 }
 
 /// The evidence keys the engine accepts by name for `manager`'s data set, being
