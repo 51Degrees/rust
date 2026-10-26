@@ -223,9 +223,11 @@ impl IpIntelligenceCloudEngine {
     /// Read the upstream cloud JSON, slice out the `ip` aspect and build the
     /// element data from it.
     ///
-    /// Returns an [`Error::PipelineConfiguration`] when there is no cloud JSON,
-    /// which almost always means no [`CloudRequestEngine`] ran before this
-    /// engine.
+    /// Returns an [`Error::PipelineConfiguration`] when there is no cloud
+    /// request data, which means no [`CloudRequestEngine`] ran before this
+    /// engine. A request engine that ran and failed has already recorded its
+    /// own error and left no response, so that gives empty data rather than a
+    /// second error.
     fn build_data(&self, data: &FlowData) -> Result<IpIntelligenceDataBase> {
         let cloud = data.get(CloudRequestEngine::DATA_KEY).ok_or_else(|| {
             Error::configuration(
@@ -236,14 +238,10 @@ impl IpIntelligenceCloudEngine {
             )
         })?;
 
-        let json = cloud.json_response().ok_or_else(|| {
-            Error::configuration(
-                "The cloud request engine returned no JSON response, so the \
-                 IP-intelligence cloud engine has nothing to parse.",
-            )
-        })?;
-
-        self.parse_json(json)
+        match cloud.json_response() {
+            Some(json) if !json.is_empty() => self.parse_json(json),
+            _ => Ok(IpIntelligenceDataBase::new(IP_DATA_KEY_NAME)),
+        }
     }
 
     /// Parse a full cloud response body into the element data, slicing out the
@@ -647,6 +645,49 @@ mod tests {
             offenders.is_empty(),
             "cloud values not unpackable as their declared type:\n{}",
             offenders.join("\n")
+        );
+    }
+
+    #[test]
+    fn a_failed_cloud_request_is_not_reported_as_a_configuration_error() {
+        // The request engine records its own error when its call fails and
+        // leaves no response. Nothing in the configuration is wrong, so this
+        // engine adds no error of its own, as the device engine adds none.
+        use fiftyone_pipeline_core::{Evidence, Pipeline};
+        let request_engine = request_engine();
+        let ip_engine = IpIntelligenceCloudEngine::builder()
+            .cloud_request_engine(request_engine.clone())
+            .build()
+            .unwrap();
+        let pipeline = Pipeline::builder()
+            .add_element(request_engine)
+            .add_element(Arc::new(ip_engine))
+            .suppress_process_exceptions(true)
+            .build()
+            .unwrap();
+        let mut data = pipeline.create_flow_data_with(
+            Evidence::builder()
+                .add("query.client-ip-51d", "185.28.167.78")
+                .build(),
+        );
+        data.process().unwrap();
+
+        let reported: Vec<String> = data
+            .errors()
+            .iter()
+            .map(|error| format!("{}: {}", error.element_data_key, error.source))
+            .collect();
+        assert_eq!(
+            reported.len(),
+            1,
+            "only the request engine's own failure is reported, got {reported:?}"
+        );
+        assert!(
+            !data
+                .errors()
+                .iter()
+                .any(|error| matches!(error.source, Error::PipelineConfiguration { .. })),
+            "a failed cloud request was reported as a configuration error: {reported:?}"
         );
     }
 }
