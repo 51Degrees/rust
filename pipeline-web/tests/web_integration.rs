@@ -650,3 +650,31 @@ fn apply_set_headers_case_insensitive_match() {
     );
     assert_eq!(existing[0].1, "Sec-CH-UA, Sec-CH-UA-Mobile");
 }
+
+// ----------------------------------------------------------------------------
+// Vary lists every header an element names, not only a fixed set.
+// ----------------------------------------------------------------------------
+
+#[test]
+fn vary_lists_a_header_only_the_element_knows() {
+    let element = TestElement {
+        filter: EvidenceKeyFilterWhitelist::new([
+            "header.user-agent",
+            "header.x-forwarded-for",
+            "query.client-ip",
+        ]),
+        properties: Vec::new(),
+        fail: false,
+    };
+    let web = WebPipeline::build(vec![Arc::new(element)], WebIntegrationOptions::default())
+        .expect("web pipeline builds");
+    assert!(web.vary_whitelist().include("header.x-forwarded-for"));
+    assert!(!web.vary_whitelist().include("query.client-ip"));
+
+    let data = processed(web.pipeline(), Evidence::default());
+    let options = EndpointOptions::new(web.vary_whitelist().clone());
+    let response = serve_json(&data, &TestRequest::default(), &options);
+    let vary = response.header("Vary").unwrap();
+    assert!(vary.split(',').any(|h| h == "x-forwarded-for"), "{vary}");
+    assert!(vary.split(',').any(|h| h == "user-agent"), "{vary}");
+}
