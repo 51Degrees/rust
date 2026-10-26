@@ -314,6 +314,15 @@ fn set_headers_does_not_cache_an_empty_scan() {
 /// Start a local HTTP server that records the decompressed body of every POST
 /// it receives, replying 200. Returns the bound URL and the shared sink.
 fn start_capture_server() -> (String, Arc<Mutex<Vec<String>>>, Arc<AtomicUsize>) {
+    start_capture_server_answering(200, "")
+}
+
+/// Start a local HTTP server that records the decompressed body of every POST
+/// it receives and answers each with `status` and `content`.
+fn start_capture_server_answering(
+    status: u16,
+    content: &'static str,
+) -> (String, Arc<Mutex<Vec<String>>>, Arc<AtomicUsize>) {
     let server = Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
     let url = format!("http://{}/new.ashx", server.server_addr());
     let bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -335,7 +344,7 @@ fn start_capture_server() -> (String, Arc<Mutex<Vec<String>>>, Arc<AtomicUsize>)
             }
             count_thread.fetch_add(1, Ordering::SeqCst);
 
-            let response = tiny_http::Response::from_string("");
+            let response = tiny_http::Response::from_string(content).with_status_code(status);
             let _ = request.respond(response);
         }
     });
@@ -439,6 +448,73 @@ fn share_usage_deduplicates_identical_requests() {
         total_devices, 1,
         "expected exactly one shared device, got {total_devices}"
     );
+}
+
+/// Log records from every test in this binary, as "LEVEL message".
+static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Keeps every log record in [`LOGGED`].
+struct TestLogger;
+
+impl log::Log for TestLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        LOGGED
+            .lock()
+            .unwrap()
+            .push(format!("{} {}", record.level(), record.args()));
+    }
+
+    fn flush(&self) {}
+}
+
+static LOGGER: TestLogger = TestLogger;
+
+/// Send log records to [`LOGGED`]. Safe to call from every test.
+fn capture_logs() {
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log::LevelFilter::Debug);
+}
+
+#[test]
+fn share_usage_counts_only_a_200_as_success_and_logs_the_answer() {
+    capture_logs();
+    for (status, content) in [(201, "created"), (500, "server busy")] {
+        let (url, _bodies, request_count) = start_capture_server_answering(status, content);
+        let share = Arc::new(ShareUsageElement::new(
+            ShareUsageConfig::builder()
+                .share_usage_url(url.clone())
+                .minimum_entries_per_message(1)
+                .build(),
+        ));
+        let pipeline = Pipeline::builder()
+            .add_element(Arc::clone(&share) as Arc<dyn FlowElement>)
+            .build()
+            .unwrap();
+        let evidence = Evidence::builder()
+            .add("header.user-agent", format!("agent-{status}"))
+            .build();
+        pipeline.create_flow_data_with(evidence).process().unwrap();
+
+        wait_until(Duration::from_secs(5), || {
+            share.fail_count() + share.success_count() > 0
+        });
+        assert_eq!(request_count.load(Ordering::SeqCst), 1);
+        assert_eq!(share.success_count(), 0, "{status} is not a success");
+        assert_eq!(share.fail_count(), 1);
+
+        let logged = LOGGED.lock().unwrap().join("\n");
+        assert!(
+            logged.lines().any(|line| line.starts_with("WARN")
+                && line.contains(&url)
+                && line.contains(&status.to_string())
+                && line.contains(content)),
+            "the warning names the endpoint, the status and the content:\n{logged}"
+        );
+    }
 }
 
 /// Poll `condition` until it returns true or the timeout elapses.

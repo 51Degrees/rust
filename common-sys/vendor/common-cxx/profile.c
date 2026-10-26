@@ -203,9 +203,12 @@ static uint32_t iterateValues(
         // Check the address validity, before dereferencing to prevent 
 		// potential memory fault on dereference.
         valIndexPtr < maxValIndexPtr &&
-		// Check that the value index could relate to the property. Saves 
+		// Check that the value index could relate to the property. Saves
 		// having to retrieve the value item if it will never relate to the
-		// property.
+		// property. Both ends of the property's range are checked, because a
+		// starting position that is wrong for the property would otherwise
+		// return the values of an earlier property of the profile.
+        *valIndexPtr >= property->firstValueIndex &&
         *valIndexPtr <= property->lastValueIndex &&
 		EXCEPTION_OKAY) {
 
@@ -505,6 +508,9 @@ uint32_t fiftyoneDegreesProfileIterateValuesForPropertyWithIndex(
 		index,
 		profile->profileId,
 		availablePropertyIndex);
+	// FIFTYONE_DEGREES_INDICES_NO_VALUE is never less than the value count,
+	// so a profile with no value for the property returns no values here.
+	// iterateValues also refuses a starting value outside the property.
 	if (i < profile->valueCount) {
 		uint32_t* firstValueIndex = (uint32_t*)(profile + 1) + i;
 		return iterateValues(

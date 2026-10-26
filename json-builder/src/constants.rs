@@ -81,16 +81,18 @@ pub const EVIDENCE_PROPERTIES_SUFFIX: &str = "evidenceproperties";
 ///
 /// These elements either serialize the result themselves (the JSON and
 /// JavaScript builders), exist only as a transport detail (the cloud request
-/// engine response), or perform a side effect rather than producing data the
-/// client needs (set-headers and usage-sharing). The full set of internal
-/// elements suppressed is `cloud-response`, `javascript`, `json-builder`,
-/// `set-headers` and `usage-sharing`. Matching is case-insensitive.
+/// engine, whose data holds the raw cloud response), or perform a side effect
+/// rather than producing data the client needs (set-headers and usage
+/// sharing). Each is named by its own crate's data key. Matching is
+/// case-insensitive.
 pub const DEFAULT_ELEMENT_EXCLUSION_LIST: &[&str] = &[
-    "cloud-response",
-    "javascript",
-    "json-builder",
-    "set-headers",
-    "usage-sharing",
+    fiftyone_cloud_request_engine::ELEMENT_DATA_KEY,
+    // The JavaScript builder depends on this crate, so its key is written out
+    // here, and the JavaScript builder's tests check that it matches.
+    "javascriptbuilderelement",
+    JSON_BUILDER_ELEMENT_DATA_KEY,
+    fiftyone_pipeline_engines_fiftyone::constants::SET_HEADERS_DEFAULT_ELEMENT_DATA_KEY,
+    fiftyone_pipeline_engines_fiftyone::constants::SHARE_USAGE_DEFAULT_ELEMENT_DATA_KEY,
 ];
 
 /// The property names excluded from the JSON output by default.

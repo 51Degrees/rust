@@ -60,14 +60,17 @@ pub struct ExampleOptions {
 /// warnings (Lite tier, more-than-30-days-old) so a limited or stale data file is
 /// surfaced rather than silently degrading results.
 pub fn run(options: ExampleOptions) -> Result<()> {
-    // Build the on-premise pipeline. No ShareUsageElement is added: usage sharing
-    // is forbidden for console examples and required only for web examples. A
-    // production deployment should enable it with `.share_usage(true)`. Likewise
-    // automatic data-file updates are off here; see the update-data-file example.
+    // Build the on-premise pipeline. Usage sharing is off because this is a
+    // console example, whose evidence 51Degrees already holds. In normal
+    // operation leave it on, which is the builder's default. Automatic
+    // data-file updates are off too, so no licence key is needed; see the
+    // update-data-file example for them.
     let pipeline = DeviceDetectionPipelineBuilder::on_premise(&options.data_file)
         // The low-memory profile streams data from disk on demand. It is enough
         // for this example; see the performance example for the trade-offs.
         .performance_profile(options.profile)
+        .share_usage(false)
+        .auto_update(false)
         .build()
         .context("failed to build the on-premise device-detection pipeline")?;
 
@@ -240,7 +243,7 @@ mod tests {
  * The example builds an on-premise pipeline from a Hash data file with the
  * convenience `DeviceDetectionPipelineBuilder::on_premise(data_file)`. The builder
  * places an optional UA-CH high-entropy decoder before the native Hash engine,
- * with usage sharing off. The pipeline is built once and reused as a factory for
+ * with usage sharing turned off. The pipeline is built once and reused as a factory for
  * many `FlowData` instances, which is the recommended lifecycle: one long-lived
  * pipeline (often a process-wide singleton) and a short-lived flow data per
  * request.
@@ -269,10 +272,9 @@ mod tests {
  * The Enterprise file (with automatic daily updates) is described on the
  * 51Degrees pricing page.
  *
- * Usage sharing is intentionally not enabled here. Console examples must not add
- * the `ShareUsageElement`. A production web deployment should enable usage sharing
- * (call `.share_usage(true)` on the builder) to contribute anonymous usage data,
- * which improves detection for everyone.
+ * Usage sharing is turned off with `.share_usage(false)`, because this is a
+ * console example. In normal operation leave it on, which is the builder's
+ * default, so 51Degrees receives evidence that improves detection.
  *
  * The data file is read from the first command-line argument, the
  * `51DEGREES_DD_PATH` environment variable, or the Lite Hash file shipped in the

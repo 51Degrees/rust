@@ -45,7 +45,7 @@ static uint32_t fiftyoneDegreesGetFinalByteArraySize(
 #	ifdef _MSC_VER
     UNREFERENCED_PARAMETER(exception);
 #	endif
-    return (uint32_t)(sizeof(int16_t) + (*(int16_t*)initial));
+    return (uint32_t)(sizeof(uint16_t) + (*(uint16_t*)initial));
 }
 #else
 #define fiftyoneDegreesGetFinalByteArraySize NULL
