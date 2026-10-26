@@ -574,6 +574,24 @@ fn errors_propagate_when_not_suppressed() {
 }
 
 #[test]
+fn the_returned_error_names_the_element_and_the_cause() {
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(FailingElement::new()))
+        .build()
+        .unwrap();
+    let shown = pipeline
+        .create_flow_data()
+        .process()
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        shown,
+        "1 error(s) occurred during pipeline processing (error in element 'failing': \
+         pipeline configuration error: deliberate failure)"
+    );
+}
+
+#[test]
 fn errors_are_collected_and_ok_returned_when_suppressed() {
     let log = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = Pipeline::builder()
