@@ -196,6 +196,34 @@ fn element_ordering_matches_spec() {
 }
 
 #[test]
+fn a_sequence_element_among_the_elements_is_not_added_again() {
+    let web = WebPipeline::build(
+        vec![
+            Arc::new(fiftyone_pipeline_engines_fiftyone::SequenceElement::new()),
+            Arc::new(TestElement::new(false)),
+        ],
+        WebIntegrationOptions::default(),
+    )
+    .expect("web pipeline builds");
+    let keys: Vec<&str> = web
+        .pipeline()
+        .flow_elements()
+        .iter()
+        .map(|e| e.data_key())
+        .collect();
+    assert_eq!(
+        keys,
+        vec![
+            "sequence",
+            "device",
+            "set-headers",
+            "json-builder",
+            "javascriptbuilderelement",
+        ]
+    );
+}
+
+#[test]
 fn element_ordering_without_client_side_drops_builders() {
     let options = WebIntegrationOptions {
         client_side_evidence_enabled: false,
@@ -621,4 +649,32 @@ fn apply_set_headers_case_insensitive_match() {
         "should match existing case-insensitively"
     );
     assert_eq!(existing[0].1, "Sec-CH-UA, Sec-CH-UA-Mobile");
+}
+
+// ----------------------------------------------------------------------------
+// Vary lists every header an element names, not only a fixed set.
+// ----------------------------------------------------------------------------
+
+#[test]
+fn vary_lists_a_header_only_the_element_knows() {
+    let element = TestElement {
+        filter: EvidenceKeyFilterWhitelist::new([
+            "header.user-agent",
+            "header.x-forwarded-for",
+            "query.client-ip",
+        ]),
+        properties: Vec::new(),
+        fail: false,
+    };
+    let web = WebPipeline::build(vec![Arc::new(element)], WebIntegrationOptions::default())
+        .expect("web pipeline builds");
+    assert!(web.vary_whitelist().include("header.x-forwarded-for"));
+    assert!(!web.vary_whitelist().include("query.client-ip"));
+
+    let data = processed(web.pipeline(), Evidence::default());
+    let options = EndpointOptions::new(web.vary_whitelist().clone());
+    let response = serve_json(&data, &TestRequest::default(), &options);
+    let vary = response.header("Vary").unwrap();
+    assert!(vary.split(',').any(|h| h == "x-forwarded-for"), "{vary}");
+    assert!(vary.split(',').any(|h| h == "user-agent"), "{vary}");
 }

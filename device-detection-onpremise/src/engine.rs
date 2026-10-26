@@ -28,6 +28,7 @@
 //! populate) into the flow data under
 //! [`DEVICE_DATA_KEY`](fiftyone_device_detection_shared::DEVICE_DATA_KEY).
 
+use std::ffi::CStr;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -55,6 +56,9 @@ use fiftyone_pipeline_engines::{
 /// splits back out if needed.
 const VALUE_SEPARATOR: &str = "|";
 
+/// [`VALUE_SEPARATOR`] as the C string the native reader takes.
+const NATIVE_VALUE_SEPARATOR: &CStr = c"|";
+
 /// The data-source tier reported when the native tier could not be read from the
 /// data set. The Lite data file is the free tier, so this is the safe default
 /// for a freely distributed engine.
@@ -64,10 +68,11 @@ const DEFAULT_DATA_SOURCE_TIER: &str = "Lite";
 /// data file's own properties. Each is read from the native results just like a
 /// data-file property and carries the value type used to store it.
 ///
-/// `DeviceId` and `Method` are strings; the remaining metrics are integers. They
-/// are advertised so a caller enumerating [`AspectEngine::aspect_properties`]
-/// sees them, and so the typed match-metric accessors on
-/// [`fiftyone_device_detection_shared::DeviceData`] resolve.
+/// `DeviceId` and `Method` are strings, `UserAgents` is a list of strings and
+/// the remaining metrics are integers. They are advertised so a caller
+/// enumerating [`AspectEngine::aspect_properties`] sees them, and so the typed
+/// match-metric accessors on [`fiftyone_device_detection_shared::DeviceData`]
+/// resolve.
 const METRIC_PROPERTIES: &[(&str, PropertyValueType, &str)] = &[
     (
         "MatchedNodes",
@@ -100,8 +105,13 @@ const METRIC_PROPERTIES: &[(&str, PropertyValueType, &str)] = &[
     (
         "Method",
         PropertyValueType::String,
-        "The method used to determine the match result, for example Exact or \
-         Performance.",
+        "The method used to determine the match result: NONE, PERFORMANCE, \
+         COMBINED or PREDICTIVE.",
+    ),
+    (
+        "UserAgents",
+        PropertyValueType::StringList,
+        "The matched User-Agents.",
     ),
 ];
 
@@ -148,7 +158,7 @@ pub struct DeviceDetectionOnPremiseEngine {
     /// Aspect property metadata for [`AspectEngine::aspect_properties`].
     aspect_properties: Vec<AspectPropertyMetaData>,
 
-    /// The evidence keys this engine reads.
+    /// The evidence keys this engine reads, replaced on refresh.
     evidence_key_filter: HashEvidenceKeyFilter,
 
     /// The data-source tier, for example `Lite`.
@@ -185,7 +195,7 @@ impl DeviceDetectionOnPremiseEngine {
             .unwrap_or_else(|| DEFAULT_DATA_SOURCE_TIER.to_owned());
         let (properties, aspect_properties) =
             build_property_metadata(&manager, &Some(data_source_tier.clone()));
-        let evidence_key_filter = build_evidence_key_filter();
+        let evidence_key_filter = HashEvidenceKeyFilter::new(named_evidence_keys(&manager));
 
         let data_file = Arc::new(AspectEngineDataFile::new(data_file_config));
         // Record the publish time from the data file on disk, the best signal
@@ -211,6 +221,14 @@ impl DeviceDetectionOnPremiseEngine {
     /// The performance profile the engine loads its data file with.
     pub fn performance_profile(&self) -> PerformanceProfile {
         self.profile
+    }
+
+    /// The evidence keys the engine accepts by name, lowercased, being each
+    /// header the loaded data file reads as a `header.` and a `query.` key, and
+    /// the high-entropy values keys. The engine also accepts any `query.51d_`
+    /// or `cookie.51d_` value, which the client-side JavaScript sends back.
+    pub fn evidence_keys(&self) -> Vec<String> {
+        named_evidence_keys(&self.manager.load())
     }
 
     /// The names of the available (required) properties in the loaded data set,
@@ -243,10 +261,16 @@ impl DeviceDetectionOnPremiseEngine {
 
         // Read each available property as a string and store it, converting to
         // the natural value type so the typed accessors (is_mobile, screen
-        // dimensions, the integer match metrics) read back correctly.
+        // dimensions, the integer match metrics) read back correctly. Each is
+        // read by its index in the snapshot taken above, so a refresh between
+        // detections cannot pair an index with another data set. The match
+        // metrics have no index and are read further down.
         for meta in &self.aspect_properties {
             let name = meta.name();
-            match results.value_as_string(name, VALUE_SEPARATOR)? {
+            let Some(index) = manager.required_property_index(name) else {
+                continue;
+            };
+            match results.value_as_string_by_index(index, NATIVE_VALUE_SEPARATOR)? {
                 Some(raw) => {
                     let raw = if name.eq_ignore_ascii_case(JAVASCRIPT_HARDWARE_PROFILE) {
                         wrap_hardware_profile(raw)
@@ -300,6 +324,10 @@ impl DeviceDetectionOnPremiseEngine {
                 PropertyValue::String(metrics.method_name().to_owned()),
             );
         }
+        device.insert(
+            "UserAgents",
+            PropertyValue::StringList(results.matched_user_agents()),
+        );
 
         Ok(())
     }
@@ -355,6 +383,8 @@ impl DeviceDetectionOnPremiseEngine {
             &self.requested_properties,
             self.concurrency,
         )?;
+        self.evidence_key_filter
+            .replace(named_evidence_keys(&manager));
         self.manager.store(manager);
 
         // Refresh the recorded publish time from the new file.
@@ -581,21 +611,31 @@ fn wrap_hardware_profile(body: String) -> String {
 
 /// The evidence key filter for the Hash engine.
 ///
-/// It accepts the fixed device-detection set from
-/// [`build_evidence_key_filter`], and also any query or cookie value whose
-/// name starts with `51d_`. Those are the values the client-side JavaScript
-/// sends back, being a property override such as
-/// `query.51d_screenpixelswidth` or the `query.51d_profileids` profile ids.
-/// The native engine applies them itself, and ignores a `51d_` name it does not
-/// know, so they are passed through by prefix rather than listed one by one.
-/// Without them the screen size and other values the browser reports never
-/// reach the engine.
-#[derive(Debug, Clone)]
+/// It accepts the keys [`named_evidence_keys`] lists for the loaded data set,
+/// and also any query or cookie value whose name starts with `51d_`. Those are
+/// the values the client-side JavaScript sends back, being a property override
+/// such as `query.51d_screenpixelswidth` or the `query.51d_profileids` profile
+/// ids. The native engine applies them itself, and ignores a `51d_` name it
+/// does not know, so they are passed through by prefix rather than listed one
+/// by one. Without them the screen size and other values the browser reports
+/// never reach the engine. A refresh replaces the named keys, because a new
+/// data file can read different headers.
 struct HashEvidenceKeyFilter {
-    fixed: EvidenceKeyFilterWhitelist,
+    named: ArcSwap<EvidenceKeyFilterWhitelist>,
 }
 
 impl HashEvidenceKeyFilter {
+    fn new(keys: Vec<String>) -> Self {
+        HashEvidenceKeyFilter {
+            named: ArcSwap::from_pointee(EvidenceKeyFilterWhitelist::new(keys)),
+        }
+    }
+
+    fn replace(&self, keys: Vec<String>) {
+        self.named
+            .store(Arc::new(EvidenceKeyFilterWhitelist::new(keys)));
+    }
+
     /// True when the key is `query.51d_*` or `cookie.51d_*`, ignoring case.
     fn is_client_side_value(key: &str) -> bool {
         let Some((prefix, field)) = key.split_once(constants::EVIDENCE_SEPARATOR) else {
@@ -612,57 +652,32 @@ impl HashEvidenceKeyFilter {
 
 impl EvidenceKeyFilter for HashEvidenceKeyFilter {
     fn include(&self, key: &str) -> bool {
-        self.fixed.include(key) || Self::is_client_side_value(key)
+        self.named.load().include(key) || Self::is_client_side_value(key)
     }
 
     fn order(&self, key: &str) -> Option<i32> {
-        self.fixed
+        self.named
+            .load()
             .order(key)
             .or_else(|| Self::is_client_side_value(key).then_some(0))
     }
+
+    /// The named keys alone. The client-side values are accepted by pattern
+    /// and are query keys, which the list is not used for.
+    fn named_keys(&self) -> Option<Vec<String>> {
+        self.named.load().named_keys()
+    }
 }
 
-/// The fixed part of the evidence key filter for the engine.
-///
-/// The native data set's own evidence keys are not surfaced through the safe
-/// wrapper, so this is the standard device-detection set: the User-Agent
-/// (as a header or a query value for off-line processing), the User-Agent Client
-/// Hint `sec-ch-ua*` headers, and the high-entropy blob keys the
-/// [`UachJsConversionElement`] consumes. [`HashEvidenceKeyFilter`] adds the
-/// client-side `51d_` values to it.
-fn build_evidence_key_filter() -> HashEvidenceKeyFilter {
-    let mut keys: Vec<String> = Vec::new();
-
-    // User-Agent, as a request header and as an off-line query value.
-    keys.push(constants::EVIDENCE_HEADER_USER_AGENT_KEY.to_owned());
-    keys.push(constants::EVIDENCE_QUERY_USER_AGENT_KEY.to_owned());
-
-    // The User-Agent Client Hint request headers the engine understands.
-    for hint in [
-        "sec-ch-ua",
-        "sec-ch-ua-full-version-list",
-        "sec-ch-ua-model",
-        "sec-ch-ua-mobile",
-        "sec-ch-ua-platform",
-        "sec-ch-ua-platform-version",
-        "sec-ch-ua-arch",
-        "sec-ch-ua-bitness",
-    ] {
-        keys.push(format!(
-            "{}{}{}",
-            constants::EVIDENCE_HTTP_HEADER_PREFIX,
-            constants::EVIDENCE_SEPARATOR,
-            hint
-        ));
-    }
-
-    // The decoder's high-entropy blob, under either prefix.
+/// The evidence keys the engine accepts by name for `manager`'s data set, being
+/// each header the data set reads as a `header.` and a `query.` key (see
+/// [`Manager::evidence_keys`]), and the high-entropy values keys the
+/// [`UachJsConversionElement`] consumes.
+fn named_evidence_keys(manager: &Manager) -> Vec<String> {
+    let mut keys = manager.evidence_keys();
     keys.push(UACH_EVIDENCE_QUERY_KEY.to_owned());
     keys.push(UACH_EVIDENCE_COOKIE_KEY.to_owned());
-
-    HashEvidenceKeyFilter {
-        fixed: EvidenceKeyFilterWhitelist::new(keys),
-    }
+    keys
 }
 
 /// Read the publish time of the data file from its filesystem modified time.
@@ -738,6 +753,11 @@ mod tests {
     }
 
     #[test]
+    fn the_native_separator_is_the_value_separator() {
+        assert_eq!(NATIVE_VALUE_SEPARATOR.to_str(), Ok(VALUE_SEPARATOR));
+    }
+
+    #[test]
     fn known_property_types_are_coerced() {
         assert_eq!(known_property_type("IsMobile"), PropertyValueType::Bool);
         assert_eq!(known_property_type("ismobile"), PropertyValueType::Bool);
@@ -757,16 +777,13 @@ mod tests {
     }
 
     #[test]
-    fn evidence_filter_covers_user_agent_and_client_hints() {
-        let filter = build_evidence_key_filter();
-        assert!(filter.include("header.user-agent"));
-        assert!(filter.include("query.user-agent"));
-        assert!(filter.include("header.sec-ch-ua-mobile"));
-        assert!(filter.include("header.sec-ch-ua-platform"));
-        assert!(filter.include(UACH_EVIDENCE_QUERY_KEY));
-        assert!(filter.include(UACH_EVIDENCE_COOKIE_KEY));
-        // An unrelated header is not part of the device-detection evidence.
-        assert!(!filter.include("header.referer"));
+    fn evidence_filter_takes_the_keys_it_is_given_and_replaces_them() {
+        let filter = HashEvidenceKeyFilter::new(vec![String::from("header.user-agent")]);
+        assert!(filter.include("Header.User-Agent"));
+        assert!(!filter.include("header.x-operamini-phone-ua"));
+        filter.replace(vec![String::from("header.x-operamini-phone-ua")]);
+        assert!(filter.include("header.x-operamini-phone-ua"));
+        assert!(!filter.include("header.user-agent"));
     }
 
     #[test]
@@ -784,7 +801,7 @@ mod tests {
     fn evidence_filter_passes_client_side_values() {
         // The values the client-side JavaScript sends back reach the engine,
         // whether posted as query values or kept in cookies.
-        let filter = build_evidence_key_filter();
+        let filter = HashEvidenceKeyFilter::new(Vec::new());
         assert!(filter.include("query.51d_screenpixelswidth"));
         assert!(filter.include("query.51D_ProfileIds"));
         assert!(filter.include("cookie.51d_screenpixelsheight"));

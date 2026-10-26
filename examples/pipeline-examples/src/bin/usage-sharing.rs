@@ -122,8 +122,9 @@ impl Default for UsageSharingOptions {
             // production application usually keeps the small specification
             // default.
             share_percentage: 1.0,
-            // Batch generously so a short-lived example does not send anything;
-            // the queue simply fills and is discarded at shutdown.
+            // Batch generously, so a short run sends one message, when the
+            // pipeline is dropped at the end of `run` and the element sends what
+            // it holds.
             minimum_entries_per_message: 1000,
             maximum_queue_size: 10_000,
             share_usage_url: defaults.share_usage_url().to_owned(),
@@ -151,10 +152,11 @@ impl UsageSharingOptions {
 /// Run the example: build a pipeline whose usage-sharing element is configured
 /// from the supplied options, process a request and report what was shared.
 ///
-/// Usage sharing sends a small, anonymised sample of the evidence a pipeline
-/// processes back to 51Degrees, which is what keeps the data files accurate over
-/// time. It runs on a background thread and batches its sends, so it never
-/// delays a request.
+/// Usage sharing sends a sample of the evidence a pipeline processes back to
+/// 51Degrees, which is what keeps the data files accurate over time. It runs on
+/// a background thread and batches its sends, so it never delays a request. The
+/// pipeline is dropped when `run` returns, and the element then sends what it
+/// holds.
 pub fn run(options: &UsageSharingOptions) -> Result<()> {
     // Build the usage-sharing element from the application's options.
     let share_usage = Arc::new(ShareUsageElement::new(options.to_config()));
@@ -209,11 +211,62 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
 
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+
+    /// Start a local endpoint that answers 200 to each request and passes on the
+    /// request line, so a test sees what the example sends without reaching
+    /// 51Degrees.
+    fn local_endpoint() -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a local port binds");
+        let url = format!(
+            "http://{}/new.ashx",
+            listener.local_addr().expect("the port is known")
+        );
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
+                let mut request_line = String::new();
+                let _ = reader.read_line(&mut request_line);
+                let mut length = 0;
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = sender.send(request_line.trim_end().to_owned());
+            }
+        });
+        (url, receiver)
+    }
+
     #[test]
     fn runs_with_default_options() {
-        // The default options batch generously, so this processes one request
-        // without ever touching the network.
-        run(&UsageSharingOptions::default()).expect("the usage-sharing example should run");
+        // The element sends what it holds when the pipeline is dropped at the
+        // end of run, so the test points it at a local endpoint and checks the
+        // message arrives there rather than at 51Degrees.
+        let (url, requests) = local_endpoint();
+        let options = UsageSharingOptions {
+            share_usage_url: url,
+            ..UsageSharingOptions::default()
+        };
+        run(&options).expect("the usage-sharing example should run");
+        let request = requests
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the message reaches the local endpoint");
+        assert!(request.starts_with("POST /new.ashx "), "{request}");
     }
 
     #[test]
@@ -230,9 +283,9 @@ mod tests {
  *
  * This example builds a pipeline that shares a sample of its usage with
  * 51Degrees, configured from an application options structure. Usage sharing is
- * how the 51Degrees data files stay accurate: a small, anonymised sample of the
- * evidence a pipeline processes is sent back, so newly seen devices and networks
- * are picked up quickly.
+ * how the 51Degrees data files stay accurate: a sample of the evidence a
+ * pipeline processes is sent back, so newly seen devices and networks are picked
+ * up quickly.
  *
  * What it shows
  * -------------
@@ -258,9 +311,9 @@ mod tests {
  *
  * A note on the example defaults
  * ------------------------------
- * The example sets a very large batch size so a short run accumulates entries
- * without sending them, which keeps the example self-contained and offline.
- * Production code keeps the specification defaults.
+ * The example sets a very large batch size, so a short run sends one message,
+ * when it ends and the element sends what it holds. Production code keeps the
+ * specification defaults.
  *
  * Console vs web
  * --------------

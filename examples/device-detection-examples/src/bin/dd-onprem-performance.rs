@@ -118,7 +118,8 @@ pub fn run(options: ExampleOptions) -> Result<()> {
 
     // Build the benchmark pipeline. Requesting a single property keeps detection
     // as fast as possible, which is what a throughput benchmark wants to measure.
-    // No ShareUsageElement is added (usage sharing is off for console examples).
+    // Usage sharing is off because this is a console example. In normal
+    // operation leave it on, which is the builder's default.
     // The InMemory profile loads the whole data set into memory for the fastest
     // detections. See the performance options documentation at the bottom for the
     // trade-offs between the profiles.
@@ -189,6 +190,9 @@ fn build_benchmark_pipeline(
         // Request only IsMobile so detection resolves a single component, the
         // fastest realistic configuration for a throughput benchmark.
         .property("IsMobile")
+        .share_usage(false)
+        // Off so no licence key is needed.
+        .auto_update(false)
         .build()
         .context("failed to build the benchmark pipeline")
 }
@@ -471,9 +475,9 @@ mod tests {
  * optimizer cannot elide the work being measured. Per-detection errors are
  * ignored so a single odd record cannot abort the run.
  *
- * Usage sharing is intentionally not enabled. Console examples must not add the
- * `ShareUsageElement`. A production web deployment should enable usage sharing
- * with `.share_usage(true)`.
+ * Usage sharing is turned off with `.share_usage(false)`, because this is a
+ * console example. In normal operation leave it on, which is the builder's
+ * default, so 51Degrees receives evidence that improves detection.
  *
  * The data and User-Agent files are read from the first two command-line
  * arguments, the `51DEGREES_DD_PATH` environment variable, or the files shipped
