@@ -111,10 +111,8 @@ pub const SHARE_USAGE_DEFAULT_MAX_QUEUE_SIZE: usize = 1000;
 /// The default timeout in milliseconds used when adding to the queue.
 pub const SHARE_USAGE_DEFAULT_ADD_TIMEOUT_MS: u64 = 5;
 
-/// The default take timeout in milliseconds, from the specification. The
-/// usage-sharing element accepts a take timeout but does not need one, as
-/// [`ShareUsageConfigBuilder::take_timeout`](crate::ShareUsageConfigBuilder::take_timeout)
-/// explains.
+/// The default take timeout in milliseconds, how long the usage-sharing
+/// element waits for another entry once a message holds the minimum entries.
 pub const SHARE_USAGE_DEFAULT_TAKE_TIMEOUT_MS: u64 = 100;
 
 /// The default repeat-evidence interval in minutes (the sliding-window size).
