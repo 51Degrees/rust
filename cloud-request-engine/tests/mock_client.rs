@@ -1068,3 +1068,88 @@ fn evidence_named_values_does_not_displace_the_engines_property_list() {
     assert_eq!(values.len(), 1, "one property list, got {values:?}");
     assert_eq!(values[0], "device.ismobile", "the engine's list wins");
 }
+
+/// A fake transport that answers each data request with the `user-agent` field
+/// it was sent, so a test can tell which request a response was made for.
+#[derive(Default)]
+struct EchoClient {
+    data_requests: Mutex<usize>,
+}
+
+impl CloudHttpClient for EchoClient {
+    fn send(&self, request: &CloudHttpRequest) -> Result<CloudHttpResponse, String> {
+        *self.data_requests.lock().unwrap() += 1;
+        let user_agent = request
+            .form
+            .iter()
+            .find(|(name, _)| name == "user-agent")
+            .map(|(_, value)| value.clone())
+            .unwrap_or_default();
+        FakeClient::ok(&serde_json::json!({ "device": { "useragent": user_agent } }).to_string())
+    }
+}
+
+#[test]
+fn evidence_that_differs_never_shares_a_cache_entry() {
+    // The web integration decodes the query string, so a query value can hold
+    // a line break followed by text shaped like another evidence field. That
+    // request must not be given the cache key of a visitor whose evidence
+    // really holds both values, or one is served the answer made for the other.
+    let client = Arc::new(EchoClient::default());
+    let state = CloudEngineState {
+        evidence_keys: [
+            "header.user-agent",
+            "query.user-agent",
+            "header.x-device-user-agent",
+        ]
+        .into_iter()
+        .map(|key| EvidenceKeyEntry {
+            key: key.to_owned(),
+            order: 0,
+        })
+        .collect(),
+        accessible_properties: LicensedProducts::default(),
+    };
+    let engine = CloudRequestEngine::builder()
+        .resource_key("rk")
+        .http_client(client.clone())
+        .set_state(state)
+        .cache(Arc::new(RecordingCache::default()))
+        .build()
+        .unwrap();
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .build()
+        .unwrap();
+
+    let mut crafted = pipeline.create_flow_data_with(
+        Evidence::builder()
+            .add("query.user-agent", "Mozilla/5.0\nx-device-user-agent=Other")
+            .build(),
+    );
+    crafted.process().unwrap();
+
+    let mut visitor = pipeline.create_flow_data_with(
+        Evidence::builder()
+            .add("header.user-agent", "Mozilla/5.0")
+            .add("header.x-device-user-agent", "Other")
+            .build(),
+    );
+    visitor.process().unwrap();
+
+    let cloud = visitor.get(CloudRequestEngine::DATA_KEY).unwrap();
+    assert_eq!(
+        cloud.json_response(),
+        Some(r#"{"device":{"useragent":"Mozilla/5.0"}}"#),
+        "the visitor was served the answer made for the other request"
+    );
+    assert!(
+        !cloud.cache_hit(),
+        "the visitor's request is not a cache hit"
+    );
+    assert_eq!(
+        *client.data_requests.lock().unwrap(),
+        2,
+        "each request reached the cloud"
+    );
+}
