@@ -202,7 +202,11 @@ fn each_copy_goes_with_the_data_set_read_from_it() {
     for _ in 0..3 {
         engine.refresh(None).expect("the data file reloads");
     }
-    assert_eq!(copies(), 2, "the copy the early detection reads, and the newest");
+    assert_eq!(
+        copies(),
+        2,
+        "the copy the early detection reads, and the newest"
+    );
     assert_eq!(is_mobile(&early), Some(true));
     drop(early);
     assert_eq!(copies(), 1, "the early detection's copy goes with it");
