@@ -180,14 +180,7 @@ impl Manager {
         properties: Option<&[&str]>,
     ) -> Result<Arc<Manager>> {
         let path = path.as_ref();
-        let path_string = path.to_str().ok_or_else(|| Error::Native {
-            status: String::from("InvalidInput"),
-            message: format!("data file path is not valid UTF-8: {}", path.display()),
-        })?;
-        let path_c = CString::new(path_string).map_err(|_| Error::Native {
-            status: String::from("InvalidInput"),
-            message: String::from("data file path contains an interior nul byte"),
-        })?;
+        let path_c = crate::path::native_path(path)?;
 
         let property_list = properties.map(|names| names.join(","));
         let property_list_c = property_list
