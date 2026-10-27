@@ -90,10 +90,7 @@ impl OnPremiseAspectEngine for CountingEngine {
 
 /// A new, empty folder for one test, holding a data file.
 fn folder(test: &str) -> (PathBuf, PathBuf) {
-    let dir = std::env::temp_dir().join(format!(
-        "fiftyone-watcher-{test}-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("fiftyone-watcher-{test}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("device.dat");
