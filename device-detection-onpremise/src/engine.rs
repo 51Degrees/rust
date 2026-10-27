@@ -30,7 +30,7 @@
 
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arc_swap::ArcSwap;
@@ -180,6 +180,10 @@ pub struct DeviceDetectionOnPremiseEngine {
     /// with the same pool size.
     concurrency: Option<u16>,
 
+    /// The folder a refresh copies the data file into, or `None` for the
+    /// system's temporary folder.
+    temp_dir: Option<PathBuf>,
+
     /// The single data file's run-time state, shared with the update service.
     data_files: Vec<Arc<AspectEngineDataFile>>,
 }
@@ -269,8 +273,16 @@ impl DeviceDetectionOnPremiseEngine {
             refresh_lock: Mutex::new(()),
             evidence_key_filter,
             concurrency,
+            temp_dir: None,
             data_files: vec![data_file],
         }
+    }
+
+    /// Copy the data file into `temp_dir` on refresh, the folder the builder
+    /// copied it into, or the system's temporary folder when `None`.
+    pub(crate) fn with_temp_dir(mut self, temp_dir: Option<PathBuf>) -> Self {
+        self.temp_dir = temp_dir;
+        self
     }
 
     /// The performance profile the engine loads its data file with.
@@ -413,7 +425,12 @@ impl DeviceDetectionOnPremiseEngine {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         let copy = self.data_files.first().and_then(|file| {
-            OperationalCopy::when_needed(path, self.profile, file.configuration())
+            OperationalCopy::when_needed(
+                path,
+                self.temp_dir.as_deref(),
+                self.profile,
+                file.configuration(),
+            )
         });
         let manager = open_manager(
             copy.as_ref().map_or(path, OperationalCopy::path),

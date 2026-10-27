@@ -145,3 +145,41 @@ fn an_update_replaces_the_data_file_under_every_profile() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// The copy is made in the folder the builder names, on build and on each
+/// refresh, and none is left there once the engine is dropped.
+#[test]
+fn the_copy_goes_in_the_folder_the_builder_names() {
+    let Some(asn) = std::env::var("51DEGREES_IPI_PATH")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+    else {
+        eprintln!("skipping operational copies: set 51DEGREES_IPI_PATH to the ASN file");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("fiftyone-ipi-named-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let temp = dir.join("temp");
+    std::fs::create_dir_all(&temp).unwrap();
+    let path = dir.join("51Degrees.ipi");
+    std::fs::copy(&asn, &path).unwrap();
+    let copies = || files_in(&temp).len();
+
+    let engine = IpIntelligenceOnPremiseEngine::builder(&path)
+        .properties(["Asn"])
+        .temp_dir_path(&temp)
+        .auto_update(true)
+        .file_system_watcher(false)
+        .data_update_license_keys(["KEY"])
+        .build()
+        .expect("the data file loads");
+    assert_eq!(copies(), 1, "the copy is in the named folder");
+
+    engine.refresh(None).expect("the data file reloads");
+    assert_eq!(copies(), 1, "the refresh copies into the named folder too");
+
+    drop(engine);
+    assert_eq!(copies(), 0, "no copy outlives the engine");
+    let _ = std::fs::remove_dir_all(&dir);
+}

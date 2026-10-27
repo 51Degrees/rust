@@ -87,15 +87,10 @@ fn serve_once(body: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
     (url, server)
 }
 
-/// An engine with automatic updates on from `url`, which the test polls
-/// itself.
-fn updating_engine(
-    path: &Path,
-    profile: PerformanceProfile,
-    url: String,
-    service: &Arc<DataUpdateService>,
-) -> Arc<DeviceDetectionOnPremiseEngine> {
-    let config = DataFileConfiguration::builder(path)
+/// The data file configuration of automatic updates from `url`, which the
+/// test polls itself.
+fn updating_config(path: &Path, url: String) -> DataFileConfiguration {
+    DataFileConfiguration::builder(path)
         .data_update_url(url)
         .automatic_updates_enabled(true)
         .polling_interval_seconds(24 * 60 * 60)
@@ -104,10 +99,20 @@ fn updating_engine(
         .decompress_content(false)
         .verify_md5(false)
         .license_key_required_for_updates(false)
-        .build();
+        .build()
+}
+
+/// An engine with automatic updates on from `url`, which the test polls
+/// itself.
+fn updating_engine(
+    path: &Path,
+    profile: PerformanceProfile,
+    url: String,
+    service: &Arc<DataUpdateService>,
+) -> Arc<DeviceDetectionOnPremiseEngine> {
     DeviceDetectionOnPremiseEngineBuilder::new(path)
         .performance_profile(profile)
-        .auto_update(config, Some(Arc::clone(service)))
+        .auto_update(updating_config(path, url), Some(Arc::clone(service)))
         .build()
         .expect("the data file loads")
 }
@@ -213,6 +218,37 @@ fn each_copy_goes_with_the_data_set_read_from_it() {
 
     drop(engine);
     drop(service);
+    assert_eq!(copies(), 0, "no copy outlives the engine");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The copy is made in the folder the builder names, on build and on each
+/// refresh, and none is left there once the engine is dropped.
+#[test]
+fn the_copy_goes_in_the_folder_the_builder_names() {
+    let Some(lite) = lite_data_file() else {
+        eprintln!("skipping operational copies: set 51DEGREES_DD_PATH to the Lite file");
+        return;
+    };
+    let (dir, path) = folder_with(&lite, "named", "51Degrees.hash");
+    let temp = dir.join("temp");
+    std::fs::create_dir_all(&temp).unwrap();
+    let copies = || files_in(&temp).len();
+
+    let engine = DeviceDetectionOnPremiseEngineBuilder::new(&path)
+        .temp_dir_path(&temp)
+        .auto_update(
+            updating_config(&path, String::from("http://127.0.0.1:9/unused")),
+            None,
+        )
+        .build()
+        .expect("the data file loads");
+    assert_eq!(copies(), 1, "the copy is in the named folder");
+
+    engine.refresh(None).expect("the data file reloads");
+    assert_eq!(copies(), 1, "the refresh copies into the named folder too");
+
+    drop(engine);
     assert_eq!(copies(), 0, "no copy outlives the engine");
     let _ = std::fs::remove_dir_all(&dir);
 }

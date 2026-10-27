@@ -85,6 +85,7 @@ pub struct IpIntelligenceOnPremiseEngineBuilder {
     polling_interval_seconds: Option<u64>,
     max_randomisation_seconds: Option<u64>,
     data_update_service: Option<Arc<DataUpdateService>>,
+    temp_dir: Option<PathBuf>,
 }
 
 impl IpIntelligenceOnPremiseEngineBuilder {
@@ -111,12 +112,22 @@ impl IpIntelligenceOnPremiseEngineBuilder {
             polling_interval_seconds: None,
             max_randomisation_seconds: None,
             data_update_service: None,
+            temp_dir: None,
         }
     }
 
     /// Set the performance profile the data file is opened with.
     pub fn performance_profile(mut self, profile: PerformanceProfile) -> Self {
         self.profile = profile;
+        self
+    }
+
+    /// Set the folder for the engine's temporary files. With automatic updates
+    /// on, every profile but [`PerformanceProfile::InMemory`] reads a copy of
+    /// the data file made there, so an update can replace the data file itself.
+    /// Defaults to the system's temporary folder, [`std::env::temp_dir`].
+    pub fn temp_dir_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.temp_dir = Some(path.into());
         self
     }
 
@@ -283,7 +294,12 @@ impl IpIntelligenceOnPremiseEngineBuilder {
 
         // Open from a copy of the data file when updates can replace the file
         // while it is open.
-        let copy = OperationalCopy::when_needed(&self.data_file_path, self.profile, &configuration);
+        let copy = OperationalCopy::when_needed(
+            &self.data_file_path,
+            self.temp_dir.as_deref(),
+            self.profile,
+            &configuration,
+        );
         let manager = Manager::open_with_properties(
             copy.as_ref()
                 .map_or(self.data_file_path.as_path(), OperationalCopy::path),
@@ -301,7 +317,8 @@ impl IpIntelligenceOnPremiseEngineBuilder {
             self.requested_properties,
             self.data_source_tier,
             data_file,
-        ))
+        )
+        .with_temp_dir(self.temp_dir))
     }
 
     /// Build the data-file configuration that captures the update options. The
