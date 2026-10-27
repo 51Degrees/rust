@@ -35,7 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       # write, because a successful publish writes the tag the next release
-      # counts from, as the publish does in the other languages.
+      # counts from and creates the GitHub release, as the publish does in
+      # the other languages.
       contents: write
       # Required to mint the OIDC token Trusted Publishing exchanges for a
       # short-lived crates.io token.
@@ -130,21 +131,36 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: bash ci/publish-crates.sh
 
-      # The tag is what the next release counts from. The other languages get
-      # theirs from their publish, which is why they have a release history
-      # to read and this repository had none.
-      - name: Tag what was published
+      # The tag is what the next release counts from, and the GitHub release
+      # is created from it with generated notes, as common-ci's
+      # steps/update-tag.ps1 does for the other languages. Each half is
+      # skipped when it already exists, so a rerun finishes what a failed run
+      # left undone.
+      - name: Tag and release what was published
         shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if (git tag --list $env:VERSION) {
             Write-Output "Tag $env:VERSION is already here, leaving it alone."
+          } else {
+            git tag $env:VERSION
+            git push origin $env:VERSION
+            Write-Output "Tagged $env:VERSION"
+          }
+          # A missing release makes gh release view exit non-zero, which is an
+          # answer here, not a failure.
+          $PSNativeCommandUseErrorActionPreference = $false
+          gh release view $env:VERSION *> $null
+          $exists = $LASTEXITCODE -eq 0
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($exists) {
+            Write-Output "Release $env:VERSION is already here, leaving it alone."
             exit 0
           }
-          git tag $env:VERSION
-          git push origin $env:VERSION
-          Write-Output "Tagged $env:VERSION"
+          gh release create $env:VERSION --verify-tag --generate-notes --title $env:VERSION
+          Write-Output "Released $env:VERSION"
 
   # AFTER publish: prove the just-released packages work by building and testing
   # the examples against crates.io (no source.toml patch). The pre-publish check
