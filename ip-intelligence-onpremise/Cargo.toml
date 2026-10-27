@@ -21,6 +21,11 @@ fiftyone-native = { version = "4.5.2", path = "../native", default-features = fa
 arc-swap.workspace = true
 chrono.workspace = true
 
+[dev-dependencies]
+# Compresses a data file the way the Distributor serves it, for the update
+# tests.
+flate2.workspace = true
+
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the
 # cloud, on-premise and optional paths are all documented.

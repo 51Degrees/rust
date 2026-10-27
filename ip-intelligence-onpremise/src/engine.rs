@@ -51,6 +51,7 @@ use fiftyone_pipeline_engines::{
 };
 
 use crate::builder::IpIntelligenceOnPremiseEngineBuilder;
+use crate::operational_copy::OperationalCopy;
 use crate::retained::Retained;
 
 /// The default data-source tier reported by the engine.
@@ -168,6 +169,7 @@ impl IpIntelligenceOnPremiseEngine {
     /// it has opened the data file and derived the metadata.
     pub(crate) fn from_parts(
         manager: Arc<Manager>,
+        copy: Option<OperationalCopy>,
         profile: PerformanceProfile,
         requested_properties: Vec<String>,
         tier_override: Option<String>,
@@ -180,7 +182,11 @@ impl IpIntelligenceOnPremiseEngine {
         IpIntelligenceOnPremiseEngine {
             base: AspectEngineBase::new(),
             evidence_key_filter: DataFileEvidenceKeys::new(&manager),
-            loaded: ArcSwap::from_pointee(LoadedDataSet::new(manager, &populated_property_names)),
+            loaded: ArcSwap::from_pointee(LoadedDataSet::new(
+                manager,
+                copy,
+                &populated_property_names,
+            )),
             profile,
             requested_properties,
             populated_property_names,
@@ -248,7 +254,7 @@ impl IpIntelligenceOnPremiseEngine {
         Ok(
             IpIntelligenceDataBase::new(IP_DATA_KEY_NAME).with_reader(LookupReader {
                 results: Mutex::new(results),
-                readable: Arc::clone(&loaded.readable),
+                loaded,
             }),
         )
     }
@@ -284,7 +290,14 @@ impl IpIntelligenceOnPremiseEngine {
                     .collect(),
             )
         };
-        let manager = Manager::open_with_properties(&path, self.profile, property_refs.as_deref())?;
+        let copy = self.data_files.first().and_then(|file| {
+            OperationalCopy::when_needed(&path, self.profile, file.configuration())
+        });
+        let manager = Manager::open_with_properties(
+            copy.as_ref().map_or(path.as_path(), OperationalCopy::path),
+            self.profile,
+            property_refs.as_deref(),
+        )?;
         let evidence_keys = DataFileEvidenceKeys::whitelist(&manager);
         let metadata = TierMetadata::new(
             &manager,
@@ -296,6 +309,7 @@ impl IpIntelligenceOnPremiseEngine {
         }
         self.loaded.store(Arc::new(LoadedDataSet::new(
             manager,
+            copy,
             &self.populated_property_names,
         )));
         self.evidence_key_filter.keys.store(Arc::new(evidence_keys));
@@ -409,16 +423,24 @@ fn build_aspect_metadata(names: &[String], tier: &str) -> Vec<AspectPropertyMeta
         .collect()
 }
 
-/// A loaded data set, with the populated properties it carries.
+/// A loaded data set, with the populated properties it carries and the copy
+/// of the data file it was read from, if any.
 struct LoadedDataSet {
     manager: Arc<Manager>,
     readable: Arc<ReadableNames>,
+    /// Held only to be dropped with the data set, and declared after the
+    /// manager, so it is removed after the data set that has it open is freed.
+    _copy: Option<OperationalCopy>,
 }
 
 impl LoadedDataSet {
-    fn new(manager: Arc<Manager>, populated: &[String]) -> Self {
+    fn new(manager: Arc<Manager>, copy: Option<OperationalCopy>, populated: &[String]) -> Self {
         let readable = Arc::new(ReadableNames::new(populated, &manager));
-        LoadedDataSet { manager, readable }
+        LoadedDataSet {
+            manager,
+            readable,
+            _copy: copy,
+        }
     }
 }
 
@@ -464,19 +486,20 @@ impl ReadableNames {
 /// requested.
 struct LookupReader {
     /// The native results. Reading a value writes into them, so each read
-    /// holds the lock.
+    /// holds the lock. Declared first, so they are freed before the data set
+    /// they came from.
     results: Mutex<Results>,
-    /// The properties of the data set the results came from.
-    readable: Arc<ReadableNames>,
+    /// The data set the results came from, with its properties.
+    loaded: Arc<LoadedDataSet>,
 }
 
 impl IpIntelligencePropertyReader for LookupReader {
     fn property_names(&self) -> &[String] {
-        &self.readable.lowercase_names
+        &self.loaded.readable.lowercase_names
     }
 
     fn position(&self, name: &str) -> Option<usize> {
-        self.readable.by_name.get(name).copied()
+        self.loaded.readable.by_name.get(name).copied()
     }
 
     fn read_property(
@@ -484,8 +507,8 @@ impl IpIntelligencePropertyReader for LookupReader {
         position: usize,
         data: &mut IpIntelligenceDataBase,
     ) -> std::result::Result<(), String> {
-        let name = &self.readable.names[position];
-        let index = self.readable.indexes[position];
+        let name = &self.loaded.readable.names[position];
+        let index = self.loaded.readable.indexes[position];
         let results = self.results.lock().unwrap_or_else(PoisonError::into_inner);
         populate_property(data, &results, name, index).map_err(|error| error.to_string())
     }

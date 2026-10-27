@@ -39,6 +39,7 @@ use fiftyone_pipeline_engines::{
 };
 
 use crate::engine::{record_published, IpIntelligenceOnPremiseEngine};
+use crate::operational_copy::OperationalCopy;
 
 /// The download type the Distributor serves IP Intelligence data files as,
 /// sent in the update URL's `Type` parameter.
@@ -278,8 +279,12 @@ impl IpIntelligenceOnPremiseEngineBuilder {
             )
         };
 
+        // Open from a copy of the data file when updates can replace the file
+        // while it is open.
+        let copy = OperationalCopy::when_needed(&self.data_file_path, self.profile, &configuration);
         let manager = Manager::open_with_properties(
-            &self.data_file_path,
+            copy.as_ref()
+                .map_or(self.data_file_path.as_path(), OperationalCopy::path),
             self.profile,
             property_refs.as_deref(),
         )?;
@@ -289,6 +294,7 @@ impl IpIntelligenceOnPremiseEngineBuilder {
 
         Ok(IpIntelligenceOnPremiseEngine::from_parts(
             manager,
+            copy,
             self.profile,
             self.requested_properties,
             self.data_source_tier,
