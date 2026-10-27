@@ -627,6 +627,108 @@ fn host_provided_cache_outlives_the_engine_for_short_lived_instances() {
     );
 }
 
+#[test]
+fn a_response_carrying_a_51did_is_never_stored() {
+    // The cloud creates a 51Did for the one request that asked for it, so a body
+    // carrying one is not kept for the next request with the same evidence.
+    let client = Arc::new(FakeClient::default());
+    client.set_evidence_keys(FakeClient::ok(r#"["header.user-agent","query.id.usage"]"#));
+    client.set_data(FakeClient::ok(
+        r#"{"device":{"ismobile":true},"fodid":{"idrandglobal":"created-for-one-request"}}"#,
+    ));
+
+    let cache = Arc::new(RecordingCache::default());
+    let engine = CloudRequestEngine::builder()
+        .resource_key("test-resource-key")
+        .endpoint("https://cloud.example.test/api/v4/")
+        .http_client(client.clone())
+        .cache(cache.clone())
+        .build()
+        .unwrap();
+    let after_build = client.request_count();
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .build()
+        .unwrap();
+    let evidence = || {
+        Evidence::builder()
+            .add("header.user-agent", "UA")
+            .add("query.id.usage", "non-marketing")
+            .build()
+    };
+
+    for request in 1..=2 {
+        let mut data = pipeline.create_flow_data_with(evidence());
+        data.process().unwrap();
+        let cloud = data.get(CloudRequestEngine::DATA_KEY).unwrap();
+        assert!(!cloud.cache_hit(), "request {request} is not a cache hit");
+    }
+    assert_eq!(cache.puts(), 0, "no body carrying a 51Did was stored");
+    assert_eq!(
+        client.request_count(),
+        after_build + 2,
+        "each request reached the cloud"
+    );
+}
+
+/// A cache holding one body under every key, as a store shared with other
+/// writers can hold a body for the key a request makes.
+struct StoredBodyCache(String);
+
+impl Cache<String, String> for StoredBodyCache {
+    fn get(&self, _key: &String) -> Option<String> {
+        Some(self.0.clone())
+    }
+    fn len(&self) -> usize {
+        1
+    }
+}
+
+impl PutCache<String, String> for StoredBodyCache {
+    fn put(&self, _key: String, _value: String) {}
+}
+
+#[test]
+fn a_stored_response_carrying_a_51did_is_never_served() {
+    // The 51Did in a stored body was created for another request, so the engine
+    // asks the cloud rather than serving it, whatever case the member is in.
+    for member in ["fodid", "FODid"] {
+        let client = Arc::new(FakeClient::default());
+        client.set_data(FakeClient::ok(
+            r#"{"device":{"ismobile":true},"fodid":{"idrandglobal":"created-for-this-request"}}"#,
+        ));
+        let stored = format!(
+            r#"{{"device":{{"ismobile":true}},"{member}":{{"idrandglobal":"created-for-another-request"}}}}"#
+        );
+        let engine = CloudRequestEngine::builder()
+            .resource_key("rk")
+            .http_client(client.clone())
+            .set_state(sample_state())
+            .cache(Arc::new(StoredBodyCache(stored)))
+            .build()
+            .unwrap();
+        let pipeline = Pipeline::builder()
+            .add_element(Arc::new(engine))
+            .build()
+            .unwrap();
+
+        let mut data = pipeline
+            .create_flow_data_with(Evidence::builder().add("header.user-agent", "UA").build());
+        data.process().unwrap();
+
+        let cloud = data.get(CloudRequestEngine::DATA_KEY).unwrap();
+        assert!(
+            cloud
+                .json_response()
+                .is_some_and(|json| json.contains("created-for-this-request")),
+            "the {member} body in the store was not served, got {:?}",
+            cloud.json_response()
+        );
+        assert!(!cloud.cache_hit(), "the {member} body is not a cache hit");
+        assert_eq!(client.request_count(), 1, "the cloud was asked instead");
+    }
+}
+
 /// Build a state snapshot with one accepted evidence key and one product
 /// property, the kind a consumer would persist and re-inject.
 fn sample_state() -> CloudEngineState {

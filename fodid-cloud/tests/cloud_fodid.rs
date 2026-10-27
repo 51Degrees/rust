@@ -30,14 +30,15 @@
 //! OWID envelope, created here with the `owid` library, so the parsed path is
 //! exercised against real bytes rather than a hand-rolled string.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use fiftyone_pipeline_core::{ElementData, Evidence, Pipeline};
+use fiftyone_pipeline_core::{ElementData, Evidence, FlowData, Pipeline};
 
 use fiftyone_cloud_request_engine::{
-    CloudHttpClient, CloudHttpRequest, CloudHttpResponse, CloudRequestEngine, HttpMethod,
+    CloudHttpClient, CloudHttpRequest, CloudHttpResponse, CloudRequestEngine, HttpMethod, LruCache,
 };
 use fiftyone_fodid_cloud::{FodIdCloudEngine, FodIdData, FODID_DATA_KEY};
+use fiftyone_pipeline_engines::AspectData;
 use fodid::{Creator, Crypto, IdType, Owid, Usage};
 
 /// A fake transport that answers the cloud endpoints from in-memory fixtures.
@@ -287,6 +288,196 @@ fn response_without_fodid_block_yields_empty_data() {
         .expect("identifier data is present even when empty");
     assert!(!fodid.id_prob_global().has_value());
     assert!(!fodid.id_prob_lic().has_value());
+}
+
+/// The flags byte of a random 51Did created for non-marketing use. Bits 6 and
+/// 7 select the random type and bit 0 grants non-marketing.
+const RANDOM_FLAGS: u8 = 0b0100_0001;
+
+/// A fake transport that answers the data endpoint as the cloud does.
+///
+/// The cloud creates a new 51Did for every request that states a usage, and
+/// leaves the `fodid` member out of a response to one that does not, while the
+/// device answer is the same for the same evidence. Each 51Did created here is
+/// a random one whose GUID carries the number of the request it answered, and
+/// each is recorded in the order it was created.
+struct CreatingCloud {
+    private_pem: String,
+    created: Mutex<Vec<String>>,
+    data_requests: Mutex<usize>,
+}
+
+impl CreatingCloud {
+    fn new() -> Self {
+        let crypto = Crypto::new();
+        CreatingCloud {
+            private_pem: crypto.private_key_pem().expect("export private key"),
+            created: Mutex::new(Vec::new()),
+            data_requests: Mutex::new(0),
+        }
+    }
+
+    /// The 51Dids created so far, oldest first.
+    fn created(&self) -> Vec<String> {
+        self.created.lock().unwrap().clone()
+    }
+
+    /// The number of requests that reached the data endpoint.
+    fn data_requests(&self) -> usize {
+        *self.data_requests.lock().unwrap()
+    }
+
+    /// Create a signed random 51Did whose GUID starts with `sequence`.
+    fn create(&self, sequence: u32) -> String {
+        let mut payload = vec![0u8; 21];
+        payload[0] = RANDOM_FLAGS;
+        payload[1..5].copy_from_slice(&LICENSE_ID.to_le_bytes());
+        payload[5..9].copy_from_slice(&sequence.to_le_bytes());
+        let signer = Crypto::new_sign_only(&self.private_pem).expect("import private key");
+        let creator = Creator::new(TEST_DOMAIN, signer).expect("create creator");
+        let owid = creator
+            .create(payload)
+            .expect("create and sign the envelope");
+        owid.as_base64().expect("encode owid")
+    }
+}
+
+impl CloudHttpClient for CreatingCloud {
+    fn send(&self, request: &CloudHttpRequest) -> Result<CloudHttpResponse, String> {
+        let body = if request.url.contains("accessibleproperties") {
+            ACCESSIBLE_PROPERTIES.to_owned()
+        } else if request.url.contains("evidencekeys") {
+            EVIDENCE_KEYS.to_owned()
+        } else {
+            let sequence = {
+                let mut count = self.data_requests.lock().unwrap();
+                *count += 1;
+                *count as u32
+            };
+            let states_usage = request.form.iter().any(|(name, _)| name == "id.usage");
+            if states_usage {
+                let created = self.create(sequence);
+                self.created.lock().unwrap().push(created.clone());
+                format!(
+                    r#"{{"device":{{"ismobile":false}},"fodid":{{"idrandglobal":"{created}"}},"javascriptProperties":[]}}"#
+                )
+            } else {
+                r#"{"device":{"ismobile":false},"javascriptProperties":[]}"#.to_owned()
+            }
+        };
+        Ok(CloudHttpResponse {
+            status: 200,
+            body,
+            retry_after: None,
+        })
+    }
+}
+
+/// A pipeline of a request engine with the in-process response cache and the
+/// identifier engine, over the creating fake cloud.
+fn caching_pipeline(cloud: Arc<CreatingCloud>) -> Arc<Pipeline> {
+    let request_engine = Arc::new(
+        CloudRequestEngine::builder()
+            .resource_key("test-resource-key")
+            .http_client(cloud)
+            .cache(Arc::new(LruCache::<String, String>::with_defaults()))
+            .build()
+            .expect("request engine builds"),
+    );
+    let fodid_engine = FodIdCloudEngine::builder()
+        .cloud_request_engine(request_engine.clone())
+        .build()
+        .expect("identifier engine builds");
+    Pipeline::builder()
+        .add_element(request_engine)
+        .add_element(Arc::new(fodid_engine))
+        .build()
+        .expect("pipeline builds")
+}
+
+/// The random 51Did a processed flow data carries, raw and as its match key.
+fn random_51did(data: &FlowData) -> (String, Vec<u8>) {
+    let fodid = data.get(FODID_DATA_KEY).expect("identifier data present");
+    let raw = fodid
+        .id_rand_global()
+        .value()
+        .expect("a 51Did was received")
+        .clone();
+    let parsed = fodid.id_rand_global_fod_id();
+    let parsed = parsed.value().expect("the 51Did parses");
+    (raw, parsed.match_key().to_vec())
+}
+
+#[test]
+fn two_visitors_with_the_same_evidence_never_share_a_51did() {
+    // Two people on one browser version behind one network address present
+    // the same evidence, so their requests have the same response cache key.
+    // The cloud creates a different 51Did for each request, and each visitor
+    // must receive the one created for their own.
+    let cloud = Arc::new(CreatingCloud::new());
+    let pipeline = caching_pipeline(cloud.clone());
+
+    let mut first = pipeline.create_flow_data_with(sample_evidence());
+    first.process().expect("the first visitor is processed");
+    let mut second = pipeline.create_flow_data_with(sample_evidence());
+    second.process().expect("the second visitor is processed");
+
+    let (first_raw, first_key) = random_51did(&first);
+    let (second_raw, second_key) = random_51did(&second);
+    assert_ne!(
+        second_key, first_key,
+        "the second visitor was handed the 51Did created for the first"
+    );
+
+    let created = cloud.created();
+    assert_eq!(
+        created.len(),
+        2,
+        "the cloud created a 51Did for each visitor"
+    );
+    assert_eq!(first_raw, created[0]);
+    assert_eq!(second_raw, created[1]);
+    let cloud_data = second
+        .get(CloudRequestEngine::DATA_KEY)
+        .expect("cloud data present");
+    assert!(
+        !cloud_data.cache_hit(),
+        "a response carrying a 51Did is not served from the cache"
+    );
+}
+
+#[test]
+fn requests_that_ask_for_no_51did_are_still_served_from_the_cache() {
+    // Without a usage the cloud creates no 51Did and the answer depends on the
+    // evidence alone, so the cache still saves the second call.
+    let cloud = Arc::new(CreatingCloud::new());
+    let pipeline = caching_pipeline(cloud.clone());
+    let evidence = || {
+        Evidence::builder()
+            .add("header.user-agent", "Mozilla/5.0")
+            .add("query.client-ip", "185.28.167.78")
+            .build()
+    };
+
+    let mut first = pipeline.create_flow_data_with(evidence());
+    first.process().expect("the first request is processed");
+    let mut second = pipeline.create_flow_data_with(evidence());
+    second.process().expect("the second request is processed");
+
+    assert_eq!(
+        cloud.data_requests(),
+        1,
+        "the second answer came from the cache"
+    );
+    let cloud_data = second
+        .get(CloudRequestEngine::DATA_KEY)
+        .expect("cloud data present");
+    assert!(cloud_data.cache_hit(), "the second request is a cache hit");
+    let fodid = second.get(FODID_DATA_KEY).expect("identifier data present");
+    assert!(
+        !fodid.id_rand_global().has_value(),
+        "no 51Did was asked for"
+    );
 }
 
 /// Resolve a cloud resource key from the environment for the live test,
