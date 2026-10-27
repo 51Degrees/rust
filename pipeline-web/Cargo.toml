@@ -24,9 +24,9 @@ fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines", d
 fiftyone-pipeline-engines-fiftyone = { version = "4.5.2", path = "../pipeline-engines-fiftyone" }
 fiftyone-json-builder = { version = "4.5.2", path = "../json-builder" }
 fiftyone-javascript-builder = { version = "4.5.2", path = "../javascript-builder" }
-# ahash provides a fast hasher that can be seeded with fixed constants, giving a
-# stable per-process digest for the web ETag. It is already a workspace
-# dependency so it resolves to a single shared version.
+# ahash provides a fast hasher that can be seeded with fixed constants, giving
+# the web ETag the same digest in every process running the same build. It is
+# already a workspace dependency so it resolves to a single shared version.
 ahash.workspace = true
 
 [package.metadata.docs.rs]

@@ -64,8 +64,8 @@
 //! - **`Vary`**: the comma-joined HTTP-header evidence keys (prefix stripped,
 //!   de-duplicated case-insensitively, sorted) taken from the supplied
 //!   whitelist; omitted when empty.
-//! - **`ETag`**: a stable, opaque, non-portable per-process digest of the
-//!   evidence cache key (see [`compute_etag`]).
+//! - **`ETag`**: an opaque, non-portable digest of the evidence cache key, the
+//!   same in every process running the same build (see [`compute_etag`]).
 //! - **`Access-Control-Allow-Origin`**: the request `Origin` echoed back, unless
 //!   it is absent or the literal string `null`.
 //! - A matching `If-None-Match` yields a bare `304 Not Modified` (empty body, no
