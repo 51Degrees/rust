@@ -132,11 +132,10 @@ impl Pipeline {
                 data.add_error(FlowError::new(element.data_key(), error));
             }
         }
-        data.set_processed();
 
         if !self.suppress_process_exceptions {
-            // Collect the errors that should propagate. We drain them off the
-            // flow data so they are reported once, through the returned error.
+            // Collect the errors that should propagate. They stay on the flow
+            // data as well, so a caller can read them from either place.
             let to_throw: Vec<FlowError> = data
                 .errors()
                 .iter()
