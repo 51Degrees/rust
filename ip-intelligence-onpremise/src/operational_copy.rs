@@ -33,7 +33,7 @@ use fiftyone_pipeline_engines::DataFileConfiguration;
 ///
 /// Every profile but `InMemory` keeps the data file open while the data set
 /// lives, and Windows refuses to replace a file that is open. With automatic
-/// updates on, the engine therefore reads a copy in the temporary folder,
+/// updates on, the engine therefore reads a copy in its temporary folder,
 /// which the specification calls the operational data copy, and an update can
 /// replace the data file itself. Drop the copy after the data set read from
 /// it, which closes it.
@@ -42,7 +42,8 @@ pub(crate) struct OperationalCopy {
 }
 
 impl OperationalCopy {
-    /// A copy of `data_file` when `profile` keeps the data file open and
+    /// A copy of `data_file` in `temp_dir`, or in the system's temporary
+    /// folder when that is `None`, when `profile` keeps the data file open and
     /// automatic updates are on, otherwise `None`.
     ///
     /// When the copy cannot be made the engine reads the data file itself, so
@@ -50,18 +51,20 @@ impl OperationalCopy {
     /// an update then cannot replace the file while it is open.
     pub(crate) fn when_needed(
         data_file: &Path,
+        temp_dir: Option<&Path>,
         profile: PerformanceProfile,
         config: &DataFileConfiguration,
     ) -> Option<OperationalCopy> {
         if profile == PerformanceProfile::InMemory || !config.automatic_updates_enabled {
             return None;
         }
-        OperationalCopy::of(data_file).ok()
+        let temp_dir = temp_dir.map_or_else(std::env::temp_dir, Path::to_path_buf);
+        OperationalCopy::of(data_file, &temp_dir).ok()
     }
 
-    /// Copy `data_file` into the temporary folder, under a name no other copy
-    /// in this process has.
-    fn of(data_file: &Path) -> std::io::Result<OperationalCopy> {
+    /// Copy `data_file` into `temp_dir`, under a name no other copy in this
+    /// process has.
+    fn of(data_file: &Path, temp_dir: &Path) -> std::io::Result<OperationalCopy> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let mut name = data_file
             .file_name()
@@ -74,7 +77,7 @@ impl OperationalCopy {
         ));
         // Made before the copy, so a copy that fails part way is removed.
         let copy = OperationalCopy {
-            path: std::env::temp_dir().join(name),
+            path: temp_dir.join(name),
         };
         std::fs::copy(data_file, &copy.path)?;
         Ok(copy)

@@ -73,6 +73,7 @@ pub struct DeviceDetectionOnPremiseEngineBuilder {
     data_source_tier: Option<String>,
     auto_update: Option<AutoUpdate>,
     concurrency: Option<u16>,
+    temp_dir: Option<PathBuf>,
 }
 
 /// The optional automatic-update settings captured by the builder.
@@ -96,6 +97,7 @@ impl DeviceDetectionOnPremiseEngineBuilder {
             data_source_tier: None,
             auto_update: None,
             concurrency: None,
+            temp_dir: None,
         }
     }
 
@@ -117,6 +119,15 @@ impl DeviceDetectionOnPremiseEngineBuilder {
     /// where the data set is fully resident.
     pub fn concurrency(mut self, concurrency: u16) -> Self {
         self.concurrency = Some(concurrency);
+        self
+    }
+
+    /// Set the folder for the engine's temporary files. With automatic updates
+    /// on, every profile but [`PerformanceProfile::InMemory`] reads a copy of
+    /// the data file made there, so an update can replace the data file itself.
+    /// Defaults to the system's temporary folder, [`std::env::temp_dir`].
+    pub fn temp_dir_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.temp_dir = Some(path.into());
         self
     }
 
@@ -223,8 +234,12 @@ impl DeviceDetectionOnPremiseEngineBuilder {
         // Open the data set with the requested property restriction, from a
         // copy of the data file when updates can replace the file while it is
         // open.
-        let copy =
-            OperationalCopy::when_needed(&self.data_file_path, self.profile, &data_file_config);
+        let copy = OperationalCopy::when_needed(
+            &self.data_file_path,
+            self.temp_dir.as_deref(),
+            self.profile,
+            &data_file_config,
+        );
         let manager = open_manager(
             copy.as_ref()
                 .map_or(self.data_file_path.as_path(), OperationalCopy::path),
@@ -233,15 +248,18 @@ impl DeviceDetectionOnPremiseEngineBuilder {
             self.concurrency,
         )?;
 
-        let engine = Arc::new(DeviceDetectionOnPremiseEngine::from_manager(
-            manager,
-            copy,
-            self.profile,
-            self.requested_properties,
-            data_file_config,
-            self.data_source_tier,
-            self.concurrency,
-        ));
+        let engine = Arc::new(
+            DeviceDetectionOnPremiseEngine::from_manager(
+                manager,
+                copy,
+                self.profile,
+                self.requested_properties,
+                data_file_config,
+                self.data_source_tier,
+                self.concurrency,
+            )
+            .with_temp_dir(self.temp_dir),
+        );
 
         // Register the data file with the update service if one was supplied.
         if let Some(service) = service {

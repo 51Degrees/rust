@@ -30,6 +30,7 @@
 
 use std::collections::HashMap;
 use std::os::raw::c_int;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arc_swap::ArcSwap;
@@ -116,6 +117,9 @@ pub struct IpIntelligenceOnPremiseEngine {
     tier_override: Option<String>,
     /// Held while a refresh loads a data set, so refreshes run one at a time.
     refresh_lock: Mutex<()>,
+    /// The folder a refresh copies the data file into, or `None` for the
+    /// system's temporary folder.
+    temp_dir: Option<PathBuf>,
     /// The single data file this engine reads, as shared run-time state for the
     /// data update service.
     data_files: Vec<Arc<AspectEngineDataFile>>,
@@ -194,8 +198,16 @@ impl IpIntelligenceOnPremiseEngine {
             metadata: Retained::new(metadata),
             tier_override,
             refresh_lock: Mutex::new(()),
+            temp_dir: None,
             data_files: vec![data_file],
         }
+    }
+
+    /// Copy the data file into `temp_dir` on refresh, the folder the builder
+    /// copied it into, or the system's temporary folder when `None`.
+    pub(crate) fn with_temp_dir(mut self, temp_dir: Option<PathBuf>) -> Self {
+        self.temp_dir = temp_dir;
+        self
     }
 
     /// The evidence keys the loaded data file defines, in the order the native
@@ -291,7 +303,12 @@ impl IpIntelligenceOnPremiseEngine {
             )
         };
         let copy = self.data_files.first().and_then(|file| {
-            OperationalCopy::when_needed(&path, self.profile, file.configuration())
+            OperationalCopy::when_needed(
+                &path,
+                self.temp_dir.as_deref(),
+                self.profile,
+                file.configuration(),
+            )
         });
         let manager = Manager::open_with_properties(
             copy.as_ref().map_or(path.as_path(), OperationalCopy::path),
