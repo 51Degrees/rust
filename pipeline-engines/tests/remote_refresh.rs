@@ -32,7 +32,8 @@
 //! built, so neither is this test.
 #![cfg(feature = "data-update")]
 
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -42,7 +43,7 @@ use fiftyone_pipeline_core::{
 };
 use fiftyone_pipeline_engines::{
     AspectDataBase, AspectEngine, AspectEngineDataFile, AspectPropertyMetaData, AutoUpdateStatus,
-    DataFileConfiguration, DataUpdateService, OnPremiseAspectEngine,
+    DataFileConfiguration, DataUpdateService, FiftyOneUrlFormatter, OnPremiseAspectEngine,
 };
 
 /// A minimal on-premise engine that records every refresh and the bytes it was
@@ -258,4 +259,75 @@ fn update_from_memory_goes_to_engine() {
         .unwrap();
     assert_eq!(status, AutoUpdateStatus::Success);
     assert_eq!(*disk.lock().unwrap(), bytes);
+}
+
+/// The licence key the Distributor formatter writes into the update URL.
+const LICENCE_KEY: &str = "LICENCE-KEY-NOT-FOR-LOGS";
+
+/// An engine whose data file polls `url` through the Distributor formatter,
+/// so each request carries [`LICENCE_KEY`] in its query.
+fn engine_polling(url: &str, dir: &std::path::Path) -> Arc<dyn OnPremiseAspectEngine> {
+    let path = dir.join("device.dat");
+    std::fs::write(&path, b"current data").unwrap();
+    let config = DataFileConfiguration::builder(&path)
+        .data_update_url(url)
+        .data_update_license_keys([LICENCE_KEY])
+        .url_formatter(Some(Arc::new(FiftyOneUrlFormatter)))
+        .automatic_updates_enabled(false)
+        .file_system_watcher_enabled(false)
+        .build();
+    Arc::new(TestEngine::new(Arc::new(AspectEngineDataFile::new(config))))
+}
+
+/// A poll that cannot connect fails with a message that names the configured
+/// URL and the cause, and not the licence key the request carried.
+#[test]
+fn a_failed_connection_keeps_the_licence_key_out_of_the_error() {
+    // Nothing listens on a port once its listener is dropped.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/api/v2/download", listener.local_addr().unwrap());
+    drop(listener);
+    let dir = std::env::temp_dir().join(format!("fiftyone-dut-key-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let engine = engine_polling(&url, &dir);
+
+    let error = DataUpdateService::new()
+        .check_for_update(&engine, None)
+        .expect_err("nothing is listening");
+    let message = error.to_string();
+    assert_eq!(error.status, AutoUpdateStatus::HttpsError, "{message}");
+    assert!(!message.contains(LICENCE_KEY), "{message}");
+    assert!(message.contains(&url), "{message}");
+    assert!(message.contains("error sending request: "), "{message}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A download whose body ends early fails with a message that names the
+/// configured URL, and not the licence key the request carried.
+#[test]
+fn a_failed_download_keeps_the_licence_key_out_of_the_error() {
+    // A server that promises more bytes than it sends, then closes.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/api/v2/download", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 4096];
+        let _ = stream.read(&mut request);
+        let _ = stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\nshort",
+        );
+    });
+    let dir = std::env::temp_dir().join(format!("fiftyone-dut-body-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let engine = engine_polling(&url, &dir);
+
+    let error = DataUpdateService::new()
+        .check_for_update(&engine, None)
+        .expect_err("the body ends early");
+    server.join().unwrap();
+    let message = error.to_string();
+    assert_eq!(error.status, AutoUpdateStatus::StreamError, "{message}");
+    assert!(!message.contains(LICENCE_KEY), "{message}");
+    assert!(message.contains(&url), "{message}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

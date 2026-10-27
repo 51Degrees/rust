@@ -64,6 +64,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use fiftyone_pipeline_core::redact::redact_with;
 use md5::{Digest, Md5};
 
 use crate::data_file::AspectEngineDataFile;
@@ -568,7 +569,22 @@ impl ServiceHandle {
     }
 
     /// Poll the remote update URL, verify, decompress, write and refresh.
+    ///
+    /// Every failing exit comes through here, so no error leaves the service
+    /// carrying the data file's licence keys, however the poll failed.
     fn check_for_update_from_url(&self, registration: &Arc<Registration>) -> DataUpdateResult {
+        let keys = &registration
+            .data_file
+            .configuration()
+            .data_update_license_keys;
+        self.poll_update_url(registration).map_err(|mut error| {
+            error.message = redact_with(&error.message, keys).into_owned();
+            error
+        })
+    }
+
+    /// Poll the remote update URL, verify, decompress, write and refresh.
+    fn poll_update_url(&self, registration: &Arc<Registration>) -> DataUpdateResult {
         let data_file = &registration.data_file;
         let config = data_file.configuration();
         let url = match data_file.data_update_url() {
@@ -597,7 +613,10 @@ impl ServiceHandle {
         let response = request.send().map_err(|e| {
             DataUpdateError::new(
                 AutoUpdateStatus::HttpsError,
-                format!("error accessing data update service at '{url}': {e}"),
+                format!(
+                    "error accessing data update service at '{url}': {}",
+                    request_error_message(e)
+                ),
             )
         })?;
 
@@ -645,7 +664,10 @@ impl ServiceHandle {
         let compressed = response.bytes().map_err(|e| {
             DataUpdateError::new(
                 AutoUpdateStatus::StreamError,
-                format!("error reading data update response from '{url}': {e}"),
+                format!(
+                    "error reading data update response from '{url}': {}",
+                    request_error_message(e)
+                ),
             )
         })?;
 
@@ -737,6 +759,21 @@ fn log_poll(registration: &Arc<Registration>, result: DataUpdateResult) {
              Update will be attempted again later. Error detail: {error}"
         ),
     }
+}
+
+/// The message of a failed request and each of its causes, without the URL
+/// the request error names. That URL is the formatted one, whose query
+/// carries the licence keys.
+fn request_error_message(error: reqwest::Error) -> String {
+    let error = error.without_url();
+    let mut message = error.to_string();
+    let mut cause = std::error::Error::source(&error);
+    while let Some(source) = cause {
+        message.push_str(": ");
+        message.push_str(&source.to_string());
+        cause = source.source();
+    }
+    message
 }
 
 /// Format a timestamp as an HTTP-date for the `If-Modified-Since` header.
