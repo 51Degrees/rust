@@ -125,6 +125,8 @@ pub mod dd;
 pub mod evidence;
 #[cfg(feature = "ipi")]
 pub mod ipi;
+#[cfg(any(feature = "dd", feature = "ipi"))]
+mod path;
 pub mod profile;
 
 pub use profile::PerformanceProfile;
