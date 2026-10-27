@@ -887,6 +887,7 @@ mod tests {
                     .as_secs()
             })
             .collect();
+        eprintln!("{} different delays in 200", delays.len());
         assert!(
             delays.len() > 100,
             "{} different delays in 200: {delays:?}",
@@ -916,12 +917,17 @@ mod tests {
                 ),
                 data_files: vec![Arc::clone(&data_file)],
             });
-            handle.inner.registrations.lock().unwrap().push(Arc::new(Registration {
-                engine,
-                data_file,
-                next_poll: Mutex::new(Some(due)),
-                watcher: Mutex::new(None),
-            }));
+            handle
+                .inner
+                .registrations
+                .lock()
+                .unwrap()
+                .push(Arc::new(Registration {
+                    engine,
+                    data_file,
+                    next_poll: Mutex::new(Some(due)),
+                    watcher: Mutex::new(None),
+                }));
         }
 
         handle.run_due_polls();
