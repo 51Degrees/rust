@@ -878,6 +878,7 @@ dependencies = [
  "reqwest",
  "thiserror 2.0.18",
  "tiny_http",
+ "tokio",
  "uuid",
 ]
 

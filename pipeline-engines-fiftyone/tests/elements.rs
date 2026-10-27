@@ -471,6 +471,44 @@ fn share_usage_deduplicates_identical_requests() {
     );
 }
 
+#[test]
+fn share_usage_is_created_and_used_inside_an_async_runtime() {
+    // A web server usually builds its pipeline inside its async runtime, where
+    // building a blocking HTTP client panics, so the element must not build
+    // one as it is created.
+    let (url, bodies, request_count) = start_capture_server();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let share = Arc::new(ShareUsageElement::new(
+            ShareUsageConfig::builder()
+                .share_usage_url(url)
+                .minimum_entries_per_message(1)
+                .build(),
+        ));
+        let pipeline = Pipeline::builder()
+            .add_element(Arc::clone(&share) as Arc<dyn FlowElement>)
+            .build()
+            .unwrap();
+        pipeline
+            .create_flow_data_with(
+                Evidence::builder()
+                    .add("header.user-agent", "async-agent")
+                    .build(),
+            )
+            .process()
+            .unwrap();
+        wait_until(Duration::from_secs(5), || share.success_count() == 1);
+        assert_eq!(share.success_count(), 1, "the message was sent");
+        drop(pipeline);
+        drop(share);
+    });
+
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+    assert!(bodies.lock().unwrap()[0].contains("async-agent"));
+}
+
 /// Log records from every test in this binary, as "LEVEL message".
 static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 

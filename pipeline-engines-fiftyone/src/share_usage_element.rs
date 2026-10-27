@@ -406,17 +406,45 @@ trait UsageSender: Send + Sync {
 /// The production transport: a blocking `reqwest` client posting gzip XML.
 /// Compiled only with the `share-usage-transport` feature, because reqwest does
 /// not build for wasm32-wasip1.
+///
+/// The client is built by the first send, which runs on the background thread,
+/// because building a blocking client inside an async runtime panics and an
+/// element is often created inside one.
 #[cfg(feature = "share-usage-transport")]
 struct HttpUsageSender {
-    client: reqwest::blocking::Client,
+    client: OnceLock<std::result::Result<reqwest::blocking::Client, String>>,
     url: String,
+}
+
+#[cfg(feature = "share-usage-transport")]
+impl HttpUsageSender {
+    fn new(url: String) -> Self {
+        HttpUsageSender {
+            client: OnceLock::new(),
+            url,
+        }
+    }
+
+    /// The client, built on first use. A client that cannot be built makes
+    /// every send fail with the reason, which is logged like any failed send.
+    fn client(&self) -> std::result::Result<&reqwest::blocking::Client, String> {
+        self.client
+            .get_or_init(|| {
+                reqwest::blocking::Client::builder()
+                    .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
+                    .build()
+                    .map_err(|e| format!("The HTTP client could not be built: {e}"))
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
 }
 
 #[cfg(feature = "share-usage-transport")]
 impl UsageSender for HttpUsageSender {
     fn send(&self, body: Vec<u8>) -> std::result::Result<(), String> {
         let response = self
-            .client
+            .client()?
             .post(&self.url)
             .header("content-encoding", "gzip")
             .header("content-type", "text/xml")
@@ -528,21 +556,16 @@ impl ShareUsageElement {
     /// off, the element is constructed with a no-op transport: it collects and
     /// batches evidence but sends nothing to 51Degrees. See the module-level
     /// documentation for the full rationale.
+    ///
+    /// The element can be created inside an async runtime, because the HTTP
+    /// client is built on the element's own background thread.
     pub fn new(config: ShareUsageConfig) -> Self {
         // With the built-in transport, post over a blocking reqwest client.
         // Without it (for example on wasm32-wasip1) fall back to a no-op sender
         // so the element still constructs and runs.
         #[cfg(feature = "share-usage-transport")]
-        let sender: Box<dyn UsageSender> = {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
-                .build()
-                .unwrap_or_default();
-            Box::new(HttpUsageSender {
-                client,
-                url: config.share_usage_url.clone(),
-            })
-        };
+        let sender: Box<dyn UsageSender> =
+            Box::new(HttpUsageSender::new(config.share_usage_url.clone()));
         #[cfg(not(feature = "share-usage-transport"))]
         let sender: Box<dyn UsageSender> = Box::new(NoopUsageSender);
 
