@@ -202,7 +202,9 @@ impl DeviceDetectionOnPremiseEngineBuilder {
     /// no licence key, as .NET does. When automatic updates
     /// were configured with a service, the engine's data file is registered
     /// with that service before the engine is returned, so a startup poll (if
-    /// requested) and the polling schedule are in effect.
+    /// requested) and the polling schedule are in effect. A startup poll that
+    /// fails leaves the engine on the data file it loaded, as the
+    /// specification says, and the service logs the failure.
     pub fn build(self) -> Result<Arc<DeviceDetectionOnPremiseEngine>> {
         // The data-file configuration the engine carries. When auto-update was
         // requested, use that configuration; otherwise build a static one with
@@ -251,9 +253,9 @@ impl DeviceDetectionOnPremiseEngineBuilder {
                 .cloned()
                 .ok_or_else(|| Error::configuration("engine has no data file to register"))?;
             let as_engine: Arc<dyn OnPremiseAspectEngine> = engine.clone();
-            service
-                .register(as_engine, data_file)
-                .map_err(|e| Error::configuration(e.to_string()))?;
+            // A failed update on start-up leaves the engine on the data file it
+            // loaded, as the specification says, and the service logs it.
+            let _ = service.register(as_engine, data_file);
         }
 
         Ok(engine)

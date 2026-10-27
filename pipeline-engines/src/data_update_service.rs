@@ -162,7 +162,10 @@ impl DataUpdateService {
     ///   interval (when `automatic_updates_enabled`).
     ///
     /// Returns the status of the startup poll, or [`AutoUpdateStatus::NotNeeded`]
-    /// when no startup poll was requested.
+    /// when no startup poll was requested. A failed startup poll leaves the
+    /// engine on the data it loaded, as the specification says. It is logged
+    /// and returned as an error, and the file is registered all the same, so
+    /// the updates that follow still run.
     pub fn register(
         &self,
         engine: Arc<dyn OnPremiseAspectEngine>,
@@ -179,11 +182,20 @@ impl DataUpdateService {
             watcher: Mutex::new(None),
         });
 
-        let mut startup_status = AutoUpdateStatus::NotNeeded;
+        let mut startup = Ok(AutoUpdateStatus::NotNeeded);
 
-        // Update on startup: poll once, synchronously.
+        // Update on startup: poll once, synchronously. A failure leaves the
+        // engine on the data it loaded, so the file is still registered for
+        // the updates that follow.
         if config.update_on_startup && !already_registered {
-            startup_status = self.check_for_update_from_url(&registration)?;
+            startup = self.check_for_update_from_url(&registration);
+            if let Err(error) = &startup {
+                log::warn!(
+                    "An error occurred while updating the data file for {} on start-up. \
+                     The data it has is used. Error detail: {error}",
+                    registration.engine.data_key()
+                );
+            }
         }
 
         // Install the file-system watcher if requested and automatic updates,
@@ -215,7 +227,7 @@ impl DataUpdateService {
         self.ensure_scheduler();
         self.inner.wake.notify_all();
 
-        Ok(startup_status)
+        startup
     }
 
     /// Trigger an immediate update check for the engine's data file matching
