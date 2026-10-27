@@ -355,7 +355,7 @@ pub mod common {
 
     extern "C" {
         /// Returns a newly allocated English message describing the exception.
-        /// Free the returned pointer with [`fiftyoneDegreesMemoryStandardFree`].
+        /// Free the returned pointer with [`fiftyoneDegreesFree`].
         /// Resolved against this crate's own `common-cxx` build.
         ///
         /// The native symbol is `ipi_`-prefixed because this crate's private
@@ -368,17 +368,32 @@ pub mod common {
         #[link_name = "ipi_fiftyoneDegreesExceptionGetMessage"]
         pub fn fiftyoneDegreesExceptionGetMessage(exception: *mut Exception) -> *const c_char;
 
-        /// Frees memory the library allocated through its standard allocator,
-        /// such as the string returned by
-        /// [`fiftyoneDegreesExceptionGetMessage`].
+        /// Frees memory through the C runtime's `free`, which is how the
+        /// library frees memory unless its allocator has been replaced. Release
+        /// what the library allocates with [`fiftyoneDegreesFree`] instead,
+        /// which follows a replaced allocator.
         ///
         /// The native symbol is `ipi_`-prefixed for the same reason as
         /// [`fiftyoneDegreesExceptionGetMessage`] above.
         ///
         /// # Safety
-        /// `ptr` must be a pointer the library allocated, or null.
+        /// `ptr` must be a pointer the C runtime's `malloc` allocated, or null.
         #[link_name = "ipi_fiftyoneDegreesMemoryStandardFree"]
         pub fn fiftyoneDegreesMemoryStandardFree(ptr: *mut std::os::raw::c_void);
+
+        /// The function the library frees memory with, the counterpart of the
+        /// allocator it allocates with. Release the string
+        /// [`fiftyoneDegreesExceptionGetMessage`] returns with it. It is
+        /// [`fiftyoneDegreesMemoryStandardFree`] unless the allocator has been
+        /// replaced, as the library's memory tracking replaces it.
+        ///
+        /// The native symbol is `ipi_`-prefixed for the same reason as
+        /// [`fiftyoneDegreesExceptionGetMessage`] above.
+        ///
+        /// # Safety
+        /// Call it only with a pointer the library allocated, or null.
+        #[link_name = "ipi_fiftyoneDegreesFree"]
+        pub static mut fiftyoneDegreesFree: unsafe extern "C" fn(ptr: *mut std::os::raw::c_void);
 
         /// Creates an evidence array with room for `capacity` pairs, or returns
         /// null when the allocation fails. Free it with
@@ -1268,7 +1283,7 @@ extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::{fiftyoneDegreesExceptionGetMessage, fiftyoneDegreesMemoryStandardFree};
+    use crate::common::{fiftyoneDegreesExceptionGetMessage, fiftyoneDegreesFree};
     use std::ffi::{CStr, CString};
     use std::path::PathBuf;
 
@@ -1564,7 +1579,7 @@ mod tests {
             return String::from("(exception set, no message)");
         }
         let message = CStr::from_ptr(raw).to_string_lossy().into_owned();
-        fiftyoneDegreesMemoryStandardFree(raw as *mut c_void);
+        fiftyoneDegreesFree(raw as *mut c_void);
         message
     }
 }

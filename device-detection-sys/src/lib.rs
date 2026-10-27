@@ -90,7 +90,7 @@ use std::os::raw::{c_char, c_int, c_void};
 // Re-export the shared FFI types so a caller building a detection has a single
 // import surface. These are the exact types the Hash entry points consume.
 pub use fiftyone_common_sys::{
-    fiftyoneDegreesExceptionGetMessage, fiftyoneDegreesMemoryStandardFree,
+    fiftyoneDegreesExceptionGetMessage, fiftyoneDegreesFree, fiftyoneDegreesMemoryStandardFree,
     fiftyoneDegreesResourceManagerFree, fiftyoneDegreesStatusGetMessage, EvidenceKeyValuePair,
     EvidenceKeyValuePairArray, EvidencePrefix, Exception, PropertiesAvailable, PropertiesRequired,
     ResourceHandle, ResourceManager, StatusCode,

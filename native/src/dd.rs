@@ -92,7 +92,7 @@ impl NativeException for sys::Exception {
     }
 
     unsafe fn free_message(ptr: *mut c_void) {
-        sys::fiftyoneDegreesMemoryStandardFree(ptr);
+        sys::fiftyoneDegreesFree(ptr);
     }
 }
 
