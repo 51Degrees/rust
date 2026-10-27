@@ -44,7 +44,9 @@
 //!   (JSON).
 //! - `Content-Length`: the UTF-8 byte length of the body.
 //! - `Cache-Control`: `private, max-age=1800` when the flow data recorded no
-//!   processing errors, otherwise `no-cache`.
+//!   processing errors, otherwise `no-cache`. A response to a request that
+//!   recorded errors carries no `ETag`, so a browser that kept it fetches it
+//!   again in full rather than having it confirmed by a `304`.
 //! - `Vary`: the comma-joined list of HTTP-header evidence keys in the
 //!   evidence-key whitelist supplied through [`EndpointOptions`], with the
 //!   `header.` prefix stripped and the names de-duplicated case-insensitively.
@@ -89,8 +91,11 @@ pub const CONTENT_TYPE_JSON: &str = "application/json";
 /// `max-age=1800` (30 minutes) so the client may reuse it for half an hour.
 pub const CACHE_CONTROL_CACHEABLE: &str = "private, max-age=1800";
 
-/// The `Cache-Control` value used when processing recorded one or more errors,
-/// so a faulty result is never cached.
+/// The `Cache-Control` value used when processing recorded one or more errors.
+///
+/// A browser may keep such a response but must ask the server before using it
+/// again, and the response carries no `ETag`, so asking again always gets a
+/// full response and never a `304` confirming the faulty one.
 pub const CACHE_CONTROL_NO_CACHE: &str = "no-cache";
 
 /// The first fixed seed for the ETag hasher (see [`compute_etag`]).
@@ -220,7 +225,12 @@ fn build_response(
             }
         }
 
-        headers.push(("ETag".to_owned(), etag));
+        // The validator stands for the evidence, not for whether processing
+        // worked, so a response to a request that recorded errors goes without
+        // one rather than being confirmed by a 304 once processing recovers.
+        if flow_data.errors().is_empty() {
+            headers.push(("ETag".to_owned(), etag));
+        }
 
         if let Some(origin) = access_control_allow_origin(request) {
             headers.push(("Access-Control-Allow-Origin".to_owned(), origin));
