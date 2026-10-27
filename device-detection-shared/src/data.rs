@@ -732,6 +732,8 @@ mod tests {
         );
     }
 
+    // WebAssembly has no threads to spawn.
+    #[cfg(not(target_family = "wasm"))]
     #[test]
     fn reads_from_several_threads_agree_and_read_once() {
         let (reader, reads) = CountingReader::new();
