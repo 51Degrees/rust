@@ -128,14 +128,17 @@ impl OnPremiseIpIntelligencePipelineBuilder {
     /// with each new file. The 51Degrees Distributor serves nothing without a
     /// licence key, so [`Self::build`] refuses with this on and no key set, as
     /// .NET does, and a deployment without one turns this off or sets
-    /// [`Self::data_update_license_keys`].
+    /// [`Self::data_update_license_keys`]. This is the master switch for
+    /// automatic updates, so with it off the file-system watcher does not run
+    /// either.
     pub fn auto_update(mut self, enabled: bool) -> Self {
         self.auto_update = enabled;
         self
     }
 
     /// Enable or disable the file-system watcher, which refreshes the engine
-    /// when the data file changes on disk. On by default.
+    /// when the data file changes on disk. On by default, and it runs only
+    /// while [`Self::auto_update`] is on.
     pub fn file_system_watcher(mut self, enabled: bool) -> Self {
         self.file_system_watcher = enabled;
         self

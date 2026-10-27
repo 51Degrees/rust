@@ -41,8 +41,8 @@
 //! - **Evidence** ([`EvidenceKeyValuePairArray`], create, free, add and iterate,
 //!   plus the [`EvidencePrefix`] enum and prefix mapping).
 //! - **Properties** ([`PropertiesRequired`]).
-//! - **Memory** ([`fiftyoneDegreesMemoryStandardFree`]) so that strings
-//!   allocated by the library can be released through the matching allocator.
+//! - **Memory** ([`fiftyoneDegreesFree`]) so that strings allocated by the
+//!   library can be released through the matching allocator.
 //!
 //! Internals such as collections, data sets and headers are exposed as opaque
 //! pointer types. Only the structures that actually cross the boundary in this
@@ -407,7 +407,7 @@ extern "C" {
     // -- status.h --
 
     /// Returns a newly allocated English message for the status code. The caller
-    /// must free the returned pointer with [`fiftyoneDegreesMemoryStandardFree`].
+    /// must free the returned pointer with [`fiftyoneDegreesFree`].
     ///
     /// # Safety
     /// `file_name` must be a valid null terminated string or null.
@@ -419,8 +419,7 @@ extern "C" {
     // -- exceptions.h --
 
     /// Returns a newly allocated English message describing the exception. The
-    /// caller must free the returned pointer with
-    /// [`fiftyoneDegreesMemoryStandardFree`].
+    /// caller must free the returned pointer with [`fiftyoneDegreesFree`].
     ///
     /// # Safety
     /// `exception` must point to a valid, set [`Exception`].
@@ -544,17 +543,25 @@ extern "C" {
 
     // -- memory.h --
 
-    /// Frees memory allocated by the library through the standard allocator.
-    ///
-    /// Used to release strings returned by
-    /// [`fiftyoneDegreesStatusGetMessage`] and
-    /// [`fiftyoneDegreesExceptionGetMessage`], which the default library
-    /// allocator produces.
+    /// Frees memory through the C runtime's `free`, which is how the library
+    /// frees memory unless its allocator has been replaced. Release what the
+    /// library allocates with [`fiftyoneDegreesFree`] instead, which follows a
+    /// replaced allocator.
     ///
     /// # Safety
-    /// `ptr` must be a pointer the library allocated through its standard
-    /// allocator, or null.
+    /// `ptr` must be a pointer the C runtime's `malloc` allocated, or null.
     pub fn fiftyoneDegreesMemoryStandardFree(ptr: *mut c_void);
+
+    /// The function the library frees memory with, the counterpart of the
+    /// allocator it allocates with. Release the strings
+    /// [`fiftyoneDegreesStatusGetMessage`] and
+    /// [`fiftyoneDegreesExceptionGetMessage`] return with it. It is
+    /// [`fiftyoneDegreesMemoryStandardFree`] unless the allocator has been
+    /// replaced, as the library's memory tracking replaces it.
+    ///
+    /// # Safety
+    /// Call it only with a pointer the library allocated, or null.
+    pub static mut fiftyoneDegreesFree: unsafe extern "C" fn(ptr: *mut c_void);
 
     // -- threading.h --
 
@@ -578,7 +585,7 @@ mod tests {
             // The library produces a human readable message for the code.
             assert!(!message.is_empty(), "status message should not be empty");
             // Free through the matching allocator.
-            fiftyoneDegreesMemoryStandardFree(raw as *mut std::os::raw::c_void);
+            fiftyoneDegreesFree(raw as *mut std::os::raw::c_void);
         }
     }
 
@@ -603,7 +610,7 @@ mod tests {
             assert!(!raw.is_null(), "exception message should be allocated");
             let message = CStr::from_ptr(raw).to_string_lossy().into_owned();
             assert!(!message.is_empty(), "exception message should not be empty");
-            fiftyoneDegreesMemoryStandardFree(raw as *mut std::os::raw::c_void);
+            fiftyoneDegreesFree(raw as *mut std::os::raw::c_void);
         }
     }
 

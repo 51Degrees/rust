@@ -99,8 +99,9 @@ pub trait OnPremiseAspectEngine: AspectEngine {
     }
 
     /// The directory this engine uses for temporary copies of its data files,
-    /// if any. Used by the update service when downloading to a scratch
-    /// location before swapping the live file.
+    /// if any. The data update service does not read it, as it writes each
+    /// download beside the data file, so that the new file replaces the old
+    /// one with a rename.
     fn temp_data_dir(&self) -> Option<&std::path::Path> {
         None
     }

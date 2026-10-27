@@ -23,7 +23,6 @@
 //! The JavaScript builder flow element.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use fiftyone_json_builder::JSON_BUILDER_DATA_KEY;
 use fiftyone_pipeline_core::constants::{
@@ -141,10 +140,10 @@ fn safe_sequence(sequence: i32) -> i32 {
 ///   bit integer, else `1`, because the template writes it as bare code.
 /// - **has delayed properties**: true when the JSON payload contains the
 ///   `delayexecution` marker.
-/// - **supports promises**: true when the device-detection `Promise` property is
-///   `Full`. The check is latched off once the property proves unavailable.
-/// - **supports fetch**: true when the device-detection `Fetch` property is
-///   true. The check is latched off once the property proves unavailable.
+/// - **supports promises**: true when this request's device-detection
+///   `Promise` property is `Full`.
+/// - **supports fetch**: true when this request's device-detection `Fetch`
+///   property is true.
 /// - **user prompt**: true when the builder was given a cloud request engine
 ///   whose licensed products include 51Did, through
 ///   [`JavaScriptBuilderElementBuilder::set_cloud_request_engine`]. The
@@ -190,13 +189,6 @@ pub struct JavaScriptBuilderElement {
     /// Whether the script carries the user prompt section, decided by the
     /// builder from the cloud request engine's licensed products.
     user_prompt: bool,
-
-    /// Latches that short-circuit the Promise/Fetch property lookups once they
-    /// have proved unavailable. Stored atomically because
-    /// `FlowElement::process` takes `&self` and the element is shared across
-    /// threads.
-    promise_property_available: AtomicBool,
-    fetch_property_available: AtomicBool,
 }
 
 impl JavaScriptBuilderElement {
@@ -246,8 +238,6 @@ impl JavaScriptBuilderElement {
             enable_cookies,
             minify,
             user_prompt,
-            promise_property_available: AtomicBool::new(true),
-            fetch_property_available: AtomicBool::new(true),
         }
     }
 
@@ -422,60 +412,34 @@ impl JavaScriptBuilderElement {
         serde_json::to_string(&parameters).unwrap_or_else(|_| "{}".to_owned())
     }
 
-    /// Determine whether a latched device-detection property satisfies a
+    /// Whether this request's value of a device-detection property satisfies a
     /// predicate.
     ///
-    /// Returns `false` immediately when the latch has already been cleared. The
-    /// property is otherwise looked up and the predicate applied to its value.
-    /// Once the property proves unavailable the latch is cleared so later
-    /// requests skip the lookup.
-    fn supports_property(
-        &self,
-        latch: &AtomicBool,
+    /// The value describes the visitor's browser, so it is read from each
+    /// request's flow data. A request with no value, because no element
+    /// produces the property or because this request has no answer for it,
+    /// does not satisfy the predicate, and the next request is read afresh.
+    fn property_satisfies(
         data: &FlowData,
         property: &str,
         predicate: impl Fn(&PropertyValue) -> bool,
     ) -> bool {
-        if !latch.load(Ordering::Relaxed) {
-            return false;
-        }
-        match data.get_evidence_or_property(property) {
-            Ok(value) => predicate(&value),
-            Err(_) => {
-                // The property is not available in this pipeline; latch off so
-                // we do not keep looking.
-                latch.store(false, Ordering::Relaxed);
-                false
-            }
-        }
+        data.get_evidence_or_property(property)
+            .is_ok_and(|value| predicate(&value))
     }
 
-    /// Determine whether the client supports promises.
-    ///
-    /// Returns `true` only when the device-detection `Promise` property resolves
-    /// to `Full`. Once the property proves unavailable the latch is cleared so
-    /// later requests skip the lookup.
-    fn supports_promises(&self, data: &FlowData) -> bool {
-        self.supports_property(
-            &self.promise_property_available,
-            data,
-            PROMISE_PROPERTY,
-            |value| value.as_str() == Some(PROMISE_FULL_VALUE),
-        )
+    /// Whether the client supports promises, being true only when this
+    /// request's device-detection `Promise` property is `Full`.
+    fn supports_promises(data: &FlowData) -> bool {
+        Self::property_satisfies(data, PROMISE_PROPERTY, |value| {
+            value.as_str() == Some(PROMISE_FULL_VALUE)
+        })
     }
 
-    /// Determine whether the client supports the fetch API.
-    ///
-    /// Returns `true` only when the device-detection `Fetch` property resolves to
-    /// true. Once the property proves unavailable the latch is cleared so later
-    /// requests skip the lookup.
-    fn supports_fetch(&self, data: &FlowData) -> bool {
-        self.supports_property(
-            &self.fetch_property_available,
-            data,
-            FETCH_PROPERTY,
-            |value| value.as_bool() == Some(true),
-        )
+    /// Whether the client supports the fetch API, being true only when this
+    /// request's device-detection `Fetch` property is true.
+    fn supports_fetch(data: &FlowData) -> bool {
+        Self::property_satisfies(data, FETCH_PROPERTY, |value| value.as_bool() == Some(true))
     }
 
     /// Read the JSON payload from the JSON builder's element data, or an empty
@@ -494,8 +458,8 @@ impl JavaScriptBuilderElement {
         let object_name = self.resolve_object_name(data);
         let enable_cookies = self.resolve_enable_cookies(data);
 
-        let supports_promises = self.supports_promises(data);
-        let supports_fetch = self.supports_fetch(data);
+        let supports_promises = Self::supports_promises(data);
+        let supports_fetch = Self::supports_fetch(data);
 
         let json_object = Self::json_object(data);
         let parameters = Self::build_parameters(data);
@@ -775,17 +739,10 @@ mod tests {
     }
 
     #[test]
-    fn promise_and_fetch_latch_off_when_unavailable() {
-        let element = JavaScriptBuilderElement::new();
+    fn promise_and_fetch_are_unsupported_without_a_device_answer() {
+        // No device element is present, so neither property resolves.
         let data = flow_data_with(&[]);
-        // No device element present, so neither property resolves.
-        assert!(!element.supports_promises(&data));
-        assert!(!element.supports_fetch(&data));
-        // The latches have been cleared so subsequent calls skip the lookup.
-        assert!(!element.promise_property_available.load(Ordering::Relaxed));
-        assert!(!element.fetch_property_available.load(Ordering::Relaxed));
-        // A second call still reports no support.
-        assert!(!element.supports_promises(&data));
-        assert!(!element.supports_fetch(&data));
+        assert!(!JavaScriptBuilderElement::supports_promises(&data));
+        assert!(!JavaScriptBuilderElement::supports_fetch(&data));
     }
 }

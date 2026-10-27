@@ -467,6 +467,46 @@ fn pipeline_runs_elements_in_order() {
 }
 
 #[test]
+fn a_flow_data_is_processed_once() {
+    let (pipeline, log) = single_element_pipeline();
+    let mut data = pipeline.create_flow_data();
+    data.process().unwrap();
+
+    let second = data.process();
+    assert!(
+        matches!(second, Err(Error::PipelineConfiguration { .. })),
+        "a second call fails, got {second:?}"
+    );
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec!["recording"],
+        "no element runs a second time"
+    );
+    assert!(data.is_processed());
+}
+
+#[test]
+fn a_failed_flow_data_is_not_processed_again() {
+    // A flow data whose processing failed is refused as well, so its errors
+    // are those of its one run.
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(FailingElement::new()))
+        .add_element(Arc::new(OrderElement::new("after", Arc::clone(&log), &[])))
+        .build()
+        .unwrap();
+    let mut data = pipeline.create_flow_data();
+    assert!(matches!(data.process(), Err(Error::Aggregate(_))));
+
+    assert!(matches!(
+        data.process(),
+        Err(Error::PipelineConfiguration { .. })
+    ));
+    assert_eq!(data.errors().len(), 1, "the errors are not recorded twice");
+    assert_eq!(*log.lock().unwrap(), vec!["after"]);
+}
+
+#[test]
 fn pipeline_evidence_filter_unions_element_filters() {
     let log = Arc::new(std::sync::Mutex::new(Vec::new()));
     let pipeline = Pipeline::builder()
@@ -571,6 +611,24 @@ fn errors_propagate_when_not_suppressed() {
     // The error is also recorded on the flow data.
     assert_eq!(data.errors().len(), 1);
     assert_eq!(data.errors()[0].element_data_key, "failing");
+}
+
+#[test]
+fn the_returned_error_names_the_element_and_the_cause() {
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(FailingElement::new()))
+        .build()
+        .unwrap();
+    let shown = pipeline
+        .create_flow_data()
+        .process()
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        shown,
+        "1 error(s) occurred during pipeline processing (error in element 'failing': \
+         pipeline configuration error: deliberate failure)"
+    );
 }
 
 #[test]

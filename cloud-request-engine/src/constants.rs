@@ -98,3 +98,10 @@ pub const PROCESS_STARTED_KEY: &str = "process-started";
 /// The element-data field holding the advisory warning messages, if any, that
 /// the cloud service returned in the response's `warnings` array.
 pub const WARNINGS_KEY: &str = "warnings";
+
+/// The top-level member of a data response that carries 51Did values.
+///
+/// The cloud creates each 51Did afresh for the request that asked for it, so a
+/// response carrying this member answers that one request and is never shared
+/// with another through the response cache.
+pub const IDENTIFIER_MEMBER: &str = "fodid";

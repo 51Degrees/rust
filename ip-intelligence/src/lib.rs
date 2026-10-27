@@ -65,10 +65,11 @@
 //! Distributor serves nothing without the licence keys set with
 //! `.data_update_license_keys(..)`, so a build with polling on and no key
 //! fails with an error that says so, as it does in .NET, and a deployment
-//! without a key turns polling off with `.auto_update(false)`.
-//! `.file_system_watcher(false)` turns the watcher off, and
-//! `pipeline.resource::<DataUpdateService>()` reaches the service for a check
-//! on demand.
+//! without a key turns automatic updates off with `.auto_update(false)`, which
+//! stops the polling and the file watcher together, as the specification's
+//! master switch does. `.file_system_watcher(false)` turns only the watcher
+//! off, and `pipeline.resource::<DataUpdateService>()` reaches the service for
+//! a check on demand.
 //!
 //! # Features
 //!

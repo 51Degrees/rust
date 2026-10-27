@@ -456,6 +456,95 @@ fn recovery_mode_blocks_after_repeated_data_failures() {
     );
 }
 
+/// A transport answering as the cloud service did on 26 October 2026, with a
+/// 404 and a plain text body for a `user-agent` of 32,000 bytes or more, and
+/// JSON for anything else. With `failing` set it answers every request 503.
+struct SizeLimitedCloud {
+    failing: bool,
+}
+
+impl CloudHttpClient for SizeLimitedCloud {
+    fn send(&self, request: &CloudHttpRequest) -> Result<CloudHttpResponse, String> {
+        if self.failing {
+            return FakeClient::with_status(503, "Service Unavailable");
+        }
+        let user_agent = request
+            .form
+            .iter()
+            .find(|(name, _)| name == "user-agent")
+            .map_or(0, |(_, value)| value.len());
+        if user_agent >= 32_000 {
+            FakeClient::with_status(404, "Status code: 404, 'Error' method not found")
+        } else {
+            FakeClient::ok(r#"{"device":{"ismobile":false}}"#)
+        }
+    }
+}
+
+/// A pipeline over one engine with the default recovery settings, ten
+/// failures in 100 seconds opening 60 seconds of recovery.
+fn recovery_pipeline(cloud: SizeLimitedCloud) -> Arc<Pipeline> {
+    let state = CloudEngineState {
+        evidence_keys: vec![EvidenceKeyEntry {
+            key: "query.user-agent".to_owned(),
+            order: 0,
+        }],
+        accessible_properties: LicensedProducts::default(),
+    };
+    let engine = CloudRequestEngine::builder()
+        .resource_key("rk")
+        .http_client(Arc::new(cloud))
+        .set_state(state)
+        .build()
+        .unwrap();
+    Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .suppress_process_exceptions(true)
+        .build()
+        .unwrap()
+}
+
+/// The error messages a request with this user agent records.
+fn errors_for(pipeline: &Arc<Pipeline>, user_agent: &str) -> Vec<String> {
+    let mut data = pipeline.create_flow_data_with(
+        Evidence::builder()
+            .add("query.user-agent", user_agent)
+            .build(),
+    );
+    data.process().unwrap();
+    data.errors()
+        .iter()
+        .map(|error| error.source.to_string())
+        .collect()
+}
+
+#[test]
+fn answers_to_one_visitors_own_content_leave_the_next_visitor_served() {
+    // The gate is shared by every visitor, so a visitor sending evidence the
+    // service refuses must not be able to open a recovery period for the rest.
+    let pipeline = recovery_pipeline(SizeLimitedCloud { failing: false });
+    let oversized = "A".repeat(32_000);
+    for _ in 0..10 {
+        assert_eq!(errors_for(&pipeline, &oversized).len(), 1);
+    }
+    let next = errors_for(&pipeline, "Mozilla/5.0");
+    assert!(next.is_empty(), "the next visitor was refused: {next:?}");
+}
+
+#[test]
+fn service_errors_still_open_a_recovery_period() {
+    let pipeline = recovery_pipeline(SizeLimitedCloud { failing: true });
+    for _ in 0..10 {
+        assert_eq!(errors_for(&pipeline, "Mozilla/5.0").len(), 1);
+    }
+    let next = errors_for(&pipeline, "Mozilla/5.0");
+    assert!(
+        next.iter()
+            .any(|error| error.contains("temporarily restricted")),
+        "ten 503 answers did not open a recovery period: {next:?}"
+    );
+}
+
 /// A consumer-supplied response cache, recording its lookups and stores so the
 /// tests can assert how it was used. It stands in for any [`PutCache`], for
 /// example one a `wasm32-wasip1` host would back with its own key/value store.
@@ -625,6 +714,108 @@ fn host_provided_cache_outlives_the_engine_for_short_lived_instances() {
         0,
         "the rebuilt instance made no request: state injected, response cached"
     );
+}
+
+#[test]
+fn a_response_carrying_a_51did_is_never_stored() {
+    // The cloud creates a 51Did for the one request that asked for it, so a body
+    // carrying one is not kept for the next request with the same evidence.
+    let client = Arc::new(FakeClient::default());
+    client.set_evidence_keys(FakeClient::ok(r#"["header.user-agent","query.id.usage"]"#));
+    client.set_data(FakeClient::ok(
+        r#"{"device":{"ismobile":true},"fodid":{"idrandglobal":"created-for-one-request"}}"#,
+    ));
+
+    let cache = Arc::new(RecordingCache::default());
+    let engine = CloudRequestEngine::builder()
+        .resource_key("test-resource-key")
+        .endpoint("https://cloud.example.test/api/v4/")
+        .http_client(client.clone())
+        .cache(cache.clone())
+        .build()
+        .unwrap();
+    let after_build = client.request_count();
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .build()
+        .unwrap();
+    let evidence = || {
+        Evidence::builder()
+            .add("header.user-agent", "UA")
+            .add("query.id.usage", "non-marketing")
+            .build()
+    };
+
+    for request in 1..=2 {
+        let mut data = pipeline.create_flow_data_with(evidence());
+        data.process().unwrap();
+        let cloud = data.get(CloudRequestEngine::DATA_KEY).unwrap();
+        assert!(!cloud.cache_hit(), "request {request} is not a cache hit");
+    }
+    assert_eq!(cache.puts(), 0, "no body carrying a 51Did was stored");
+    assert_eq!(
+        client.request_count(),
+        after_build + 2,
+        "each request reached the cloud"
+    );
+}
+
+/// A cache holding one body under every key, as a store shared with other
+/// writers can hold a body for the key a request makes.
+struct StoredBodyCache(String);
+
+impl Cache<String, String> for StoredBodyCache {
+    fn get(&self, _key: &String) -> Option<String> {
+        Some(self.0.clone())
+    }
+    fn len(&self) -> usize {
+        1
+    }
+}
+
+impl PutCache<String, String> for StoredBodyCache {
+    fn put(&self, _key: String, _value: String) {}
+}
+
+#[test]
+fn a_stored_response_carrying_a_51did_is_never_served() {
+    // The 51Did in a stored body was created for another request, so the engine
+    // asks the cloud rather than serving it, whatever case the member is in.
+    for member in ["fodid", "FODid"] {
+        let client = Arc::new(FakeClient::default());
+        client.set_data(FakeClient::ok(
+            r#"{"device":{"ismobile":true},"fodid":{"idrandglobal":"created-for-this-request"}}"#,
+        ));
+        let stored = format!(
+            r#"{{"device":{{"ismobile":true}},"{member}":{{"idrandglobal":"created-for-another-request"}}}}"#
+        );
+        let engine = CloudRequestEngine::builder()
+            .resource_key("rk")
+            .http_client(client.clone())
+            .set_state(sample_state())
+            .cache(Arc::new(StoredBodyCache(stored)))
+            .build()
+            .unwrap();
+        let pipeline = Pipeline::builder()
+            .add_element(Arc::new(engine))
+            .build()
+            .unwrap();
+
+        let mut data = pipeline
+            .create_flow_data_with(Evidence::builder().add("header.user-agent", "UA").build());
+        data.process().unwrap();
+
+        let cloud = data.get(CloudRequestEngine::DATA_KEY).unwrap();
+        assert!(
+            cloud
+                .json_response()
+                .is_some_and(|json| json.contains("created-for-this-request")),
+            "the {member} body in the store was not served, got {:?}",
+            cloud.json_response()
+        );
+        assert!(!cloud.cache_hit(), "the {member} body is not a cache hit");
+        assert_eq!(client.request_count(), 1, "the cloud was asked instead");
+    }
 }
 
 /// Build a state snapshot with one accepted evidence key and one product
@@ -1067,4 +1258,89 @@ fn evidence_named_values_does_not_displace_the_engines_property_list() {
         .collect();
     assert_eq!(values.len(), 1, "one property list, got {values:?}");
     assert_eq!(values[0], "device.ismobile", "the engine's list wins");
+}
+
+/// A fake transport that answers each data request with the `user-agent` field
+/// it was sent, so a test can tell which request a response was made for.
+#[derive(Default)]
+struct EchoClient {
+    data_requests: Mutex<usize>,
+}
+
+impl CloudHttpClient for EchoClient {
+    fn send(&self, request: &CloudHttpRequest) -> Result<CloudHttpResponse, String> {
+        *self.data_requests.lock().unwrap() += 1;
+        let user_agent = request
+            .form
+            .iter()
+            .find(|(name, _)| name == "user-agent")
+            .map(|(_, value)| value.clone())
+            .unwrap_or_default();
+        FakeClient::ok(&serde_json::json!({ "device": { "useragent": user_agent } }).to_string())
+    }
+}
+
+#[test]
+fn evidence_that_differs_never_shares_a_cache_entry() {
+    // The web integration decodes the query string, so a query value can hold
+    // a line break followed by text shaped like another evidence field. That
+    // request must not be given the cache key of a visitor whose evidence
+    // really holds both values, or one is served the answer made for the other.
+    let client = Arc::new(EchoClient::default());
+    let state = CloudEngineState {
+        evidence_keys: [
+            "header.user-agent",
+            "query.user-agent",
+            "header.x-device-user-agent",
+        ]
+        .into_iter()
+        .map(|key| EvidenceKeyEntry {
+            key: key.to_owned(),
+            order: 0,
+        })
+        .collect(),
+        accessible_properties: LicensedProducts::default(),
+    };
+    let engine = CloudRequestEngine::builder()
+        .resource_key("rk")
+        .http_client(client.clone())
+        .set_state(state)
+        .cache(Arc::new(RecordingCache::default()))
+        .build()
+        .unwrap();
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .build()
+        .unwrap();
+
+    let mut crafted = pipeline.create_flow_data_with(
+        Evidence::builder()
+            .add("query.user-agent", "Mozilla/5.0\nx-device-user-agent=Other")
+            .build(),
+    );
+    crafted.process().unwrap();
+
+    let mut visitor = pipeline.create_flow_data_with(
+        Evidence::builder()
+            .add("header.user-agent", "Mozilla/5.0")
+            .add("header.x-device-user-agent", "Other")
+            .build(),
+    );
+    visitor.process().unwrap();
+
+    let cloud = visitor.get(CloudRequestEngine::DATA_KEY).unwrap();
+    assert_eq!(
+        cloud.json_response(),
+        Some(r#"{"device":{"useragent":"Mozilla/5.0"}}"#),
+        "the visitor was served the answer made for the other request"
+    );
+    assert!(
+        !cloud.cache_hit(),
+        "the visitor's request is not a cache hit"
+    );
+    assert_eq!(
+        *client.data_requests.lock().unwrap(),
+        2,
+        "each request reached the cloud"
+    );
 }

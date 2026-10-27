@@ -141,7 +141,11 @@
 //!
 //! Repeated request failures within a window trip a recovery gate, which
 //! short-circuits requests for a recovery period so a slow or failing cloud
-//! cannot stall consumer requests.
+//! cannot stall consumer requests. Only a failure that says the service is in
+//! trouble counts, being a request that did not complete, a status of 500 or
+//! more, a 429, or a success status whose body could not be used. A status
+//! from 400 to 499 answers the request's own content, which any visitor can
+//! choose, so it does not count.
 //!
 //! ## Element data shape
 //!

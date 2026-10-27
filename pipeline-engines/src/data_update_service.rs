@@ -34,7 +34,9 @@
 //!   stagger many instances), sending an `If-Modified-Since` header so the
 //!   server can answer `304 Not Modified` cheaply.
 //! - **Automatic update from file.** A [`notify`] file-system watcher refreshes
-//!   the engine when the data file changes on disk.
+//!   the engine when the data file changes on disk. Like polling, it runs only
+//!   while automatic updates are on, which the specification makes the master
+//!   switch for both.
 //! - **Programmatic update.** [`DataUpdateService::check_for_update`] triggers an
 //!   immediate check on demand.
 //!
@@ -46,6 +48,15 @@
 //! `refresh` is required to be thread-safe with respect to concurrent `process`
 //! calls, so request handling continues with minimal impact during a refresh.
 //!
+//! # Downloads
+//!
+//! A download is written beside the data file as it arrives, with its MD5
+//! taken as it is read, then decompressed into a second file there that
+//! replaces the data file with a rename. The memory a download needs does not
+//! grow with the size of the file, the HTTP client's timeout limits each wait
+//! for more of the response rather than the whole download, and both files are
+//! removed when an update fails part way.
+//!
 //! # Scope of this baseline
 //!
 //! The service downloads, verifies, decompresses and applies updates, and runs
@@ -55,15 +66,17 @@
 //! and a `429` response surfaces the server's `Retry-After` in the error but the
 //! next poll still uses the configured interval rather than that delay.
 
-use std::collections::hash_map::DefaultHasher;
+use std::collections::hash_map::RandomState;
 use std::hash::{Hash, Hasher};
-use std::io::Read;
-use std::path::Path;
+use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use fiftyone_pipeline_core::redact::redact_with;
 use md5::{Digest, Md5};
 
 use crate::data_file::AspectEngineDataFile;
@@ -141,13 +154,18 @@ impl DataUpdateService {
     /// - If the configuration sets `update_on_startup`, a synchronous remote
     ///   poll runs now and its result is returned. A failed startup update is
     ///   returned as an error so the caller can decide whether to proceed.
-    /// - If `file_system_watcher_enabled` and the file has a path, a watcher is
-    ///   installed.
+    /// - If `automatic_updates_enabled` and `file_system_watcher_enabled` are
+    ///   both on and the file has a path, a watcher is installed. Automatic
+    ///   updates are the master switch for the watcher, as the specification
+    ///   says.
     /// - The file is added to the scheduler's list so it is polled on its
     ///   interval (when `automatic_updates_enabled`).
     ///
     /// Returns the status of the startup poll, or [`AutoUpdateStatus::NotNeeded`]
-    /// when no startup poll was requested.
+    /// when no startup poll was requested. A failed startup poll leaves the
+    /// engine on the data it loaded, as the specification says. It is logged
+    /// and returned as an error, and the file is registered all the same, so
+    /// the updates that follow still run.
     pub fn register(
         &self,
         engine: Arc<dyn OnPremiseAspectEngine>,
@@ -164,15 +182,28 @@ impl DataUpdateService {
             watcher: Mutex::new(None),
         });
 
-        let mut startup_status = AutoUpdateStatus::NotNeeded;
+        let mut startup = Ok(AutoUpdateStatus::NotNeeded);
 
-        // Update on startup: poll once, synchronously.
+        // Update on startup: poll once, synchronously. A failure leaves the
+        // engine on the data it loaded, so the file is still registered for
+        // the updates that follow.
         if config.update_on_startup && !already_registered {
-            startup_status = self.check_for_update_from_url(&registration)?;
+            startup = self.check_for_update_from_url(&registration);
+            if let Err(error) = &startup {
+                log::warn!(
+                    "An error occurred while updating the data file for {} on start-up. \
+                     The data it has is used. Error detail: {error}",
+                    registration.engine.data_key()
+                );
+            }
         }
 
-        // Install the file-system watcher if requested.
-        if config.file_system_watcher_enabled && data_file.data_file_path().is_some() {
+        // Install the file-system watcher if requested and automatic updates,
+        // its master switch, are on.
+        if config.automatic_updates_enabled
+            && config.file_system_watcher_enabled
+            && data_file.data_file_path().is_some()
+        {
             self.install_watcher(&registration);
         }
 
@@ -196,7 +227,7 @@ impl DataUpdateService {
         self.ensure_scheduler();
         self.inner.wake.notify_all();
 
-        Ok(startup_status)
+        startup
     }
 
     /// Trigger an immediate update check for the engine's data file matching
@@ -279,30 +310,32 @@ impl DataUpdateService {
                     .unwrap_or_else(|_| Duration::from_secs(0));
                 return Instant::now()
                     + wait
-                    + self.randomisation(data_file.configuration().max_randomisation_seconds);
+                    + Self::randomisation(data_file.configuration().max_randomisation_seconds);
             }
         }
-        Instant::now() + self.poll_interval(data_file)
+        Instant::now() + Self::poll_interval(data_file)
     }
 
-    /// The base polling interval for a file plus randomisation.
-    fn poll_interval(&self, data_file: &AspectEngineDataFile) -> Duration {
+    /// The polling interval for a file plus a random delay of up to its
+    /// maximum randomisation, as each poll waits.
+    fn poll_interval(data_file: &AspectEngineDataFile) -> Duration {
         let config = data_file.configuration();
         Duration::from_secs(config.polling_interval_seconds)
-            + self.randomisation(config.max_randomisation_seconds)
+            + Self::randomisation(config.max_randomisation_seconds)
     }
 
-    /// A pseudo-random extra delay between zero and `max_seconds`.
+    /// A random delay between zero and `max_seconds`, so instances that start
+    /// together poll at different times.
     ///
-    /// A hash of the current time seeds the choice, which is enough to stagger
-    /// many instances without pulling in a random-number-generator dependency.
-    fn randomisation(&self, max_seconds: u64) -> Duration {
+    /// Each `RandomState` has its own keys, which the standard library draws
+    /// from the operating system, so the delay differs between calls and
+    /// between processes without a random number generator dependency.
+    fn randomisation(max_seconds: u64) -> Duration {
         if max_seconds == 0 {
             return Duration::from_secs(0);
         }
-        let mut hasher = DefaultHasher::new();
-        Instant::now().elapsed().as_nanos().hash(&mut hasher);
-        std::thread::current().id().hash(&mut hasher);
+        let mut hasher = std::hash::BuildHasher::build_hasher(&RandomState::new());
+        std::time::SystemTime::now().hash(&mut hasher);
         Duration::from_secs(hasher.finish() % max_seconds)
     }
 
@@ -331,6 +364,10 @@ impl DataUpdateService {
 
     /// Install a file-system watcher that refreshes the engine when the data
     /// file changes on disk.
+    ///
+    /// The registration owns the watcher, so the watcher's callback holds the
+    /// registration weakly. A strong reference would keep the registration,
+    /// its engine and the watcher's thread alive after the service is dropped.
     fn install_watcher(&self, registration: &Arc<Registration>) {
         use notify::{RecursiveMode, Watcher};
 
@@ -338,24 +375,29 @@ impl DataUpdateService {
             Some(p) => p.to_path_buf(),
             None => return,
         };
+        let file_name = path.file_name().map(ToOwned::to_owned);
 
-        let reg = Arc::clone(registration);
-        // The service is held alive by the caller for as long as updates are
-        // wanted, so the closure captures only the registration (which owns the
-        // engine and data file) plus a clone of the HTTP client is not needed
-        // here, the watcher only refreshes from the file on disk.
-        let client = self.client.clone();
-        let service = ServiceHandle {
-            client,
-            inner: Arc::clone(&self.inner),
-        };
+        // The file as it is now is the one the engine loaded, so only a later
+        // change refreshes it.
+        if registration.data_file.last_applied_modified().is_none() {
+            if let Some(modified) = file_modified_time(&path) {
+                registration.data_file.set_last_applied_modified(modified);
+            }
+        }
 
+        let reg = Arc::downgrade(registration);
         let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            if let Ok(event) = res {
-                if event.kind.is_modify() || event.kind.is_create() {
-                    // Debounce duplicate events by comparing the file's
-                    // last-modified time with the last we applied.
-                    service.on_file_changed(&reg);
+            let Ok(event) = res else {
+                return;
+            };
+            // The watch is on the folder, so skip events for other files in it.
+            let names_the_file = event
+                .paths
+                .iter()
+                .any(|changed| changed.file_name() == file_name.as_deref());
+            if names_the_file && (event.kind.is_modify() || event.kind.is_create()) {
+                if let Some(reg) = reg.upgrade() {
+                    ServiceHandle::on_file_changed(&reg);
                 }
             }
         });
@@ -513,12 +555,7 @@ impl ServiceHandle {
                 // Poll now. A failure is logged, and the next interval retries.
                 let result = self.check_for_update_from_url(&registration);
                 log_poll(&registration, result);
-                let interval = Duration::from_secs(
-                    registration
-                        .data_file
-                        .configuration()
-                        .polling_interval_seconds,
-                );
+                let interval = DataUpdateService::poll_interval(&registration.data_file);
                 let next = now + interval;
                 *registration
                     .next_poll
@@ -535,7 +572,7 @@ impl ServiceHandle {
 
     /// Handle a file-system-watcher event by refreshing the engine from disk if
     /// the file is genuinely newer than the one already applied.
-    fn on_file_changed(&self, registration: &Arc<Registration>) {
+    fn on_file_changed(registration: &Registration) {
         let path = match registration.data_file.data_file_path() {
             Some(p) => p.to_path_buf(),
             None => return,
@@ -567,8 +604,32 @@ impl ServiceHandle {
         }
     }
 
+    /// True once the service has been dropped.
+    fn shutting_down(&self) -> bool {
+        *self
+            .inner
+            .shutting_down
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Poll the remote update URL, verify, decompress, write and refresh.
+    ///
+    /// Every failing exit comes through here, so no error leaves the service
+    /// carrying the data file's licence keys, however the poll failed.
     fn check_for_update_from_url(&self, registration: &Arc<Registration>) -> DataUpdateResult {
+        let keys = &registration
+            .data_file
+            .configuration()
+            .data_update_license_keys;
+        self.poll_update_url(registration).map_err(|mut error| {
+            error.message = redact_with(&error.message, keys).into_owned();
+            error
+        })
+    }
+
+    /// Poll the remote update URL, verify, decompress, write and refresh.
+    fn poll_update_url(&self, registration: &Arc<Registration>) -> DataUpdateResult {
         let data_file = &registration.data_file;
         let config = data_file.configuration();
         let url = match data_file.data_update_url() {
@@ -597,7 +658,10 @@ impl ServiceHandle {
         let response = request.send().map_err(|e| {
             DataUpdateError::new(
                 AutoUpdateStatus::HttpsError,
-                format!("error accessing data update service at '{url}': {e}"),
+                format!(
+                    "error accessing data update service at '{url}': {}",
+                    request_error_message(e)
+                ),
             )
         })?;
 
@@ -642,73 +706,70 @@ impl ServiceHandle {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
 
-        let compressed = response.bytes().map_err(|e| {
-            DataUpdateError::new(
-                AutoUpdateStatus::StreamError,
-                format!("error reading data update response from '{url}': {e}"),
-            )
-        })?;
+        // The body is read as it arrives, so the client's timeout limits each
+        // wait for more of it rather than the whole download, and its MD5 is
+        // taken as it is read. Reading stops once the service is dropped, so
+        // dropping it does not wait for a long download to finish.
+        let stop = || self.shutting_down();
+        let mut body = Md5Reader::new(Stoppable {
+            inner: response,
+            stop: &stop,
+        });
 
-        // Verify integrity if requested and a hash was supplied.
-        if config.verify_md5 {
-            if let Some(expected) = expected_md5.as_deref() {
-                let actual = md5_hex(&compressed);
-                if !actual.eq_ignore_ascii_case(expected) {
-                    return Err(DataUpdateError::new(
-                        AutoUpdateStatus::Md5ValidationFailed,
-                        format!(
-                            "integrity check failed: server MD5 '{expected}' does \
-                             not match downloaded '{actual}'"
-                        ),
-                    ));
-                }
-            }
-        }
-
-        // Decompress if requested.
-        let uncompressed = if config.decompress_content {
-            gzip_decompress(&compressed).map_err(|e| {
-                DataUpdateError::new(
-                    AutoUpdateStatus::StreamError,
-                    format!("error decompressing data update from '{url}': {e}"),
-                )
-            })?
-        } else {
-            compressed.to_vec()
+        let Some(path) = data_file.data_file_path() else {
+            // Memory data source: the engine takes the data as bytes.
+            let mut compressed = Vec::new();
+            body.read_to_end(&mut compressed)
+                .map_err(|e| read_error(&url, e))?;
+            verify_md5(config.verify_md5, expected_md5.as_deref(), &body.hex())?;
+            let data = if config.decompress_content {
+                gzip_decompress(&compressed).map_err(|e| decompress_error(&url, e))?
+            } else {
+                compressed
+            };
+            registration
+                .engine
+                .refresh_from_memory(Some(data_file.identifier()), &data)
+                .map_err(|e| {
+                    DataUpdateError::new(AutoUpdateStatus::RefreshFailed, e.to_string())
+                })?;
+            data_file.set_data_published(Utc::now());
+            return Ok(AutoUpdateStatus::Success);
         };
 
-        self.apply_update(registration, &uncompressed)
-    }
-
-    /// Apply downloaded, decompressed data to the engine and (when on disk) the
-    /// file.
-    fn apply_update(&self, registration: &Arc<Registration>, data: &[u8]) -> DataUpdateResult {
-        let data_file = &registration.data_file;
-        let engine = &registration.engine;
-        let identifier = Some(data_file.identifier());
-
-        if let Some(path) = data_file.data_file_path() {
-            // File data source: write the new bytes, then refresh from the
-            // file. Pause the watcher's effect by recording the modified time
-            // we are about to create as already-applied.
-            write_atomically(path, data).map_err(|e| {
-                DataUpdateError::new(
-                    AutoUpdateStatus::NewFileCannotRename,
-                    format!("error writing data file '{}': {e}", path.display()),
-                )
-            })?;
-            if let Some(modified) = file_modified_time(path) {
-                data_file.set_last_applied_modified(modified);
-            }
-            engine.refresh(identifier).map_err(|e| {
-                DataUpdateError::new(AutoUpdateStatus::RefreshFailed, e.to_string())
-            })?;
+        // File data source: the download, and the file it decompresses to, are
+        // written beside the data file so the new file replaces it with a
+        // rename. Each is removed when it goes out of scope, so an update that
+        // fails part way leaves nothing behind.
+        let download = TempFile::beside(path, "download");
+        save_body(&mut body, download.path(), &url)?;
+        verify_md5(config.verify_md5, expected_md5.as_deref(), &body.hex())?;
+        let new_file = if config.decompress_content {
+            let decompressed = TempFile::beside(path, "new");
+            gunzip_file(download.path(), decompressed.path(), &stop)
+                .map_err(|e| decompress_error(&url, e))?;
+            drop(download);
+            decompressed
         } else {
-            // Memory data source: hand the bytes to the engine directly.
-            engine.refresh_from_memory(identifier, data).map_err(|e| {
-                DataUpdateError::new(AutoUpdateStatus::RefreshFailed, e.to_string())
-            })?;
+            download
+        };
+
+        // Record the new file's modified time before it replaces the data
+        // file, which the rename keeps, so the watcher does not refresh the
+        // engine a second time.
+        if let Some(modified) = file_modified_time(new_file.path()) {
+            data_file.set_last_applied_modified(modified);
         }
+        std::fs::rename(new_file.path(), path).map_err(|e| {
+            DataUpdateError::new(
+                AutoUpdateStatus::NewFileCannotRename,
+                format!("error replacing data file '{}': {e}", path.display()),
+            )
+        })?;
+        registration
+            .engine
+            .refresh(Some(data_file.identifier()))
+            .map_err(|e| DataUpdateError::new(AutoUpdateStatus::RefreshFailed, e.to_string()))?;
 
         // Record that fresh data is now in use. We mark "now" as a conservative
         // lower bound so a subsequent If-Modified-Since is not stale. The true
@@ -739,6 +800,21 @@ fn log_poll(registration: &Arc<Registration>, result: DataUpdateResult) {
     }
 }
 
+/// The message of a failed request and each of its causes, without the URL
+/// the request error names. That URL is the formatted one, whose query
+/// carries the licence keys.
+fn request_error_message(error: reqwest::Error) -> String {
+    let error = error.without_url();
+    let mut message = error.to_string();
+    let mut cause = std::error::Error::source(&error);
+    while let Some(source) = cause {
+        message.push_str(": ");
+        message.push_str(&source.to_string());
+        cause = source.source();
+    }
+    message
+}
+
 /// Format a timestamp as an HTTP-date for the `If-Modified-Since` header.
 fn httpdate_format(when: DateTime<Utc>) -> String {
     // RFC 7231 IMF-fixdate, for example "Sun, 06 Nov 1994 08:49:37 GMT".
@@ -752,18 +828,6 @@ fn file_modified_time(path: &Path) -> Option<DateTime<Utc>> {
     Some(DateTime::<Utc>::from(modified))
 }
 
-/// Compute the lowercase hex MD5 of a byte slice.
-fn md5_hex(data: &[u8]) -> String {
-    let mut hasher = Md5::new();
-    hasher.update(data);
-    let digest = hasher.finalize();
-    let mut out = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
-}
-
 /// Decompress a gzip byte slice into the original bytes.
 fn gzip_decompress(data: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut decoder = flate2::read::GzDecoder::new(data);
@@ -772,13 +836,184 @@ fn gzip_decompress(data: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Write bytes to a path via a sibling temporary file and a rename, so a reader
-/// never sees a half-written file.
-fn write_atomically(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp-download");
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+/// The size of each read when a download is written to disk.
+const COPY_BUFFER_BYTES: usize = 64 * 1024;
+
+/// Reads through to another reader, taking the MD5 of every byte read.
+struct Md5Reader<R> {
+    inner: R,
+    hasher: Md5,
+}
+
+impl<R> Md5Reader<R> {
+    fn new(inner: R) -> Self {
+        Md5Reader {
+            inner,
+            hasher: Md5::new(),
+        }
+    }
+
+    /// The lowercase hex MD5 of the bytes read so far.
+    fn hex(&self) -> String {
+        self.hasher
+            .clone()
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+}
+
+impl<R: Read> Read for Md5Reader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buffer)?;
+        self.hasher.update(&buffer[..read]);
+        Ok(read)
+    }
+}
+
+/// Reads through to another reader, and fails once `stop` answers true, so a
+/// download or decompression in progress ends when the service is dropped.
+struct Stoppable<'a, R> {
+    inner: R,
+    stop: &'a dyn Fn() -> bool,
+}
+
+impl<R: Read> Read for Stoppable<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if (self.stop)() {
+            return Err(std::io::Error::other("the data update service was dropped"));
+        }
+        self.inner.read(buffer)
+    }
+}
+
+/// A file beside the data file that is removed when it is dropped, unless it
+/// has been renamed away first.
+struct TempFile {
+    path: PathBuf,
+}
+
+impl TempFile {
+    /// A new name beside `path`, which no other update in this process uses.
+    fn beside(path: &Path, suffix: &str) -> TempFile {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let mut name = path
+            .file_name()
+            .map(std::ffi::OsString::from)
+            .unwrap_or_default();
+        name.push(format!(
+            ".{}.{}.{suffix}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        TempFile {
+            path: path.with_file_name(name),
+        }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        // A file renamed into place is no longer here, so this finds nothing.
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Write everything `body` reads into a new file at `path`, flushed to disk.
+/// A failed read names the configured URL, and a failed write names the file.
+fn save_body(body: &mut impl Read, path: &Path, url: &str) -> Result<(), DataUpdateError> {
+    let write_error = |error: std::io::Error| {
+        DataUpdateError::new(
+            AutoUpdateStatus::StreamError,
+            format!("error writing data update to '{}': {error}", path.display()),
+        )
+    };
+    let mut file = std::fs::File::create(path).map_err(write_error)?;
+    let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
+    loop {
+        let read = match body.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => return Err(read_error(url, error)),
+        };
+        file.write_all(&buffer[..read]).map_err(write_error)?;
+    }
+    file.sync_all().map_err(write_error)
+}
+
+/// Decompress the gzip file at `from` into a new file at `to`, flushed to disk.
+fn gunzip_file(from: &Path, to: &Path, stop: &dyn Fn() -> bool) -> std::io::Result<()> {
+    let mut decoder = flate2::read::GzDecoder::new(Stoppable {
+        inner: BufReader::new(std::fs::File::open(from)?),
+        stop,
+    });
+    let mut output = BufWriter::with_capacity(COPY_BUFFER_BYTES, std::fs::File::create(to)?);
+    std::io::copy(&mut decoder, &mut output)?;
+    output
+        .into_inner()
+        .map_err(|error| error.into_error())?
+        .sync_all()
+}
+
+/// Check the MD5 of the download against the one the server sent, when the
+/// check is on and the server sent one.
+fn verify_md5(check: bool, expected: Option<&str>, actual: &str) -> Result<(), DataUpdateError> {
+    match expected {
+        Some(expected) if check && !actual.eq_ignore_ascii_case(expected) => {
+            Err(DataUpdateError::new(
+                AutoUpdateStatus::Md5ValidationFailed,
+                format!(
+                    "integrity check failed: server MD5 '{expected}' does not match \
+                     downloaded '{actual}'"
+                ),
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The error for a response body that could not be read.
+fn read_error(url: &str, error: std::io::Error) -> DataUpdateError {
+    DataUpdateError::new(
+        AutoUpdateStatus::StreamError,
+        format!(
+            "error reading data update response from '{url}': {}",
+            read_error_message(error)
+        ),
+    )
+}
+
+/// The error for a download that could not be decompressed.
+fn decompress_error(url: &str, error: std::io::Error) -> DataUpdateError {
+    DataUpdateError::new(
+        AutoUpdateStatus::StreamError,
+        format!("error decompressing data update from '{url}': {error}"),
+    )
+}
+
+/// The message of an error reading a response. A request error inside it
+/// names the formatted URL, so its message comes from
+/// [`request_error_message`].
+fn read_error_message(error: std::io::Error) -> String {
+    if !error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<reqwest::Error>())
+    {
+        return error.to_string();
+    }
+    match error
+        .into_inner()
+        .map(|inner| inner.downcast::<reqwest::Error>())
+    {
+        Some(Ok(request)) => request_error_message(*request),
+        _ => String::from("the response could not be read"),
+    }
 }
 
 #[cfg(test)]
@@ -788,7 +1023,9 @@ mod tests {
     #[test]
     fn md5_matches_known_vector() {
         // MD5("abc") = 900150983cd24fb0d6963f7d28e17f72
-        assert_eq!(md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
+        let mut reader = Md5Reader::new(&b"abc"[..]);
+        std::io::copy(&mut reader, &mut std::io::sink()).unwrap();
+        assert_eq!(reader.hex(), "900150983cd24fb0d6963f7d28e17f72");
     }
 
     #[test]
@@ -818,5 +1055,141 @@ mod tests {
     fn new_service_has_no_registrations() {
         let service = DataUpdateService::new();
         assert_eq!(service.registered_count(), 0);
+    }
+
+    /// An engine with one data file and no update URL, so a poll of it makes
+    /// no request.
+    struct IdleEngine {
+        filter: fiftyone_pipeline_core::EvidenceKeyFilterWhitelist,
+        data_files: Vec<Arc<AspectEngineDataFile>>,
+    }
+
+    impl fiftyone_pipeline_core::FlowElement for IdleEngine {
+        fn process(
+            &self,
+            _data: &mut fiftyone_pipeline_core::FlowData,
+        ) -> fiftyone_pipeline_core::Result<()> {
+            Ok(())
+        }
+        fn data_key(&self) -> &str {
+            "idle"
+        }
+        fn evidence_key_filter(&self) -> &dyn fiftyone_pipeline_core::EvidenceKeyFilter {
+            &self.filter
+        }
+        fn properties(&self) -> &[fiftyone_pipeline_core::PropertyMetaData] {
+            &[]
+        }
+    }
+
+    impl crate::AspectEngine for IdleEngine {
+        fn data_source_tier(&self) -> &str {
+            "Lite"
+        }
+        fn aspect_properties(&self) -> &[crate::AspectPropertyMetaData] {
+            &[]
+        }
+    }
+
+    impl OnPremiseAspectEngine for IdleEngine {
+        fn data_files(&self) -> &[Arc<AspectEngineDataFile>] {
+            &self.data_files
+        }
+        fn refresh(&self, _identifier: Option<&str>) -> fiftyone_pipeline_core::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A data file with no update URL that polls every `interval_seconds`
+    /// plus up to `max_randomisation_seconds`.
+    fn polled_file(interval_seconds: u64, max_randomisation_seconds: u64) -> AspectEngineDataFile {
+        AspectEngineDataFile::new(
+            crate::DataFileConfiguration::memory_builder()
+                .polling_interval_seconds(interval_seconds)
+                .max_randomisation_seconds(max_randomisation_seconds)
+                .build(),
+        )
+    }
+
+    /// The delay before the first poll is drawn at random, so instances that
+    /// start together poll at different times. 200 draws from 600 seconds
+    /// give about 170 different delays.
+    #[test]
+    fn the_first_poll_is_delayed_at_random() {
+        let service = DataUpdateService::new();
+        let data_file = polled_file(0, 600);
+        let delays: std::collections::BTreeSet<u64> = (0..200)
+            .map(|_| {
+                let start = Instant::now();
+                service
+                    .initial_poll_due(&data_file)
+                    .duration_since(start)
+                    .as_secs()
+            })
+            .collect();
+        eprintln!("{} different delays in 200", delays.len());
+        assert!(
+            delays.len() > 100,
+            "{} different delays in 200: {delays:?}",
+            delays.len()
+        );
+    }
+
+    /// Each poll after the first also waits the polling interval plus a
+    /// random delay, as the specification says.
+    #[test]
+    fn each_later_poll_adds_a_random_delay() {
+        const INTERVAL_SECONDS: u64 = 1000;
+        let handle = ServiceHandle {
+            client: reqwest::blocking::Client::new(),
+            inner: Arc::new(Inner {
+                registrations: Mutex::new(Vec::new()),
+                wake: Condvar::new(),
+                shutting_down: Mutex::new(false),
+            }),
+        };
+        let due = Instant::now();
+        for _ in 0..5 {
+            let data_file = Arc::new(polled_file(INTERVAL_SECONDS, INTERVAL_SECONDS));
+            let engine = Arc::new(IdleEngine {
+                filter: fiftyone_pipeline_core::EvidenceKeyFilterWhitelist::new(
+                    Vec::<String>::new(),
+                ),
+                data_files: vec![Arc::clone(&data_file)],
+            });
+            handle
+                .inner
+                .registrations
+                .lock()
+                .unwrap()
+                .push(Arc::new(Registration {
+                    engine,
+                    data_file,
+                    next_poll: Mutex::new(Some(due)),
+                    watcher: Mutex::new(None),
+                }));
+        }
+
+        handle.run_due_polls();
+
+        // Without a delay every next poll is due at most one interval after
+        // the polls ran. Five delays of under two seconds out of a thousand
+        // happen once in about 3 * 10^13 runs.
+        let undelayed = Instant::now() + Duration::from_secs(INTERVAL_SECONDS + 1);
+        let delayed = handle
+            .inner
+            .registrations
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|registration| {
+                registration
+                    .next_poll
+                    .lock()
+                    .unwrap()
+                    .is_some_and(|next| next > undelayed)
+            })
+            .count();
+        assert!(delayed > 0, "no poll after the first added a delay");
     }
 }

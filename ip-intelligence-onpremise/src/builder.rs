@@ -30,7 +30,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::{TimeZone, Utc};
 use fiftyone_native::ipi::Manager;
 use fiftyone_native::PerformanceProfile;
 use fiftyone_pipeline_core::{Error, Result};
@@ -39,7 +38,8 @@ use fiftyone_pipeline_engines::{
     OnPremiseAspectEngine, DISTRIBUTOR_URL,
 };
 
-use crate::engine::{IpIntelligenceOnPremiseEngine, DEFAULT_DATA_SOURCE_TIER};
+use crate::engine::{record_published, IpIntelligenceOnPremiseEngine};
+use crate::operational_copy::OperationalCopy;
 
 /// The download type the Distributor serves IP Intelligence data files as,
 /// sent in the update URL's `Type` parameter.
@@ -85,6 +85,7 @@ pub struct IpIntelligenceOnPremiseEngineBuilder {
     polling_interval_seconds: Option<u64>,
     max_randomisation_seconds: Option<u64>,
     data_update_service: Option<Arc<DataUpdateService>>,
+    temp_dir: Option<PathBuf>,
 }
 
 impl IpIntelligenceOnPremiseEngineBuilder {
@@ -111,12 +112,22 @@ impl IpIntelligenceOnPremiseEngineBuilder {
             polling_interval_seconds: None,
             max_randomisation_seconds: None,
             data_update_service: None,
+            temp_dir: None,
         }
     }
 
     /// Set the performance profile the data file is opened with.
     pub fn performance_profile(mut self, profile: PerformanceProfile) -> Self {
         self.profile = profile;
+        self
+    }
+
+    /// Set the folder for the engine's temporary files. With automatic updates
+    /// on, every profile but [`PerformanceProfile::InMemory`] reads a copy of
+    /// the data file made there, so an update can replace the data file itself.
+    /// Defaults to the system's temporary folder, [`std::env::temp_dir`].
+    pub fn temp_dir_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.temp_dir = Some(path.into());
         self
     }
 
@@ -144,7 +155,7 @@ impl IpIntelligenceOnPremiseEngineBuilder {
     ///
     /// By default the engine reads the tier from the data file header (for
     /// example `Lite`, `Enterprise` or `TAC`), falling back to
-    /// [`DEFAULT_DATA_SOURCE_TIER`] only when the header cannot be read. This
+    /// [`crate::DEFAULT_DATA_SOURCE_TIER`] only when the header cannot be read. This
     /// override forces a specific tier, which an application can use when it
     /// knows better than the file metadata.
     pub fn data_source_tier(mut self, tier: impl Into<String>) -> Self {
@@ -156,15 +167,17 @@ impl IpIntelligenceOnPremiseEngineBuilder {
     ///
     /// When enabled, the [`DataUpdateService`] the engine is registered with
     /// polls the update URL on the polling interval and applies a downloaded
-    /// update by calling the engine's `refresh`.
+    /// update by calling the engine's `refresh`. This is the master switch for
+    /// automatic updates, so with it off the file-system watcher does not run
+    /// either.
     pub fn auto_update(mut self, enabled: bool) -> Self {
         self.auto_update_enabled = enabled;
         self
     }
 
     /// Enable or disable the file-system watcher for the data file. On by
-    /// default. When enabled, the update service refreshes the engine when the
-    /// file changes on disk.
+    /// default. When enabled, and [`Self::auto_update`] is on, the update
+    /// service refreshes the engine when the file changes on disk.
     pub fn file_system_watcher(mut self, enabled: bool) -> Self {
         self.file_system_watcher_enabled = enabled;
         self
@@ -243,7 +256,9 @@ impl IpIntelligenceOnPremiseEngineBuilder {
     ///
     /// Registration starts the file-system watcher and schedules the polls the
     /// options configure, and polls once first when update on startup is on.
-    /// Refuses, before opening the file, when automatic updates or update on
+    /// A startup poll that fails leaves the engine on the data file it loaded,
+    /// as the specification says, and the service logs the failure. Refuses,
+    /// before opening the file, when automatic updates or update on
     /// startup are on and no licence key is set.
     pub fn build_shared(mut self) -> Result<Arc<IpIntelligenceOnPremiseEngine>> {
         let service = self.data_update_service.take();
@@ -255,9 +270,9 @@ impl IpIntelligenceOnPremiseEngineBuilder {
                 .cloned()
                 .ok_or_else(|| Error::configuration("engine has no data file to register"))?;
             let as_engine: Arc<dyn OnPremiseAspectEngine> = engine.clone();
-            service
-                .register(as_engine, data_file)
-                .map_err(|e| Error::configuration(e.to_string()))?;
+            // A failed update on start-up leaves the engine on the data file it
+            // loaded, as the specification says, and the service logs it.
+            let _ = service.register(as_engine, data_file);
         }
         Ok(engine)
     }
@@ -277,38 +292,33 @@ impl IpIntelligenceOnPremiseEngineBuilder {
             )
         };
 
-        let manager = Manager::open_with_properties(
+        // Open from a copy of the data file when updates can replace the file
+        // while it is open.
+        let copy = OperationalCopy::when_needed(
             &self.data_file_path,
+            self.temp_dir.as_deref(),
+            self.profile,
+            &configuration,
+        );
+        let manager = Manager::open_with_properties(
+            copy.as_ref()
+                .map_or(self.data_file_path.as_path(), OperationalCopy::path),
             self.profile,
             property_refs.as_deref(),
         )?;
 
-        // Report the tier from an explicit override first, then the data file
-        // header, then the fixed default when the header carries no name.
-        let data_source_tier = self
-            .data_source_tier
-            .clone()
-            .or_else(|| manager.data_set_name())
-            .unwrap_or_else(|| DEFAULT_DATA_SOURCE_TIER.to_owned());
-
         let data_file = Arc::new(AspectEngineDataFile::new(configuration));
-
-        // Record the data file's embedded publish date, read from its header, so
-        // the metadata reports it and the update service can use it for the
-        // `If-Modified-Since` decision.
-        if let Some((year, month, day)) = manager.data_set_published() {
-            if let Some(published) = Utc.with_ymd_and_hms(year, month, day, 0, 0, 0).single() {
-                data_file.set_data_published(published);
-            }
-        }
+        record_published(&manager, &data_file);
 
         Ok(IpIntelligenceOnPremiseEngine::from_parts(
             manager,
+            copy,
             self.profile,
             self.requested_properties,
-            data_source_tier,
+            self.data_source_tier,
             data_file,
-        ))
+        )
+        .with_temp_dir(self.temp_dir))
     }
 
     /// Build the data-file configuration that captures the update options. The

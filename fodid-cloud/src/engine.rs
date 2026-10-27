@@ -73,6 +73,14 @@ use crate::dto::map_fodid_object;
 /// the `id.usage` usage-policy value that drive the lookup. Its
 /// [`FlowElement::evidence_key_filter`] is therefore an empty whitelist.
 ///
+/// # Response cache
+///
+/// The cloud creates the 51Did values afresh for each request that asks for
+/// them, so the request engine never stores a response carrying them in its
+/// response cache and never serves one from it. Each visitor receives the 51Did
+/// created for their own request, and a request that carries no `id.usage`
+/// evidence, which asks for no 51Did, is still served from the cache.
+///
 /// # Metadata
 ///
 /// The property metadata is derived lazily from the request engine's

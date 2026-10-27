@@ -40,7 +40,9 @@
 //!   loaded data set. It is reference counted (returned inside an [`Arc`](std::sync::Arc)) and
 //!   is [`Send`] and [`Sync`], because the native resource manager is internally
 //!   reference counted and lock protected, so one loaded data set is shared
-//!   across threads cheaply.
+//!   across threads cheaply. When the data set reads from its file after it is
+//!   loaded, no more calls that can read the file run at once than it has file
+//!   handles, and a call beyond them waits for one.
 //! - A `Results` per engine ([`dd::Results`], [`ipi::Results`]) that owns a
 //!   native results structure and holds an [`Arc`](std::sync::Arc) to its manager so the data
 //!   set cannot be freed while a result still references it. It is [`Send`] but
@@ -106,6 +108,8 @@
 // it is only needed when at least one product feature is on.
 #[cfg(any(feature = "dd", feature = "ipi"))]
 mod buffer;
+#[cfg(any(feature = "dd", feature = "ipi"))]
+mod file_reads;
 mod status;
 
 // Device Detection is gated behind the `dd` feature and IP Intelligence behind
@@ -121,6 +125,8 @@ pub mod dd;
 pub mod evidence;
 #[cfg(feature = "ipi")]
 pub mod ipi;
+#[cfg(any(feature = "dd", feature = "ipi"))]
+mod path;
 pub mod profile;
 
 pub use profile::PerformanceProfile;
