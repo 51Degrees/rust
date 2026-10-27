@@ -153,7 +153,11 @@ struct Endpoints {
 ///
 /// Repeated request failures within a window trip a [`RecoveryGate`], which then
 /// short-circuits requests for a recovery period so a slow or failing cloud
-/// cannot stall consumer requests. See the
+/// cannot stall consumer requests. A failure counts when the request did not
+/// complete, or the service answered with a status of 500 or more, a 429, or a
+/// success status whose body could not be used. A status from 400 to 499 other
+/// than 429 answers the request's own content, which any visitor can choose,
+/// so it does not count, because the gate is shared by every visitor. See the
 /// [recovery-mode section](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/pipeline-elements/cloud-request-engine.md#recovery-mode).
 ///
 /// # Example
@@ -1287,10 +1291,23 @@ fn send_and_validate_inner(
             Ok(parsed)
         }
         Err(error) => {
-            recovery.record_failure();
+            if signals_service_trouble(response.status) {
+                recovery.record_failure();
+            }
             Err(error)
         }
     }
+}
+
+/// Whether a failed answer with this status counts towards a recovery period.
+///
+/// The gate is shared by every request the engine makes, so only an answer
+/// that says the service is failing or asks callers to slow down counts, being
+/// a status of 500 or more, a 429, or a success status whose body could not be
+/// used. A status from 400 to 499 answers the request's own content, which one
+/// visitor can choose, such as a user agent too long for the service.
+fn signals_service_trouble(status: u16) -> bool {
+    status == 429 || !(400..500).contains(&status)
 }
 
 /// Fetch the accepted evidence keys from the cloud, mapping any failure to an

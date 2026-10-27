@@ -456,6 +456,95 @@ fn recovery_mode_blocks_after_repeated_data_failures() {
     );
 }
 
+/// A transport answering as the cloud service did on 26 October 2026, with a
+/// 404 and a plain text body for a `user-agent` of 32,000 bytes or more, and
+/// JSON for anything else. With `failing` set it answers every request 503.
+struct SizeLimitedCloud {
+    failing: bool,
+}
+
+impl CloudHttpClient for SizeLimitedCloud {
+    fn send(&self, request: &CloudHttpRequest) -> Result<CloudHttpResponse, String> {
+        if self.failing {
+            return FakeClient::with_status(503, "Service Unavailable");
+        }
+        let user_agent = request
+            .form
+            .iter()
+            .find(|(name, _)| name == "user-agent")
+            .map_or(0, |(_, value)| value.len());
+        if user_agent >= 32_000 {
+            FakeClient::with_status(404, "Status code: 404, 'Error' method not found")
+        } else {
+            FakeClient::ok(r#"{"device":{"ismobile":false}}"#)
+        }
+    }
+}
+
+/// A pipeline over one engine with the default recovery settings, ten
+/// failures in 100 seconds opening 60 seconds of recovery.
+fn recovery_pipeline(cloud: SizeLimitedCloud) -> Arc<Pipeline> {
+    let state = CloudEngineState {
+        evidence_keys: vec![EvidenceKeyEntry {
+            key: "query.user-agent".to_owned(),
+            order: 0,
+        }],
+        accessible_properties: LicensedProducts::default(),
+    };
+    let engine = CloudRequestEngine::builder()
+        .resource_key("rk")
+        .http_client(Arc::new(cloud))
+        .set_state(state)
+        .build()
+        .unwrap();
+    Pipeline::builder()
+        .add_element(Arc::new(engine))
+        .suppress_process_exceptions(true)
+        .build()
+        .unwrap()
+}
+
+/// The error messages a request with this user agent records.
+fn errors_for(pipeline: &Arc<Pipeline>, user_agent: &str) -> Vec<String> {
+    let mut data = pipeline.create_flow_data_with(
+        Evidence::builder()
+            .add("query.user-agent", user_agent)
+            .build(),
+    );
+    data.process().unwrap();
+    data.errors()
+        .iter()
+        .map(|error| error.source.to_string())
+        .collect()
+}
+
+#[test]
+fn answers_to_one_visitors_own_content_leave_the_next_visitor_served() {
+    // The gate is shared by every visitor, so a visitor sending evidence the
+    // service refuses must not be able to open a recovery period for the rest.
+    let pipeline = recovery_pipeline(SizeLimitedCloud { failing: false });
+    let oversized = "A".repeat(32_000);
+    for _ in 0..10 {
+        assert_eq!(errors_for(&pipeline, &oversized).len(), 1);
+    }
+    let next = errors_for(&pipeline, "Mozilla/5.0");
+    assert!(next.is_empty(), "the next visitor was refused: {next:?}");
+}
+
+#[test]
+fn service_errors_still_open_a_recovery_period() {
+    let pipeline = recovery_pipeline(SizeLimitedCloud { failing: true });
+    for _ in 0..10 {
+        assert_eq!(errors_for(&pipeline, "Mozilla/5.0").len(), 1);
+    }
+    let next = errors_for(&pipeline, "Mozilla/5.0");
+    assert!(
+        next.iter()
+            .any(|error| error.contains("temporarily restricted")),
+        "ten 503 answers did not open a recovery period: {next:?}"
+    );
+}
+
 /// A consumer-supplied response cache, recording its lookups and stores so the
 /// tests can assert how it was used. It stands in for any [`PutCache`], for
 /// example one a `wasm32-wasip1` host would back with its own key/value store.
