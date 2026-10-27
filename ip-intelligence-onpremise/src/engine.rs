@@ -428,9 +428,9 @@ fn build_aspect_metadata(names: &[String], tier: &str) -> Vec<AspectPropertyMeta
 struct LoadedDataSet {
     manager: Arc<Manager>,
     readable: Arc<ReadableNames>,
-    /// Declared after the manager, so it is removed after the data set that
-    /// has it open is freed.
-    copy: Option<OperationalCopy>,
+    /// Held only to be dropped with the data set, and declared after the
+    /// manager, so it is removed after the data set that has it open is freed.
+    _copy: Option<OperationalCopy>,
 }
 
 impl LoadedDataSet {
@@ -439,7 +439,7 @@ impl LoadedDataSet {
         LoadedDataSet {
             manager,
             readable,
-            copy,
+            _copy: copy,
         }
     }
 }
