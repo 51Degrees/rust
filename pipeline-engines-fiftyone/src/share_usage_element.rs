@@ -263,8 +263,9 @@ impl ShareUsageConfigBuilder {
     }
 
     /// Set how long a request waits for room when the queue is full. The
-    /// request's data is discarded if no room appears in that time. Returns
-    /// `self` for chaining.
+    /// request's data is discarded if no room appears in that time. A timeout
+    /// too long to add to the clock, such as `Duration::MAX`, waits until there
+    /// is room. Returns `self` for chaining.
     pub fn add_timeout(mut self, add_timeout: Duration) -> Self {
         self.config.add_timeout = add_timeout;
         self
@@ -859,20 +860,24 @@ fn add_to_queue(
     mut usage: ShareUsageData,
     timeout: Duration,
 ) -> std::result::Result<(), Discarded> {
-    let deadline = Instant::now() + timeout;
+    // A timeout too long to add to the clock, such as Duration::MAX, has no
+    // deadline, as with the standard library's own timeouts.
+    let deadline = Instant::now().checked_add(timeout);
     loop {
         match sender.try_send(usage) {
             Ok(()) => return Ok(()),
             Err(TrySendError::Disconnected(_)) => return Err(Discarded::Stopped),
             Err(TrySendError::Full(returned)) => {
-                let now = Instant::now();
-                if now >= deadline {
-                    return Err(Discarded::QueueFull);
+                let mut wait = Duration::from_millis(ADD_RETRY_INTERVAL_MILLISECONDS);
+                if let Some(deadline) = deadline {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        return Err(Discarded::QueueFull);
+                    }
+                    wait = wait.min(deadline - now);
                 }
                 usage = returned;
-                std::thread::sleep(
-                    Duration::from_millis(ADD_RETRY_INTERVAL_MILLISECONDS).min(deadline - now),
-                );
+                std::thread::sleep(wait);
             }
         }
     }
@@ -1663,6 +1668,36 @@ mod tests {
             add_to_queue(&tx, ShareUsageData::default(), Duration::ZERO),
             Err(Discarded::Stopped)
         ));
+    }
+
+    #[test]
+    fn an_add_timeout_too_long_for_the_clock_waits_for_room() {
+        let (tx, rx) = sync_channel::<ShareUsageData>(1);
+        assert!(add_to_queue(&tx, ShareUsageData::default(), Duration::MAX).is_ok());
+
+        // The queue of one is full, so the next add waits until it has room.
+        let taker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            rx.recv().unwrap();
+            rx
+        });
+        assert!(add_to_queue(&tx, ShareUsageData::default(), Duration::MAX).is_ok());
+        let rx = taker.join().unwrap();
+        assert!(rx.try_recv().is_ok(), "the second record was queued");
+    }
+
+    #[test]
+    fn a_request_is_shared_with_the_longest_add_timeout() {
+        let capture = Capture::default();
+        share(
+            ShareUsageConfig::builder()
+                .add_timeout(Duration::MAX)
+                .build(),
+            capture.clone(),
+            Vec::new(),
+            vec![user_agent("one")],
+        );
+        assert_eq!(capture.devices(), 1);
     }
 
     #[test]
