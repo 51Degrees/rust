@@ -1232,6 +1232,37 @@ extern "C" {
         buffer: *mut c_char,
         length: usize,
     ) -> usize;
+
+    /// Initializes `manager` from the data file `file_name` with a copy of
+    /// `config`, setting the expected concurrency of every collection in the
+    /// copy to `concurrency` when that is zero or more, or keeping the
+    /// configuration's own when it is negative. The expected concurrency
+    /// sizes the pool of file handles the collections that are not held in
+    /// memory read through. The configuration `config` points to is not
+    /// changed. Defined by this crate's `src/shim.c`.
+    ///
+    /// # Safety
+    /// As for [`fiftyoneDegreesIpiInitManagerFromFile`], and `config` must
+    /// point to a configuration.
+    pub fn fiftyoneDegreesShimIpiInitManagerFromFile(
+        manager: *mut ResourceManager,
+        config: *const ConfigIpi,
+        concurrency: i32,
+        properties: *mut PropertiesRequired,
+        file_name: *const c_char,
+        exception: *mut Exception,
+    ) -> StatusCode;
+
+    /// Returns the number of handles in the file pool of the data set
+    /// managed by `manager` when any of its collections reads from the data
+    /// file after it is loaded, or zero when the whole data set is held in
+    /// memory. A read that finds every handle in use fails rather than
+    /// waiting for one, so this is how many calls can read the data file at
+    /// once. Defined by this crate's `src/shim.c`.
+    ///
+    /// # Safety
+    /// `manager` must be initialized.
+    pub fn fiftyoneDegreesShimIpiGetFileHandleCount(manager: *mut ResourceManager) -> u16;
 }
 
 #[cfg(test)]
