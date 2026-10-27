@@ -98,15 +98,16 @@ fn sequence_treats_unparseable_sequence_as_one() {
 }
 
 #[test]
-fn sequence_treats_a_sequence_with_no_next_integer_as_one() {
+fn sequence_wraps_after_the_largest_integer() {
     // The sequence comes from the request, so the largest integer must not
-    // overflow when it is incremented.
+    // overflow when it is incremented. It wraps, as the .NET and Java
+    // pipelines do.
     let pipeline = Pipeline::builder()
         .add_element(Arc::new(SequenceElement::new()))
         .build()
         .unwrap();
 
-    for (raw, expected) in [(i64::MAX, 1), (i64::MAX - 1, i64::MAX)] {
+    for (raw, expected) in [(i64::MAX, i64::MIN), (i64::MAX - 1, i64::MAX)] {
         let evidence = Evidence::builder()
             .add("query.sequence", raw.to_string())
             .build();
