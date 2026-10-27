@@ -108,11 +108,17 @@ fn a_refresh_reads_and_reports_the_properties_of_the_new_data_file() {
     let built = engine(&path);
 
     assert_eq!(refreshed.data_source_tier(), built.data_source_tier());
-    assert_eq!(refreshed.available_properties(), built.available_properties());
+    assert_eq!(
+        refreshed.available_properties(),
+        built.available_properties()
+    );
     assert_eq!(refreshed.properties(), built.properties());
     assert_eq!(refreshed.aspect_properties(), built.aspect_properties());
     let value = richer_value(&refreshed);
-    assert!(value.is_ok(), "{RICHER_PROPERTY} after the refresh: {value:?}");
+    assert!(
+        value.is_ok(),
+        "{RICHER_PROPERTY} after the refresh: {value:?}"
+    );
     assert_eq!(value, richer_value(&built));
 
     drop(refreshed);
