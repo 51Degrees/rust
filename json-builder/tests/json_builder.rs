@@ -643,7 +643,9 @@ fn suppresses_javascript_properties_at_cap() {
 }
 
 #[test]
-fn appends_flow_errors() {
+fn flow_errors_are_a_list_of_messages() {
+    // The specification puts the flow errors under `errors` as a list of
+    // message strings, which is what the client script reads it as.
     let device = TestElement::new("device").with_value("ismobile", true);
     let failing = FailingElement::new("badengine");
 
@@ -653,18 +655,18 @@ fn appends_flow_errors() {
     );
     let value = parse(&json);
 
-    let errors = value.get("errors").expect("errors object present");
-    let messages = errors
-        .get("badengine")
+    let errors = value
+        .get("errors")
         .and_then(Value::as_array)
-        .expect("error list for the failing element");
+        .unwrap_or_else(|| panic!("errors is not a list of messages: {json}"));
+    let messages: Vec<&str> = errors
+        .iter()
+        .map(|error| error.as_str().expect("each error is a message"))
+        .collect();
     assert_eq!(messages.len(), 1);
     assert!(
-        messages[0]
-            .as_str()
-            .unwrap()
-            .contains("deliberate test failure"),
-        "error message carried through"
+        messages[0].contains("deliberate test failure"),
+        "error message carried through, got {messages:?}"
     );
 }
 
