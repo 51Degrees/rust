@@ -578,6 +578,15 @@ impl ServiceHandle {
         }
     }
 
+    /// True once the service has been dropped.
+    fn shutting_down(&self) -> bool {
+        *self
+            .inner
+            .shutting_down
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Poll the remote update URL, verify, decompress, write and refresh.
     ///
     /// Every failing exit comes through here, so no error leaves the service
@@ -673,8 +682,13 @@ impl ServiceHandle {
 
         // The body is read as it arrives, so the client's timeout limits each
         // wait for more of it rather than the whole download, and its MD5 is
-        // taken as it is read.
-        let mut body = Md5Reader::new(response);
+        // taken as it is read. Reading stops once the service is dropped, so
+        // dropping it does not wait for a long download to finish.
+        let stop = || self.shutting_down();
+        let mut body = Md5Reader::new(Stoppable {
+            inner: response,
+            stop: &stop,
+        });
 
         let Some(path) = data_file.data_file_path() else {
             // Memory data source: the engine takes the data as bytes.
@@ -690,7 +704,9 @@ impl ServiceHandle {
             registration
                 .engine
                 .refresh_from_memory(Some(data_file.identifier()), &data)
-                .map_err(|e| DataUpdateError::new(AutoUpdateStatus::RefreshFailed, e.to_string()))?;
+                .map_err(|e| {
+                    DataUpdateError::new(AutoUpdateStatus::RefreshFailed, e.to_string())
+                })?;
             data_file.set_data_published(Utc::now());
             return Ok(AutoUpdateStatus::Success);
         };
@@ -704,7 +720,7 @@ impl ServiceHandle {
         verify_md5(config.verify_md5, expected_md5.as_deref(), &body.hex())?;
         let new_file = if config.decompress_content {
             let decompressed = TempFile::beside(path, "new");
-            gunzip_file(download.path(), decompressed.path())
+            gunzip_file(download.path(), decompressed.path(), &stop)
                 .map_err(|e| decompress_error(&url, e))?;
             drop(download);
             decompressed
@@ -830,6 +846,22 @@ impl<R: Read> Read for Md5Reader<R> {
     }
 }
 
+/// Reads through to another reader, and fails once `stop` answers true, so a
+/// download or decompression in progress ends when the service is dropped.
+struct Stoppable<'a, R> {
+    inner: R,
+    stop: &'a dyn Fn() -> bool,
+}
+
+impl<R: Read> Read for Stoppable<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if (self.stop)() {
+            return Err(std::io::Error::other("the data update service was dropped"));
+        }
+        self.inner.read(buffer)
+    }
+}
+
 /// A file beside the data file that is removed when it is dropped, unless it
 /// has been renamed away first.
 struct TempFile {
@@ -840,7 +872,10 @@ impl TempFile {
     /// A new name beside `path`, which no other update in this process uses.
     fn beside(path: &Path, suffix: &str) -> TempFile {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let mut name = path.file_name().map(std::ffi::OsString::from).unwrap_or_default();
+        let mut name = path
+            .file_name()
+            .map(std::ffi::OsString::from)
+            .unwrap_or_default();
         name.push(format!(
             ".{}.{}.{suffix}",
             std::process::id(),
@@ -887,8 +922,11 @@ fn save_body(body: &mut impl Read, path: &Path, url: &str) -> Result<(), DataUpd
 }
 
 /// Decompress the gzip file at `from` into a new file at `to`, flushed to disk.
-fn gunzip_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    let mut decoder = flate2::read::GzDecoder::new(BufReader::new(std::fs::File::open(from)?));
+fn gunzip_file(from: &Path, to: &Path, stop: &dyn Fn() -> bool) -> std::io::Result<()> {
+    let mut decoder = flate2::read::GzDecoder::new(Stoppable {
+        inner: BufReader::new(std::fs::File::open(from)?),
+        stop,
+    });
     let mut output = BufWriter::with_capacity(COPY_BUFFER_BYTES, std::fs::File::create(to)?);
     std::io::copy(&mut decoder, &mut output)?;
     output

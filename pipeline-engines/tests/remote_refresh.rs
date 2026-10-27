@@ -423,7 +423,74 @@ fn a_failed_update_leaves_no_temporary_file() {
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(error.status, AutoUpdateStatus::NewFileCannotRename, "{error}");
+    assert_eq!(
+        error.status,
+        AutoUpdateStatus::NewFileCannotRename,
+        "{error}"
+    );
     assert_eq!(left, ["device.dat"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Dropping the service ends a scheduled download in progress, rather than
+/// waiting for the rest of the data file, and leaves no temporary file.
+#[test]
+fn dropping_the_service_stops_a_download_in_progress() {
+    // A server that sends one byte every tenth of a second, so the whole of
+    // its body takes 30 seconds.
+    const BODY_BYTES: usize = 300;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/datafile", listener.local_addr().unwrap());
+    // Not joined, so the test cannot wait on a server the scheduler never
+    // reached. It ends when its next write finds the connection closed.
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 4096];
+        let _ = stream.read(&mut request);
+        let head =
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {BODY_BYTES}\r\nConnection: close\r\n\r\n");
+        let _ = stream.write_all(head.as_bytes());
+        for _ in 0..BODY_BYTES {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if stream.write_all(b"5").and_then(|_| stream.flush()).is_err() {
+                return;
+            }
+        }
+    });
+
+    let dir = std::env::temp_dir().join(format!("fiftyone-dut-drop-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("device.dat");
+    std::fs::write(&path, b"version 1").unwrap();
+    // Polled at once, by the service's scheduler.
+    let config = DataFileConfiguration::builder(&path)
+        .data_update_url(url)
+        .automatic_updates_enabled(true)
+        .polling_interval_seconds(0)
+        .max_randomisation_seconds(0)
+        .file_system_watcher_enabled(false)
+        .decompress_content(false)
+        .build();
+    let data_file = Arc::new(AspectEngineDataFile::new(config));
+    let engine: Arc<dyn OnPremiseAspectEngine> = Arc::new(TestEngine::new(Arc::clone(&data_file)));
+    let service = DataUpdateService::new();
+    service.register(engine, data_file).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    let dropping = std::time::Instant::now();
+    drop(service);
+    let waited = dropping.elapsed();
+
+    let left: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "dropping the service waited {waited:?} for the download"
+    );
+    assert_eq!(left, ["device.dat"]);
+    assert_eq!(std::fs::read(&path).unwrap(), b"version 1");
     let _ = std::fs::remove_dir_all(&dir);
 }

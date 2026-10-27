@@ -122,7 +122,11 @@ fn serve_once(body: Vec<u8>, gzip: bool) -> (String, std::thread::JoinHandle<()>
         let (mut stream, _) = listener.accept().unwrap();
         let mut request = [0u8; 4096];
         let _ = stream.read(&mut request);
-        let encoding = if gzip { "Content-Type: application/gzip\r\n" } else { "" };
+        let encoding = if gzip {
+            "Content-Type: application/gzip\r\n"
+        } else {
+            ""
+        };
         let head = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{encoding}Connection: close\r\n\r\n",
             body.len()
@@ -161,6 +165,7 @@ fn memory_added_by_update(body: Vec<u8>, gzip: bool, test: &str) -> usize {
     PEAK.store(before, Ordering::SeqCst);
     let status = service.check_for_update(&engine, None);
     let added = PEAK.load(Ordering::SeqCst) - before;
+    eprintln!("{test}: a {FILE_BYTES} byte update added {added} bytes at most");
 
     server.join().unwrap();
     assert_eq!(
