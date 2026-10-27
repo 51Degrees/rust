@@ -51,6 +51,8 @@ use fiftyone_pipeline_engines::{
     EngineDeployment, OnPremiseAspectEngine,
 };
 
+use crate::retained::Retained;
+
 /// The separator used to join multiple values of a list-typed property into a
 /// single string when reading from the native results. The other ports use a
 /// vertical bar between values, which the shared device-data list accessor then
@@ -143,10 +145,11 @@ const METRIC_PROPERTIES: &[(&str, PropertyValueType, &str)] = &[
 /// never caches results. Only the cloud path, whose data is plain owned values,
 /// may use a results cache.
 pub struct DeviceDetectionOnPremiseEngine {
-    /// The loaded Hash data set. Swapped atomically on refresh. In-flight
+    /// The loaded Hash data set and the properties a detection reads from it,
+    /// swapped together atomically on refresh. In-flight
     /// [`fiftyone_native::dd::Results`] hold their own [`Arc`] to the manager
     /// they were created from, so a swap does not invalidate them.
-    manager: ArcSwap<Manager>,
+    loaded: ArcSwap<LoadedDataSet>,
 
     /// The performance profile used to (re)load the data file, retained so a
     /// refresh reloads with the same profile.
@@ -156,21 +159,20 @@ pub struct DeviceDetectionOnPremiseEngine {
     /// properties. Used when reloading the data set on refresh.
     requested_properties: Vec<String>,
 
-    /// Core property metadata for [`FlowElement::properties`].
-    properties: Vec<PropertyMetaData>,
+    /// The property metadata and tier of the loaded data set, for
+    /// [`FlowElement::properties`], [`AspectEngine::aspect_properties`] and
+    /// [`AspectEngine::data_source_tier`].
+    metadata: Retained<EngineMetadata>,
 
-    /// Aspect property metadata for [`AspectEngine::aspect_properties`].
-    aspect_properties: Vec<AspectPropertyMetaData>,
+    /// The tier the builder set, which every data set loaded reports, or
+    /// `None` to report the tier each data file names.
+    tier_override: Option<String>,
 
-    /// The data file properties a detection reads on request, shared by every
-    /// detection's reader.
-    readable: Arc<ReadableProperties>,
+    /// Held while a refresh loads a data set, so refreshes run one at a time.
+    refresh_lock: Mutex<()>,
 
     /// The evidence keys this engine reads, replaced on refresh.
     evidence_key_filter: HashEvidenceKeyFilter,
-
-    /// The data-source tier, for example `Lite`.
-    data_source_tier: String,
 
     /// The expected concurrency the data set's handle pool was sized for, or
     /// `None` for the profile default. Carried so a reload re-opens the data set
@@ -179,6 +181,45 @@ pub struct DeviceDetectionOnPremiseEngine {
 
     /// The single data file's run-time state, shared with the update service.
     data_files: Vec<Arc<AspectEngineDataFile>>,
+}
+
+/// A loaded Hash data set and the properties a detection reads from it.
+struct LoadedDataSet {
+    manager: Arc<Manager>,
+    readable: Arc<ReadableProperties>,
+}
+
+/// The property metadata and tier of a loaded data set.
+#[derive(PartialEq)]
+struct EngineMetadata {
+    properties: Vec<PropertyMetaData>,
+    aspect_properties: Vec<AspectPropertyMetaData>,
+    tier: String,
+}
+
+/// The data set `manager` holds and its metadata, reporting `tier_override`
+/// when it is set, otherwise the tier the data file names.
+fn describe(
+    manager: Arc<Manager>,
+    tier_override: &Option<String>,
+) -> (LoadedDataSet, EngineMetadata) {
+    // An explicit builder override wins, then the tier read from the native
+    // data file header (Lite, Enterprise, TAC and so on), then the safe Lite
+    // default when the native name is absent.
+    let tier = tier_override
+        .clone()
+        .or_else(|| manager.data_set_name())
+        .unwrap_or_else(|| DEFAULT_DATA_SOURCE_TIER.to_owned());
+    let (properties, aspect_properties) = build_property_metadata(&manager, &Some(tier.clone()));
+    let readable = Arc::new(ReadableProperties::new(&aspect_properties));
+    (
+        LoadedDataSet { manager, readable },
+        EngineMetadata {
+            properties,
+            aspect_properties,
+            tier,
+        },
+    )
 }
 
 impl DeviceDetectionOnPremiseEngine {
@@ -195,16 +236,8 @@ impl DeviceDetectionOnPremiseEngine {
         data_source_tier: Option<String>,
         concurrency: Option<u16>,
     ) -> Self {
-        // Resolve the data-source tier: an explicit builder override wins, then
-        // the tier read from the native data file header (Lite, Enterprise, TAC
-        // and so on), then the safe Lite default when the native name is absent.
-        let data_source_tier = data_source_tier
-            .or_else(|| manager.data_set_name())
-            .unwrap_or_else(|| DEFAULT_DATA_SOURCE_TIER.to_owned());
-        let (properties, aspect_properties) =
-            build_property_metadata(&manager, &Some(data_source_tier.clone()));
-        let readable = Arc::new(ReadableProperties::new(&aspect_properties));
         let evidence_key_filter = HashEvidenceKeyFilter::new(named_evidence_keys(&manager));
+        let (loaded, metadata) = describe(manager, &data_source_tier);
 
         let data_file = Arc::new(AspectEngineDataFile::new(data_file_config));
         // Record the publish time from the data file on disk, the best signal
@@ -215,14 +248,13 @@ impl DeviceDetectionOnPremiseEngine {
         }
 
         DeviceDetectionOnPremiseEngine {
-            manager: ArcSwap::from(manager),
+            loaded: ArcSwap::from_pointee(loaded),
             profile,
             requested_properties,
-            properties,
-            aspect_properties,
-            readable,
+            metadata: Retained::new(metadata),
+            tier_override: data_source_tier,
+            refresh_lock: Mutex::new(()),
             evidence_key_filter,
-            data_source_tier,
             concurrency,
             data_files: vec![data_file],
         }
@@ -238,13 +270,15 @@ impl DeviceDetectionOnPremiseEngine {
     /// the high-entropy values keys. The engine also accepts any `query.51d_`
     /// or `cookie.51d_` value, which the client-side JavaScript sends back.
     pub fn evidence_keys(&self) -> Vec<String> {
-        named_evidence_keys(&self.manager.load())
+        named_evidence_keys(&self.loaded.load().manager)
     }
 
     /// The names of the available (required) properties in the loaded data set,
     /// including the match-metric pseudo-properties.
     pub fn available_properties(&self) -> Vec<String> {
-        self.aspect_properties
+        self.metadata
+            .current()
+            .aspect_properties
             .iter()
             .map(|p| p.name().to_owned())
             .collect()
@@ -260,8 +294,8 @@ impl DeviceDetectionOnPremiseEngine {
         // Snapshot the current data set. The snapshot is an `Arc`, so an
         // in-flight detection keeps the data set alive even if `refresh` swaps a
         // new one in mid-flight.
-        let manager = self.manager.load_full();
-        let mut results = manager.create_results()?;
+        let loaded = self.loaded.load_full();
+        let mut results = loaded.manager.create_results()?;
 
         // Marshal the evidence the engine understands, preferring decoded UACH
         // values, into one merged evidence set, then process it.
@@ -308,9 +342,9 @@ impl DeviceDetectionOnPremiseEngine {
         );
 
         Ok(device.with_reader(DetectionReader {
-            manager,
+            manager: Arc::clone(&loaded.manager),
             results: Mutex::new(results),
-            readable: Arc::clone(&self.readable),
+            readable: Arc::clone(&loaded.readable),
         }))
     }
 
@@ -356,9 +390,16 @@ impl DeviceDetectionOnPremiseEngine {
     /// Reload the data set from the data file on disk and atomically swap it in.
     ///
     /// Shared by [`OnPremiseAspectEngine::refresh`] and the builder's reload
-    /// path. A successful reload replaces the live manager; in-flight detections
-    /// keep using the manager they snapshotted.
+    /// path. A successful reload replaces the live data set, the properties a
+    /// detection reads, the evidence keys and the metadata, because a new data
+    /// file can carry different properties or a different tier. In-flight
+    /// detections keep using the data set they snapshotted. A failed reload
+    /// changes nothing.
     fn reload_from_path(&self, path: &Path) -> Result<()> {
+        let _refreshing = self
+            .refresh_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let manager = open_manager(
             path,
             self.profile,
@@ -367,7 +408,9 @@ impl DeviceDetectionOnPremiseEngine {
         )?;
         self.evidence_key_filter
             .replace(named_evidence_keys(&manager));
-        self.manager.store(manager);
+        let (loaded, metadata) = describe(manager, &self.tier_override);
+        self.loaded.store(Arc::new(loaded));
+        self.metadata.replace(metadata);
 
         // Refresh the recorded publish time from the new file.
         if let Some(file) = self.data_files.first() {
@@ -398,13 +441,13 @@ impl FlowElement for DeviceDetectionOnPremiseEngine {
     }
 
     fn properties(&self) -> &[PropertyMetaData] {
-        &self.properties
+        &self.metadata.current().properties
     }
 }
 
 impl AspectEngine for DeviceDetectionOnPremiseEngine {
     fn data_source_tier(&self) -> &str {
-        &self.data_source_tier
+        &self.metadata.current().tier
     }
 
     fn deployment(&self) -> EngineDeployment {
@@ -412,7 +455,7 @@ impl AspectEngine for DeviceDetectionOnPremiseEngine {
     }
 
     fn aspect_properties(&self) -> &[AspectPropertyMetaData] {
-        &self.aspect_properties
+        &self.metadata.current().aspect_properties
     }
 }
 
