@@ -64,6 +64,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use fiftyone_pipeline_core::redact::redact_with;
 use md5::{Digest, Md5};
 
 use crate::data_file::AspectEngineDataFile;
@@ -568,7 +569,22 @@ impl ServiceHandle {
     }
 
     /// Poll the remote update URL, verify, decompress, write and refresh.
+    ///
+    /// Every failing exit comes through here, so no error leaves the service
+    /// carrying the data file's licence keys, however the poll failed.
     fn check_for_update_from_url(&self, registration: &Arc<Registration>) -> DataUpdateResult {
+        let keys = &registration
+            .data_file
+            .configuration()
+            .data_update_license_keys;
+        self.poll_update_url(registration).map_err(|mut error| {
+            error.message = redact_with(&error.message, keys).into_owned();
+            error
+        })
+    }
+
+    /// Poll the remote update URL, verify, decompress, write and refresh.
+    fn poll_update_url(&self, registration: &Arc<Registration>) -> DataUpdateResult {
         let data_file = &registration.data_file;
         let config = data_file.configuration();
         let url = match data_file.data_update_url() {
