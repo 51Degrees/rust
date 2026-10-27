@@ -33,9 +33,10 @@
 //! function does the minimum work on the request thread: apply the ignore
 //! filter, roll the share dice, consult the repeat-evidence tracker, extract
 //! the wanted evidence into a self-contained [`ShareUsageData`], then hand it
-//! to a bounded channel. A single background thread consumes the channel,
-//! accumulates a batch of the configured minimum entries, builds the XML and
-//! sends it.
+//! to a bounded channel. A single background thread consumes the channel.
+//! Once it holds the configured minimum entries it takes more until none
+//! arrives within the take timeout or it holds twice the minimum, as the .NET
+//! and Java pipelines do, then builds the XML and sends it.
 //!
 //! Usage sharing is expendable. A failure (a full queue, a send error, an
 //! offline endpoint) is logged through the [`log`] facade and never disrupts
@@ -94,7 +95,7 @@ use crate::constants::{
     SHARE_USAGE_DEFAULT_ELEMENT_DATA_KEY, SHARE_USAGE_DEFAULT_MAX_QUEUE_SIZE,
     SHARE_USAGE_DEFAULT_MIN_ENTRIES_PER_MESSAGE,
     SHARE_USAGE_DEFAULT_REPEAT_EVIDENCE_INTERVAL_MINUTES, SHARE_USAGE_DEFAULT_SHARE_PERCENTAGE,
-    SHARE_USAGE_DEFAULT_URL, SHARE_USAGE_MAX_EVIDENCE_LENGTH,
+    SHARE_USAGE_DEFAULT_TAKE_TIMEOUT_MS, SHARE_USAGE_DEFAULT_URL, SHARE_USAGE_MAX_EVIDENCE_LENGTH,
 };
 use crate::evidence_filter::{EvidenceKeyFilterShareUsage, EvidenceKeyFilterShareUsageTracker};
 use crate::sequence_element::{SequenceData, SequenceElement};
@@ -103,6 +104,9 @@ use crate::share_usage_tracker::ShareUsageTracker;
 /// The smallest value accepted for the minimum entries per message. A message
 /// needs at least one record.
 pub const MIN_ENTRIES_PER_MESSAGE_FLOOR: usize = 1;
+
+/// A message holds at most this many times the minimum entries per message.
+const MAXIMUM_ENTRIES_MULTIPLE: usize = 2;
 
 /// How long the built-in transport waits for the endpoint to answer.
 #[cfg(feature = "share-usage-transport")]
@@ -158,6 +162,7 @@ pub struct ShareUsageConfig {
     minimum_entries_per_message: usize,
     maximum_queue_size: usize,
     add_timeout: Duration,
+    take_timeout: Duration,
     repeat_evidence_interval: Duration,
     share_usage_url: String,
     blocked_http_headers: Vec<String>,
@@ -177,7 +182,8 @@ impl ShareUsageConfig {
         self.share_percentage
     }
 
-    /// The number of entries accumulated before a message is sent.
+    /// The number of entries accumulated before a message is sent. A message
+    /// holds up to twice this number.
     pub fn minimum_entries_per_message(&self) -> usize {
         self.minimum_entries_per_message
     }
@@ -225,6 +231,7 @@ impl ShareUsageConfigBuilder {
                 minimum_entries_per_message: SHARE_USAGE_DEFAULT_MIN_ENTRIES_PER_MESSAGE,
                 maximum_queue_size: SHARE_USAGE_DEFAULT_MAX_QUEUE_SIZE,
                 add_timeout: Duration::from_millis(SHARE_USAGE_DEFAULT_ADD_TIMEOUT_MS),
+                take_timeout: Duration::from_millis(SHARE_USAGE_DEFAULT_TAKE_TIMEOUT_MS),
                 repeat_evidence_interval: Duration::from_secs(
                     SHARE_USAGE_DEFAULT_REPEAT_EVIDENCE_INTERVAL_MINUTES * 60,
                 ),
@@ -246,8 +253,9 @@ impl ShareUsageConfigBuilder {
     }
 
     /// Set the minimum entries per message. Values below
-    /// [`MIN_ENTRIES_PER_MESSAGE_FLOOR`] are raised to it. Returns `self` for
-    /// chaining.
+    /// [`MIN_ENTRIES_PER_MESSAGE_FLOOR`] are raised to it. A message is sent
+    /// once it holds this many entries and no more arrive within the take
+    /// timeout, or once it holds twice this many. Returns `self` for chaining.
     pub fn minimum_entries_per_message(mut self, minimum_entries_per_message: usize) -> Self {
         self.config.minimum_entries_per_message =
             minimum_entries_per_message.max(MIN_ENTRIES_PER_MESSAGE_FLOOR);
@@ -268,14 +276,14 @@ impl ShareUsageConfigBuilder {
         self
     }
 
-    /// Accept the take timeout of the specification's configuration, so a
-    /// configuration written for the other languages carries over.
-    ///
-    /// It has no effect here. Each message holds the minimum entries per
-    /// message and is sent as soon as they are queued, so the background
-    /// thread waits for each record with no time limit and never needs one.
-    /// Returns `self` for chaining.
-    pub fn take_timeout(self, _take_timeout: Duration) -> Self {
+    /// Set how long the background thread waits for another entry once a
+    /// message holds the minimum entries per message. The message is sent when
+    /// none arrives in that time, or when it holds twice the minimum, as the
+    /// .NET and Java pipelines do. Below the minimum the thread waits with no
+    /// time limit, so an idle element uses no processor time. Returns `self`
+    /// for chaining.
+    pub fn take_timeout(mut self, take_timeout: Duration) -> Self {
+        self.config.take_timeout = take_timeout;
         self
     }
 
@@ -869,21 +877,31 @@ struct Worker {
 }
 
 impl Worker {
-    /// The consumer loop. Sends a message each time it holds the minimum
-    /// entries, and waits for each record with no time limit, so an idle
-    /// element uses no processor time. Once the element is dropped and every
-    /// queued record has been received, it sends what remains, even below the
-    /// minimum, and exits.
+    /// The consumer loop. Below the minimum entries it waits for each record
+    /// with no time limit, so an idle element uses no processor time. Once it
+    /// holds the minimum it takes more until none arrives within the take
+    /// timeout or it holds twice the minimum, then sends the message. Once the
+    /// element is dropped and every queued record has been received, it sends
+    /// what remains, even below the minimum, and exits.
     fn run(self) {
         let min_entries = self.config.minimum_entries_per_message;
-        let mut batch: Vec<ShareUsageData> = Vec::with_capacity(min_entries);
+        let max_entries = min_entries.saturating_mul(MAXIMUM_ENTRIES_MULTIPLE);
+        let take_timeout = self.config.take_timeout;
+        let mut batch: Vec<ShareUsageData> = Vec::with_capacity(max_entries);
 
         // `recv` fails only when the channel is closed and empty.
         while let Ok(item) = self.receiver.recv() {
             batch.push(item);
-            if batch.len() >= min_entries {
-                self.send_batch(std::mem::take(&mut batch));
+            if batch.len() < min_entries {
+                continue;
             }
+            while batch.len() < max_entries {
+                match self.receiver.recv_timeout(take_timeout) {
+                    Ok(item) => batch.push(item),
+                    Err(_) => break,
+                }
+            }
+            self.send_batch(std::mem::take(&mut batch));
         }
         if !batch.is_empty() {
             self.send_batch(batch);
@@ -1560,6 +1578,32 @@ mod tests {
         wait_for(|| element.success_count() > 0);
         assert_eq!(element.success_count(), 1, "two records make a message");
         assert_eq!(capture.devices(), 2);
+    }
+
+    #[test]
+    fn a_message_takes_up_to_twice_the_minimum_within_the_take_timeout() {
+        // A take timeout far longer than processing five requests takes, so
+        // every record after the minimum arrives within it.
+        const TAKE_TIMEOUT_SECONDS: u64 = 5;
+        let capture = Capture::default();
+        share(
+            ShareUsageConfig::builder()
+                .minimum_entries_per_message(2)
+                .take_timeout(Duration::from_secs(TAKE_TIMEOUT_SECONDS))
+                .build(),
+            capture.clone(),
+            Vec::new(),
+            ["one", "two", "three", "four", "five"]
+                .into_iter()
+                .map(user_agent)
+                .collect(),
+        );
+        let sizes: Vec<usize> = capture
+            .messages()
+            .iter()
+            .map(|xml| xml.matches("<Device>").count())
+            .collect();
+        assert_eq!(sizes, [4, 1], "twice the minimum, then the rest");
     }
 
     #[test]
