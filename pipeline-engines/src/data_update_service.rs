@@ -34,7 +34,9 @@
 //!   stagger many instances), sending an `If-Modified-Since` header so the
 //!   server can answer `304 Not Modified` cheaply.
 //! - **Automatic update from file.** A [`notify`] file-system watcher refreshes
-//!   the engine when the data file changes on disk.
+//!   the engine when the data file changes on disk. Like polling, it runs only
+//!   while automatic updates are on, which the specification makes the master
+//!   switch for both.
 //! - **Programmatic update.** [`DataUpdateService::check_for_update`] triggers an
 //!   immediate check on demand.
 //!
@@ -152,8 +154,10 @@ impl DataUpdateService {
     /// - If the configuration sets `update_on_startup`, a synchronous remote
     ///   poll runs now and its result is returned. A failed startup update is
     ///   returned as an error so the caller can decide whether to proceed.
-    /// - If `file_system_watcher_enabled` and the file has a path, a watcher is
-    ///   installed.
+    /// - If `automatic_updates_enabled` and `file_system_watcher_enabled` are
+    ///   both on and the file has a path, a watcher is installed. Automatic
+    ///   updates are the master switch for the watcher, as the specification
+    ///   says.
     /// - The file is added to the scheduler's list so it is polled on its
     ///   interval (when `automatic_updates_enabled`).
     ///
@@ -182,8 +186,12 @@ impl DataUpdateService {
             startup_status = self.check_for_update_from_url(&registration)?;
         }
 
-        // Install the file-system watcher if requested.
-        if config.file_system_watcher_enabled && data_file.data_file_path().is_some() {
+        // Install the file-system watcher if requested and automatic updates,
+        // its master switch, are on.
+        if config.automatic_updates_enabled
+            && config.file_system_watcher_enabled
+            && data_file.data_file_path().is_some()
+        {
             self.install_watcher(&registration);
         }
 
@@ -344,6 +352,10 @@ impl DataUpdateService {
 
     /// Install a file-system watcher that refreshes the engine when the data
     /// file changes on disk.
+    ///
+    /// The registration owns the watcher, so the watcher's callback holds the
+    /// registration weakly. A strong reference would keep the registration,
+    /// its engine and the watcher's thread alive after the service is dropped.
     fn install_watcher(&self, registration: &Arc<Registration>) {
         use notify::{RecursiveMode, Watcher};
 
@@ -351,24 +363,29 @@ impl DataUpdateService {
             Some(p) => p.to_path_buf(),
             None => return,
         };
+        let file_name = path.file_name().map(ToOwned::to_owned);
 
-        let reg = Arc::clone(registration);
-        // The service is held alive by the caller for as long as updates are
-        // wanted, so the closure captures only the registration (which owns the
-        // engine and data file) plus a clone of the HTTP client is not needed
-        // here, the watcher only refreshes from the file on disk.
-        let client = self.client.clone();
-        let service = ServiceHandle {
-            client,
-            inner: Arc::clone(&self.inner),
-        };
+        // The file as it is now is the one the engine loaded, so only a later
+        // change refreshes it.
+        if registration.data_file.last_applied_modified().is_none() {
+            if let Some(modified) = file_modified_time(&path) {
+                registration.data_file.set_last_applied_modified(modified);
+            }
+        }
 
+        let reg = Arc::downgrade(registration);
         let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            if let Ok(event) = res {
-                if event.kind.is_modify() || event.kind.is_create() {
-                    // Debounce duplicate events by comparing the file's
-                    // last-modified time with the last we applied.
-                    service.on_file_changed(&reg);
+            let Ok(event) = res else {
+                return;
+            };
+            // The watch is on the folder, so skip events for other files in it.
+            let names_the_file = event
+                .paths
+                .iter()
+                .any(|changed| changed.file_name() == file_name.as_deref());
+            if names_the_file && (event.kind.is_modify() || event.kind.is_create()) {
+                if let Some(reg) = reg.upgrade() {
+                    ServiceHandle::on_file_changed(&reg);
                 }
             }
         });
@@ -543,7 +560,7 @@ impl ServiceHandle {
 
     /// Handle a file-system-watcher event by refreshing the engine from disk if
     /// the file is genuinely newer than the one already applied.
-    fn on_file_changed(&self, registration: &Arc<Registration>) {
+    fn on_file_changed(registration: &Registration) {
         let path = match registration.data_file.data_file_path() {
             Some(p) => p.to_path_buf(),
             None => return,

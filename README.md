@@ -115,10 +115,12 @@ path, so cloud-only users and most of CI build without a C compiler.
   `.data_update_license_keys(..)`, and that refreshes the engine when the data
   file changes on disk. The Distributor serves nothing without a licence key,
   so a build with polling on and no key fails with an error that says so, as
-  it does in .NET, and a deployment of the free Lite file turns polling off
-  with `.auto_update(false)`. `.file_system_watcher(false)` turns the watcher
-  off, and `pipeline.resource::<DataUpdateService>()` reaches the service for
-  a check on demand.
+  it does in .NET, and a deployment of the free Lite file turns automatic
+  updates off with `.auto_update(false)`, which stops the polling and the file
+  watcher together, as the specification's master switch does.
+  `.file_system_watcher(false)` turns only the watcher off, and
+  `pipeline.resource::<DataUpdateService>()` reaches the service for a check
+  on demand.
 - JavaScript minification in `fiftyone-javascript-builder` is opt-in behind the
   `minify` feature and off by default. See ARCHITECTURE.md for why.
 
