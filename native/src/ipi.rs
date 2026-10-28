@@ -31,10 +31,10 @@
 //! [`Results::process_evidence`] looks up the client IP through the native
 //! evidence entry point. It reads the evidence keys the data file defines, in
 //! the order the native lookup tries them, and passes on every value it can
-//! read as an IP address. The engine links its own copy of the shared
-//! common C library sources built with wide file offsets, which is ABI incompatible
-//! with the copy `fiftyone-common-sys` builds, so the native evidence array is
-//! made with that copy's functions in `fiftyone-ip-intelligence-sys`. Values are
+//! read as an IP address. The engine links its own copy of the shared common C
+//! library sources built with wide file offsets, which is ABI incompatible with
+//! the copy `fiftyone-common-sys` builds, so the native evidence array is made
+//! with that copy's functions in `fiftyone-ip-intelligence-sys`. Values are
 //! read by name into the same reusable per-thread buffer the Device Detection
 //! wrapper uses.
 //!
@@ -73,7 +73,8 @@ use crate::profile::PerformanceProfile;
 use crate::status::{status_name, status_to_result, NativeException, NativeStatus};
 
 // ---------------------------------------------------------------------------
-// Status and exception trait wiring for the IP Intelligence common C library build
+// Status and exception trait wiring for the IP Intelligence common C library
+// build
 // ---------------------------------------------------------------------------
 
 impl NativeStatus for sys::StatusCode {

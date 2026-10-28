@@ -96,16 +96,17 @@ fn main() {
 
     build.compile("fiftyone-common-c");
 
-    // The lock-free resource reference counting in the common C library (resource.c) does a
-    // double-width (128-bit) compare-exchange, which the C compiler lowers to a
-    // `__atomic_compare_exchange_16` call on Linux. Link libatomic so that symbol
-    // resolves. Link it statically so the binary stays self-contained (the
-    // deployed OS needs no libatomic package) while libatomic still selects
-    // cmpxchg16b or a lock-based fallback at run time, so no specific CPU
-    // instruction is baked in. MSVC lowers the operation to an inline intrinsic,
-    // so this is Linux only. rustc cannot find libatomic.a on its own (it lives
-    // in the C compiler's private library directory), so ask the compiler where
-    // it is and add that directory to the link search path.
+    // The lock-free resource reference counting in the common C library
+    // (resource.c) does a double-width (128-bit) compare-exchange, which the C
+    // compiler lowers to a `__atomic_compare_exchange_16` call on Linux. Link
+    // libatomic so that symbol resolves. Link it statically so the binary stays
+    // self-contained (the deployed OS needs no libatomic package) while
+    // libatomic still selects cmpxchg16b or a lock-based fallback at run time,
+    // so no specific CPU instruction is baked in. MSVC lowers the operation to
+    // an inline intrinsic, so this is Linux only. rustc cannot find libatomic.a
+    // on its own (it lives in the C compiler's private library directory), so
+    // ask the compiler where it is and add that directory to the link search
+    // path.
     if cfg!(target_os = "linux") {
         if let Ok(out) = std::process::Command::new(build.get_compiler().path())
             .arg("-print-file-name=libatomic.a")

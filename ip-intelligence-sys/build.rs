@@ -83,14 +83,14 @@ fn main() {
     println!("cargo:rerun-if-changed={}", shim.display());
     sources.push(shim);
 
-    // The forced-include header that renames this crate's private common C library
-    // symbols to an ipi_ prefixed namespace. It is applied to every C and C++
-    // translation unit below, so both the common C library definitions compiled here
-    // and every call site that references them are renamed together at
-    // preprocess time. Device Detection keeps the unprefixed names, so the two
-    // copies of the common C library no longer collide when both engines are linked into
-    // one binary. See the header for the full rationale and how to regenerate
-    // the symbol list.
+    // The forced-include header that renames this crate's private common C
+    // library symbols to an ipi_ prefixed namespace. It is applied to every C
+    // and C++ translation unit below, so both the common C library definitions
+    // compiled here and every call site that references them are renamed
+    // together at preprocess time. Device Detection keeps the unprefixed names,
+    // so the two copies of the common C library no longer collide when both
+    // engines are linked into one binary. See the header for the full rationale
+    // and how to regenerate the symbol list.
     let symbol_prefix = PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is always set by cargo"),
     )

@@ -65,7 +65,8 @@ use crate::status::{status_name, status_to_result, NativeException, NativeStatus
 const PSEUDO_HEADER_SEPARATOR: char = '\x1F';
 
 // ---------------------------------------------------------------------------
-// Status and exception trait wiring for the Device Detection common C library build
+// Status and exception trait wiring for the Device Detection common C library
+// build
 // ---------------------------------------------------------------------------
 
 impl NativeStatus for sys::StatusCode {

@@ -26,10 +26,10 @@
 //! enabled. The Device Detection block compiles under `dd` and the IP
 //! Intelligence block under `ipi`. This crate's own dev build enables both (its
 //! default features), so this binary links both engines at once. That used to
-//! hit a common C library symbol collision, but IP Intelligence now compiles its copy
-//! of the common C library into an `ipi_` prefixed namespace, so both engines load real
-//! data files in the same binary. A data load failure is therefore a real fault
-//! here, not a soft-skip.
+//! hit a common C library symbol collision, but IP Intelligence now compiles
+//! its copy of the common C library into an `ipi_` prefixed namespace, so both
+//! engines load real data files in the same binary. A data load failure is
+//! therefore a real fault here, not a soft-skip.
 //!
 //! The [`both_engines_coexist`] test is the proof of that fix. It loads a Device
 //! Detection Hash file and an IP Intelligence file in one process, runs a real
@@ -539,12 +539,12 @@ mod ip_intelligence {
 /// This test compiles only when both products are enabled, which is the default
 /// for this crate. It loads a Device Detection Hash file and an IP Intelligence
 /// file in the SAME process, runs a real detection and a real lookup, and
-/// asserts a real value from each. Before the IP Intelligence common C library copy
-/// was namespaced, the two builds shared `fiftyoneDegrees*` symbols, the linker
-/// bound each duplicate to one definition, and Device Detection then read its
-/// Hash file through the wrong, wide-offset common code and failed with
-/// CorruptData. With the `ipi_` prefix in place both engines run correctly side
-/// by side, which this test confirms.
+/// asserts a real value from each. Before the IP Intelligence common C library
+/// copy was namespaced, the two builds shared `fiftyoneDegrees*` symbols, the
+/// linker bound each duplicate to one definition, and Device Detection then
+/// read its Hash file through the wrong, wide-offset common code and failed
+/// with CorruptData. With the `ipi_` prefix in place both engines run correctly
+/// side by side, which this test confirms.
 ///
 /// Both data files are resolved the same way as the per-product smoke tests (an
 /// explicit env path, else a sibling `*-cxx` checkout). When both are present the

@@ -86,8 +86,8 @@
 //! Every item in this crate is an unchecked binding to a C function or
 //! structure. Callers are responsible for upholding the contracts described in
 //! the upstream headers (`ipi.h`, `ipi_weighted_results.h` and the shared
-//! common C library headers). Pointers handed to these functions must be valid, and
-//! results and weighted value collections must be freed with their matching
+//! common C library headers). Pointers handed to these functions must be valid,
+//! and results and weighted value collections must be freed with their matching
 //! release functions.
 
 #![warn(missing_docs)]
@@ -103,20 +103,21 @@ pub use common::{
 
 /// Shared common C library ABI types needed by the IP Intelligence surface.
 ///
-/// These mirror the same common C library structures that the `fiftyone-common-sys`
-/// crate declares, but they are defined locally and resolved against the copy of
-/// the common C library compiled into this crate's own native library. The IP
-/// Intelligence engine is built with `FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT`,
-/// which widens the file offset and on disk offset types to 64 bit. That makes
-/// its common C library objects ABI incompatible with the 32 bit offset build owned
-/// by `fiftyone-common-sys`, so the IP Intelligence library must link its own
-/// common C library and must not pull in the common crate's native library. If this
-/// crate depended on `fiftyone-common-sys`, that crate's `fiftyone-common-c`
-/// native library would also be linked, and the duplicate common C library symbols
-/// would be bound inconsistently across the two offset widths, which corrupts
-/// the data set header read and makes initialization fail with an incorrect
-/// version error. Declaring the handful of shared types here keeps a single,
-/// offset-consistent copy of the common C library in any binary that links this crate.
+/// These mirror the same common C library structures that the
+/// `fiftyone-common-sys` crate declares, but they are defined locally and
+/// resolved against the copy of the common C library compiled into this crate's
+/// own native library. The IP Intelligence engine is built with
+/// `FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT`, which widens the file offset and
+/// on disk offset types to 64 bit. That makes its common C library objects ABI
+/// incompatible with the 32 bit offset build owned by `fiftyone-common-sys`, so
+/// the IP Intelligence library must link its own common C library and must not
+/// pull in the common crate's native library. If this crate depended on
+/// `fiftyone-common-sys`, that crate's `fiftyone-common-c` native library would
+/// also be linked, and the duplicate common C library symbols would be bound
+/// inconsistently across the two offset widths, which corrupts the data set
+/// header read and makes initialization fail with an incorrect version error.
+/// Declaring the handful of shared types here keeps a single, offset-consistent
+/// copy of the common C library in any binary that links this crate.
 pub mod common {
     use std::os::raw::{c_char, c_int};
 
@@ -285,9 +286,10 @@ pub mod common {
     /// Only ever passed by pointer to
     /// [`fiftyoneDegreesResultsIpiFromEvidence`](crate::fiftyoneDegreesResultsIpiFromEvidence),
     /// so it is exposed as an opaque pointer type here. Create and fill it with
-    /// [`fiftyoneDegreesEvidenceCreate`] and [`fiftyoneDegreesEvidenceAddString`]
-    /// below, which belong to this crate's own common C library build, and never with
-    /// the evidence functions of `fiftyone-common-sys`.
+    /// [`fiftyoneDegreesEvidenceCreate`] and
+    /// [`fiftyoneDegreesEvidenceAddString`] below, which belong to this crate's
+    /// own common C library build, and never with the evidence functions of
+    /// `fiftyone-common-sys`.
     #[repr(C)]
     pub struct EvidenceKeyValuePairArray {
         _private: [u8; 0],
@@ -359,9 +361,9 @@ pub mod common {
         /// Resolved against this crate's own common C library build.
         ///
         /// The native symbol is `ipi_`-prefixed because this crate's private
-        /// copy of the common C library is compiled into its own symbol namespace (see
-        /// `src/symbol_prefix.h` and `build.rs`), so the Rust name is bound to
-        /// the prefixed definition with `link_name`.
+        /// copy of the common C library is compiled into its own symbol
+        /// namespace (see `src/symbol_prefix.h` and `build.rs`), so the Rust
+        /// name is bound to the prefixed definition with `link_name`.
         ///
         /// # Safety
         /// `exception` must point to a valid, set [`Exception`].
@@ -836,8 +838,8 @@ extern "C" {
     pub fn fiftyoneDegreesDataSetIpiRelease(dataset: *mut DataSetIpi);
 
     /// Frees a resource manager and, once no references remain, its data set.
-    /// Declared here so it links against this crate's own common C library resource
-    /// layer rather than any other build of it.
+    /// Declared here so it links against this crate's own common C library
+    /// resource layer rather than any other build of it.
     ///
     /// The native symbol is `ipi_`-prefixed because this crate's private copy of
     /// the common C library is compiled into its own symbol namespace (see

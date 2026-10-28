@@ -128,9 +128,9 @@ jobs:
       - name: cargo build
         run: cargo build --workspace --all-targets
 
-      # Device Detection and IP Intelligence each compile a copy of the common C library.
-      # A common C library function the IP Intelligence renaming header misses would
-      # be defined by both libraries and bound to one of them.
+      # Device Detection and IP Intelligence each compile a copy of the common C
+      # library. A common C library function the IP Intelligence renaming header
+      # misses would be defined by both libraries and bound to one of them.
       - name: Check the two common C library copies share no symbol
         shell: pwsh
         run: ./ci/check-native-symbols.ps1

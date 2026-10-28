@@ -152,9 +152,9 @@ pub enum ResultsNoValueReason {
 
 /// Configuration applied to a single managed collection.
 ///
-/// Mirrors `fiftyoneDegreesCollectionConfig` from `src/common/collection.h`. The
-/// fields tune the in memory caching and loading behavior for one collection
-/// within the data set.
+/// Mirrors `fiftyoneDegreesCollectionConfig` from `src/common/collection.h`.
+/// The fields tune the in memory caching and loading behavior for one
+/// collection within the data set.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CollectionConfig {

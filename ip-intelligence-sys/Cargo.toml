@@ -19,10 +19,11 @@ include = ["src/**", "cxx/**", "build.rs", "README.md"]
 [dependencies]
 # No dependency on fiftyone-common-sys. The IP Intelligence engine is compiled
 # with 64 bit file offsets (FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT) and links
-# its own copy of the common C library. Pulling in the common crate's native library,
-# which is built with 32 bit offsets, would duplicate the common C library symbols at
-# an incompatible ABI and corrupt the data set header read. The handful of
-# shared common types are declared locally in the `common` module instead.
+# its own copy of the common C library. Pulling in the common crate's native
+# library, which is built with 32 bit offsets, would duplicate the common C
+# library symbols at an incompatible ABI and corrupt the data set header read.
+# The handful of shared common types are declared locally in the `common` module
+# instead.
 
 [build-dependencies]
 cc = "1.2"

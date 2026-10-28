@@ -31,8 +31,8 @@
  * which is fragile across platforms and compiler versions. The helpers below
  * read those private layouts from C, where the headers describe them, and
  * present a flat C ABI to the Rust crate. They use only the public IP
- * Intelligence and common C library headers, so they stay correct as the upstream
- * layouts change.
+ * Intelligence and common C library headers, so they stay correct as the
+ * upstream layouts change.
  *
  * This mirrors the equivalent shim in fiftyone-device-detection-sys. The Hash
  * data set nests as DataSetHash -> DataSetHashBase b -> DataSetBase b, so the

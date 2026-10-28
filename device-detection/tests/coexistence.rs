@@ -25,9 +25,9 @@
 //! This integration test links the Device Detection on-premise Hash engine and
 //! the IP Intelligence on-premise engine into a single binary, then runs a real
 //! detection and a real lookup. It is the facade-level proof of the native
-//! coexistence fact: IP Intelligence's common C library symbols are namespaced to
-//! `ipi_fiftyoneDegrees*`, so the two native engines link side by side with no
-//! collision.
+//! coexistence fact: IP Intelligence's common C library symbols are namespaced
+//! to `ipi_fiftyoneDegrees*`, so the two native engines link side by side with
+//! no collision.
 //!
 //! The Device Detection facade pulls `fiftyone-native` with the `dd` feature and
 //! the IP Intelligence facade pulls it with the `ipi` feature. When both facades

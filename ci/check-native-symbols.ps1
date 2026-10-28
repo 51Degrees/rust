@@ -5,11 +5,12 @@ each other's copy of the common C library.
 
 .DESCRIPTION
 fiftyone-common-sys and fiftyone-ip-intelligence-sys each compile their own
-copy of the common C library, with different file offset widths. The IP Intelligence copy
-is renamed to ipi_ prefixed names by ip-intelligence-sys/src/symbol_prefix.h.
-A common C library function missing from that header would be defined by both static
-libraries, and the linker would bind every call to just one of them, so one
-engine would read its data file through the other engine's code.
+copy of the common C library, with different file offset widths. The IP
+Intelligence copy is renamed to ipi_ prefixed names by
+ip-intelligence-sys/src/symbol_prefix.h. A common C library function missing
+from that header would be defined by both static libraries, and the linker
+would bind every call to just one of them, so one engine would read its data
+file through the other engine's code.
 
 This reads the symbols of both libraries a build left in the target directory
 and fails on either of these:

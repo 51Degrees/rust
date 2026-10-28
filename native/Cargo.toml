@@ -20,24 +20,25 @@ homepage.workspace = true
 # implementation (Device Detection then reported CorruptData).
 #
 # That collision is now resolved at the source. The IP Intelligence build
-# compiles its private copy of the common C library into an ipi_ prefixed symbol namespace
-# (see fiftyone-ip-intelligence-sys/src/symbol_prefix.h, force included by its
-# build.rs), so its common C library symbols no longer clash with the Device Detection
-# copy. Both products can therefore be linked into one binary and load real data
-# files side by side, which the combined smoke tests in tests/smoke.rs prove.
+# compiles its private copy of the common C library into an ipi_ prefixed symbol
+# namespace (see fiftyone-ip-intelligence-sys/src/symbol_prefix.h, force
+# included by its build.rs), so its common C library symbols no longer clash
+# with the Device Detection copy. Both products can therefore be linked into one
+# binary and load real data files side by side, which the combined smoke tests
+# in tests/smoke.rs prove.
 #
 # The features are kept as a slimming knob, not an isolation requirement. "dd"
-# links Device Detection's common C library (via fiftyone-common-sys) and the Hash
-# engine. "ipi" links IP Intelligence (with its prefixed common C library). A consumer
-# that needs only one product can disable the default features and enable just
-# that one to avoid compiling the other engine.
+# links Device Detection's common C library (via fiftyone-common-sys) and the
+# Hash engine. "ipi" links IP Intelligence (with its prefixed common C library).
+# A consumer that needs only one product can disable the default features and
+# enable just that one to avoid compiling the other engine.
 dd = ["dep:fiftyone-common-sys", "dep:fiftyone-device-detection-sys"]
 ipi = ["dep:fiftyone-ip-intelligence-sys"]
 
 # Both products are enabled by default and genuinely coexist in one binary now
-# that IP Intelligence's common C library is namespaced. The combined smoke tests load
-# both a Device Detection Hash file and an IP Intelligence file in the same
-# process and assert real values from each.
+# that IP Intelligence's common C library is namespaced. The combined smoke
+# tests load both a Device Detection Hash file and an IP Intelligence file in
+# the same process and assert real values from each.
 default = ["dd", "ipi"]
 
 [dependencies]

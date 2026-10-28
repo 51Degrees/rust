@@ -380,7 +380,6 @@ mod tests {
  * once: its data-file warnings are read before it is handed to the web pipeline
  * as the application element, so no data file is opened twice.
  *
- * Resolve the data file with `51DEGREES_DD_PATH` (or rely on the Lite file in the
- * `cxx` submodule), then run the binary and open
- * http://127.0.0.1:8081.
+ * Resolve the data file with `51DEGREES_DD_PATH` (or rely on the Lite file in
+ * the `cxx` submodule), then run the binary and open http://127.0.0.1:8081.
  */
