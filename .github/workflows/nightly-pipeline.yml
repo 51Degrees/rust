@@ -24,8 +24,11 @@ name: Nightly Pipeline
 # commit on its default branch and, when one has moved, raises a pull request
 # for it, as the C repositories do. The cxx submodule holds the C sources the
 # -sys crates compile, so this is how a change to them reaches the crates.
-# The update pull request then goes through the same checks as any other, in
-# this run when it is eligible.
+# The update moves every submodule, owid-rust included, so a push to the main
+# branch of SWAN-community/owid-rust also arrives this way and is compiled
+# into fodid. The update pull request then goes through the same checks as
+# any other, in this run when it is eligible, and merging it releases the
+# crates.
 
 on:
   workflow_dispatch:

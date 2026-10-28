@@ -133,10 +133,13 @@ workspace reads the submodule and never needs the copy.
   builds the C sources and reads the data files in the `cxx` submodule. It
   also runs `ci/check-native-symbols.ps1` and the property lookup scaling
   test in release.
-- `nightly-pipeline.yml` first runs common-ci's submodule update, which raises
-  a pull request when the `cxx` or `owid-rust` submodule has moved, then runs
-  the eligible pull requests through common-ci's nightly checks. Merging an
-  update releases the crates, as any merge to `main` does.
+- `nightly-pipeline.yml` first runs common-ci's submodule update, which moves
+  every submodule to the head of its default branch and raises a pull request
+  when one has moved, then runs the eligible pull requests through common-ci's
+  nightly checks. That covers `owid-rust` as well as `cxx`, so a push to the
+  main branch of SWAN-community/owid-rust reaches `fodid` through the next
+  update pull request once its checks pass. Merging an update releases the
+  crates, as any merge to `main` does.
 - `caching-wasm.yml` lints and tests `fiftyone-caching`, the loading cache
   included, on wasm32-wasip1 under wasmtime and, with default features off,
   on wasm32-unknown-unknown under Node through `ci/run-wasm-unknown.mjs`.
