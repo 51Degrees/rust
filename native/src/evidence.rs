@@ -39,9 +39,9 @@
 //! enough.
 //!
 //! The native evidence array here is Device Detection's. IP Intelligence
-//! compiles its own copy of `common-cxx` with wider file offsets and must not
+//! compiles its own copy of the common C library with wider file offsets and must not
 //! use the `fiftyone-common-sys` evidence functions (doing so would bind the
-//! two incompatible `common-cxx` builds together), so the IP Intelligence
+//! two incompatible common C library builds together), so the IP Intelligence
 //! wrapper makes its evidence array with its own copy's functions. It reads
 //! each client IP value with [`parse_client_ip`].
 
@@ -80,7 +80,7 @@ use fiftyone_pipeline_core::Evidence;
 ///
 /// The native [`fiftyoneDegreesEvidenceAddString`] takes the prefix as the enum
 /// argument and the bare field name as the key, NOT the full `prefix.field`
-/// pipeline key (see the device-detection-cxx examples, which add evidence keyed
+/// pipeline key (see the device detection examples in 51degrees-cxx, which add evidence keyed
 /// on `"user-agent"`, `"sec-ch-ua-mobile"` and so on). The native matcher then
 /// compares that key against the data set header names. Passing the whole
 /// pipeline key, prefix included, makes every header comparison miss, so the

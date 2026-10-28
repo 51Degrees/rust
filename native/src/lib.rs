@@ -60,16 +60,16 @@
 //!
 //! # Device Detection and IP Intelligence coexist
 //!
-//! The two engines compile their own copies of the shared `common-cxx` layer.
+//! The two engines compile their own copies of the shared common C layer.
 //! The IP Intelligence build widens the file offset types for large data file
-//! support, which makes its `common-cxx` objects ABI incompatible with the
+//! support, which makes its common C library objects ABI incompatible with the
 //! Device Detection (and `fiftyone-common-sys`) build. Both copies once exported
 //! the same `fiftyoneDegrees*` C symbols, so linking both engines into one
 //! binary made the linker bind each duplicated symbol to a single definition and
 //! left one engine reading its data through the wrong common code.
 //!
 //! That collision is resolved at the source. IP Intelligence compiles its
-//! private copy of `common-cxx` into an `ipi_` prefixed symbol namespace (see
+//! private copy of the common C library into an `ipi_` prefixed symbol namespace (see
 //! `fiftyone-ip-intelligence-sys`), so the two copies no longer share a symbol
 //! and both engines load real data files side by side in one process. The two
 //! engines still get separate [`dd`] and [`ipi`] modules with their own
@@ -114,7 +114,7 @@ mod status;
 
 // Device Detection is gated behind the `dd` feature and IP Intelligence behind
 // `ipi`, and both are on by default. Each product links its own copy of
-// common-cxx, but IP Intelligence's copy is compiled into an `ipi_` prefixed
+// the common C library, but IP Intelligence's copy is compiled into an `ipi_` prefixed
 // symbol namespace, so the two no longer collide and a binary may enable both
 // (see this crate's Cargo.toml). The features remain a slimming knob for a
 // consumer that wants only one engine. The product-agnostic items below (the

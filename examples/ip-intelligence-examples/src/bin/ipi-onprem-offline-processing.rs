@@ -39,7 +39,7 @@ use fiftyone_ip_intelligence::{IpIntelligencePipelineBuilder, PerformanceProfile
 use fiftyone_pipeline_core::{Evidence, Pipeline};
 
 /// The relative path to the IP-intelligence evidence file in the data submodule.
-const IPI_EVIDENCE_RELATIVE_PATH: &str = "ip-intelligence-cxx/ip-intelligence-data/evidence.yml";
+const IPI_EVIDENCE_RELATIVE_PATH: &str = "cxx/ip-intelligence-data/evidence.yml";
 
 /// The properties reported for each record. The ASN data file populates the
 /// autonomous system; an Enterprise file would also populate the location set.
@@ -208,7 +208,7 @@ fn main() -> anyhow::Result<()> {
                 out,
                 "Could not locate both an IP Intelligence data file and the \
                  evidence.yml file. Set {} to an .ipi file, and check out the \
-                 ip-intelligence-cxx submodule so evidence.yml is present.",
+                 cxx submodule so evidence.yml is present.",
                 examples_shared::IPI_PATH_ENV_VAR
             )?;
             return Ok(());

@@ -2,7 +2,7 @@
 
 # 51Degrees IP Intelligence Sys
 
-Raw Foreign Function Interface (FFI) bindings to the Ipi IP-intelligence Application Binary Interface (ABI) in ip-intelligence-cxx, including the weighted getters. Builds and statically links the fiftyone-ip-intelligence-c native library.
+Raw Foreign Function Interface (FFI) bindings to the Ipi IP-intelligence Application Binary Interface (ABI) in the 51Degrees C library, including the weighted getters. Builds and statically links the fiftyone-ip-intelligence-c native library.
 
 This crate is part of the [51Degrees](https://51degrees.com/?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fiftyone-ip-intelligence-sys-readme.md&utm_term=introduction) Rust solution for high-performance
 device detection and IP intelligence, available both on-premise from a local

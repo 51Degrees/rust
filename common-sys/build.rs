@@ -22,33 +22,32 @@
 
 //! Build script for `fiftyone-common-sys`.
 //!
-//! This compiles the `common-cxx` C library directly with the `cc` crate and
-//! links it statically as `fiftyone-common-c`. The C layer is enough for the
-//! shared FFI surface (Exception, Status, ResourceManager, Evidence and
-//! Properties), so the C++ layer is deliberately not compiled here.
+//! This compiles the common C library in `src/common` of the 51degrees-cxx
+//! sources directly with the `cc` crate and links it statically as
+//! `fiftyone-common-c`. The C layer is enough for the shared FFI surface
+//! (Exception, Status, ResourceManager, Evidence and Properties), so the C++
+//! layer is deliberately not compiled here.
 //!
 //! The `cc` crate locates the MSVC toolchain through `vswhere` on Windows, so
 //! `cl.exe` does not need to be on `PATH`. On other platforms it uses the
 //! system C compiler in the usual way.
 //!
-//! The `common-cxx` checkout is resolved from the `FIFTYONE_COMMON_CXX_DIR`
-//! environment variable when set, otherwise from the sibling `../common-cxx`
-//! directory relative to this crate.
+//! The sources are found as `resolve_cxx_dir` describes.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn main() {
-    let common_cxx = resolve_common_cxx_dir();
+    let common_cxx = resolve_cxx_dir().join("src").join("common");
 
     // Rebuild whenever the override variable changes so a relocated checkout is
     // picked up without a manual clean.
-    println!("cargo:rerun-if-env-changed=FIFTYONE_COMMON_CXX_DIR");
+    println!("cargo:rerun-if-env-changed=FIFTYONE_CXX_DIR");
 
     // The `.c` files form the C library that CMake builds as `fiftyone-common-c`.
-    // Globbing keeps the source list in step with the upstream checkout.
+    // Globbing keeps the source list in step with the 51degrees-cxx sources.
     let mut sources: Vec<PathBuf> = Vec::new();
     for entry in std::fs::read_dir(&common_cxx)
-        .unwrap_or_else(|e| panic!("cannot read common-cxx dir {}: {e}", common_cxx.display()))
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", common_cxx.display()))
     {
         let path = entry.expect("dir entry").path();
         if path.extension().and_then(|e| e.to_str()) == Some("c") {
@@ -65,11 +64,11 @@ fn main() {
     let mut build = cc::Build::new();
     build.files(&sources).warnings(false);
 
-    // The common-cxx directory must NOT be added to the include search path.
+    // The `src/common` directory must NOT be added to the include search path.
     // It ships a `string.h` of its own, and placing the directory on the
     // angle-bracket search path shadows the system `<string.h>` that the C
     // runtime headers pull in, which corrupts the CRT declarations. Every
-    // common-cxx source includes its siblings with quotes (for example
+    // common source includes its siblings with quotes (for example
     // `#include "cache.h"`), and the compiler searches the including file's own
     // directory first for quote includes, so no `-I` into the directory is
     // needed. This matches how the upstream CMake build keeps the directory off
@@ -97,7 +96,7 @@ fn main() {
 
     build.compile("fiftyone-common-c");
 
-    // The lock-free resource reference counting in common-cxx (resource.c) does a
+    // The lock-free resource reference counting in the common C library (resource.c) does a
     // double-width (128-bit) compare-exchange, which the C compiler lowers to a
     // `__atomic_compare_exchange_16` call on Linux. Link libatomic so that symbol
     // resolves. Link it statically so the binary stays self-contained (the
@@ -127,21 +126,24 @@ fn main() {
     // owner of that native library for the rest of the workspace.
 }
 
-/// Resolve the directory holding the `common-cxx` C sources and headers.
+/// A file every directory holding the sources this crate compiles contains.
+const MARKER: &str = "src/common/fiftyone.h";
+
+/// Resolve the root of the 51degrees-cxx sources.
 ///
 /// Resolution order:
-/// 1. `FIFTYONE_COMMON_CXX_DIR` when set (a developer pointing at a checkout).
-/// 2. The `vendor/common-cxx` copy shipped inside this crate. This is what makes
-///    the published crate self-contained: the C sources travel with it, so it
-///    builds with no submodule or environment setup.
-/// 3. The sibling `../../common-cxx` submodule, as a fallback for a source tree
-///    that has the submodule but not (yet) the vendored copy.
-fn resolve_common_cxx_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("FIFTYONE_COMMON_CXX_DIR") {
+/// 1. `FIFTYONE_CXX_DIR` when set, for a developer pointing at a checkout.
+/// 2. The `cxx` submodule at the root of the workspace, which a source
+///    checkout builds from.
+/// 3. The `cxx` folder inside this crate. `ci/copy-cxx-sources.ps1` copies
+///    the sources there before publishing, so the published crate carries
+///    them and builds with no submodule or environment setup.
+fn resolve_cxx_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("FIFTYONE_CXX_DIR") {
         let path = PathBuf::from(dir);
         assert!(
-            path.join("fiftyone.h").is_file(),
-            "FIFTYONE_COMMON_CXX_DIR={} does not contain fiftyone.h",
+            path.join(MARKER).is_file(),
+            "FIFTYONE_CXX_DIR={} does not contain {MARKER}",
             path.display()
         );
         return path;
@@ -150,25 +152,18 @@ fn resolve_common_cxx_dir() -> PathBuf {
     let manifest_dir = PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is always set by cargo"),
     );
-
-    // The vendored copy that ships with the crate.
-    let vendored = manifest_dir.join("vendor").join("common-cxx");
-    if vendored.join("fiftyone.h").is_file() {
-        return vendored;
-    }
-
-    // The sibling submodule checkout, two levels up from the crate.
-    let sibling = manifest_dir
+    let submodule = manifest_dir
         .parent()
-        .and_then(Path::parent)
-        .map(|workspace_parent| workspace_parent.join("common-cxx"))
-        .expect("crate directory has a workspace parent");
+        .map(|workspace| workspace.join("cxx"))
+        .expect("crate directory has a parent");
+    let copied = manifest_dir.join("cxx");
 
-    assert!(
-        sibling.join("fiftyone.h").is_file(),
-        "could not find common-cxx. Looked for the vendored copy and {} \
-         (set FIFTYONE_COMMON_CXX_DIR to override)",
-        sibling.display()
-    );
-    sibling
+    [submodule, copied]
+        .into_iter()
+        .find(|dir| dir.join(MARKER).is_file())
+        .expect(
+            "could not find the 51degrees-cxx sources. Run \
+             'git submodule update --init --recursive' to check out the cxx \
+             submodule, or set FIFTYONE_CXX_DIR to a checkout",
+        )
 }

@@ -40,9 +40,9 @@ use fiftyone_device_detection::{
 };
 
 /// The relative path to the bundled User-Agent CSV within the
-/// `device-detection-cxx` data submodule, used when no evidence path is supplied.
+/// data in the `cxx` submodule, used when no evidence path is supplied.
 const USER_AGENTS_RELATIVE_PATH: &str =
-    "device-detection-cxx/device-detection-data/20000 User Agents.csv";
+    "cxx/device-detection-data/20000 User Agents.csv";
 
 /// Options the example runs with, so `main` and the test share one entry point.
 pub struct ExampleOptions {
@@ -481,7 +481,7 @@ mod tests {
  *
  * The data and User-Agent files are read from the first two command-line
  * arguments, the `51DEGREES_DD_PATH` environment variable, or the files shipped
- * in the device-detection-cxx submodule. For more on adjusting performance see
+ * in the cxx submodule. For more on adjusting performance see
  * https://51degrees.com/documentation/_device_detection__features__performance_options.html?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-device-detection-examples-src-bin-dd-onprem-performance.rs&utm_term=dd-onprem-performance
  * and the hash data-set production documentation.
  */

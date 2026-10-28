@@ -1,4 +1,0 @@
-repository=51Degrees/ip-intelligence-cxx
-commit=0acac9e6052bd4a3f7819ab1890b751343b22f1e
-src/common-cxx=61b8da9ad6006060fcb8bb0946008a8aeb394ae2
-src/ip-graph-cxx=5a9b63aebea6478d910ec818b84cb005e16ae9d5

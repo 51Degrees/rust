@@ -40,9 +40,9 @@ fiftyone-ip-intelligence-onpremise = { version = "4.5.2", path = "../ip-intellig
 fiftyone-ip-intelligence-cloud = { version = "4.5.2", path = "../ip-intelligence-cloud", optional = true }
 fiftyone-cloud-request-engine = { version = "4.5.2", path = "../cloud-request-engine", optional = true, default-features = false }
 # The on-premise builder names PerformanceProfile from the native wrapper in its
-# public surface. Link only IP Intelligence's copy of common-cxx (the `ipi`
+# public surface. Link only IP Intelligence's copy of the common C library (the `ipi`
 # feature), matching the on-premise engine crate, so the two ABI incompatible
-# common-cxx builds never collide.
+# common C library builds never collide.
 fiftyone-native = { version = "4.5.2", path = "../native", default-features = false, features = ["ipi"], optional = true }
 
 [dev-dependencies]

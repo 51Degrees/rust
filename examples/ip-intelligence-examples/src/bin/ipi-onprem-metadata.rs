@@ -190,7 +190,7 @@ fn main() -> anyhow::Result<()> {
                 writeln!(
                     out,
                     "No IP Intelligence data file could be located. Set {} to an \
-                     .ipi file, or check out the ip-intelligence-cxx submodule.",
+                     .ipi file, or check out the cxx submodule.",
                     examples_shared::IPI_PATH_ENV_VAR
                 )?;
                 return Ok(());

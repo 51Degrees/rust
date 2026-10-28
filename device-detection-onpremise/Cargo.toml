@@ -14,8 +14,8 @@ fiftyone-pipeline-core = { version = "4.5.2", path = "../pipeline-core" }
 fiftyone-pipeline-engines = { version = "4.5.2", path = "../pipeline-engines" }
 fiftyone-device-detection-shared = { version = "4.5.2", path = "../device-detection-shared" }
 # Enable only the Device Detection product of the native wrapper. This links
-# Device Detection's copy of common-cxx alone and never pulls in the IP
-# Intelligence copy, so the two ABI incompatible common-cxx builds never collide
+# Device Detection's copy of the common C library alone and never pulls in the IP
+# Intelligence copy, so the two ABI incompatible common C library builds never collide
 # in a Device Detection binary.
 fiftyone-native = { version = "4.5.2", path = "../native", default-features = false, features = ["dd"] }
 arc-swap.workspace = true

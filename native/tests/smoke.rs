@@ -26,8 +26,8 @@
 //! enabled. The Device Detection block compiles under `dd` and the IP
 //! Intelligence block under `ipi`. This crate's own dev build enables both (its
 //! default features), so this binary links both engines at once. That used to
-//! hit a common-cxx symbol collision, but IP Intelligence now compiles its copy
-//! of common-cxx into an `ipi_` prefixed namespace, so both engines load real
+//! hit a common C library symbol collision, but IP Intelligence now compiles its copy
+//! of the common C library into an `ipi_` prefixed namespace, so both engines load real
 //! data files in the same binary. A data load failure is therefore a real fault
 //! here, not a soft-skip.
 //!
@@ -49,8 +49,8 @@ use std::path::PathBuf;
 /// optional name fragment, returning the first that exists.
 ///
 /// Resolution order, all relative to the Rust workspace root:
-/// the matching `FIFTYONE_*` environment variable, then a sibling
-/// `device-detection-cxx` or `ip-intelligence-cxx` checkout, then the parent
+/// the matching `FIFTYONE_*` environment variable, then the
+/// `cxx` submodule, then the parent
 /// `Workspace` tree where the other 51Degrees products keep their data.
 #[cfg(any(feature = "dd", feature = "ipi"))]
 fn find_data_file(
@@ -99,7 +99,7 @@ fn find_data_file(
 fn dd_lite_data_file() -> Option<PathBuf> {
     find_data_file(
         "51DEGREES_DD_PATH",
-        "device-detection-cxx",
+        "cxx",
         "device-detection-data",
         "51Degrees-LiteV4.1.hash",
     )
@@ -113,7 +113,7 @@ fn dd_lite_data_file() -> Option<PathBuf> {
 fn ipi_data_file() -> Option<PathBuf> {
     find_data_file(
         "51DEGREES_IPI_PATH",
-        "ip-intelligence-cxx",
+        "cxx",
         "ip-intelligence-data",
         "51Degrees-IPIV4AsnIpiV41.ipi",
     )
@@ -539,7 +539,7 @@ mod ip_intelligence {
 /// This test compiles only when both products are enabled, which is the default
 /// for this crate. It loads a Device Detection Hash file and an IP Intelligence
 /// file in the SAME process, runs a real detection and a real lookup, and
-/// asserts a real value from each. Before the IP Intelligence common-cxx copy
+/// asserts a real value from each. Before the IP Intelligence common C library copy
 /// was namespaced, the two builds shared `fiftyoneDegrees*` symbols, the linker
 /// bound each duplicate to one definition, and Device Detection then read its
 /// Hash file through the wrong, wide-offset common code and failed with
@@ -590,7 +590,7 @@ fn both_engines_coexist() {
     assert_eq!(
         is_mobile, "False",
         "a desktop user agent should not be mobile, proving Device Detection read its \
-         Hash file through the correct common-cxx build"
+         Hash file through the correct common C library build"
     );
 
     // --- IP Intelligence in the SAME binary ---
@@ -608,7 +608,7 @@ fn both_engines_coexist() {
 
     // Read back the autonomous system number for the IP. The ASN data file
     // populates the `Asn` property, and a non-empty value here proves the lookup
-    // resolved through the correct, prefixed common-cxx build. The native
+    // resolved through the correct, prefixed common C library build. The native
     // weighted string getter renders the value as `value:weighting`, so the
     // assertion checks the value content rather than an exact string.
     let asn = ipi_results

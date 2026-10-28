@@ -238,10 +238,10 @@ async fn home(result: FiftyOneResult) -> Html<String> {
 
 fn main() -> anyhow::Result<()> {
     // Resolve the on-premise data file: an explicit 51DEGREES_DD_PATH first, then
-    // the Lite Hash file in a sibling device-detection-cxx checkout.
+    // the Lite Hash file in a cxx submodule.
     let data_file = examples_shared::dd_data_path().context(
         "no on-premise Hash data file found. Set 51DEGREES_DD_PATH to a .hash data file, or \
-         check out the device-detection-cxx submodule with its Lite data file.",
+         check out the cxx submodule with its Lite data file.",
     )?;
 
     let port: u16 = std::env::var("PORT")
@@ -380,7 +380,7 @@ mod tests {
  * once: its data-file warnings are read before it is handed to the web pipeline
  * as the application element, so no data file is opened twice.
  *
- * Resolve the data file with `51DEGREES_DD_PATH` (or rely on the Lite file in a
- * sibling `device-detection-cxx` checkout), then run the binary and open
+ * Resolve the data file with `51DEGREES_DD_PATH` (or rely on the Lite file in the
+ * `cxx` submodule), then run the binary and open
  * http://127.0.0.1:8081.
  */

@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
 Fails when the Device Detection and IP Intelligence C libraries could bind to
-each other's copy of common-cxx.
+each other's copy of the common C library.
 
 .DESCRIPTION
 fiftyone-common-sys and fiftyone-ip-intelligence-sys each compile their own
-copy of common-cxx, with different file offset widths. The IP Intelligence copy
+copy of the common C library, with different file offset widths. The IP Intelligence copy
 is renamed to ipi_ prefixed names by ip-intelligence-sys/src/symbol_prefix.h.
-A common-cxx function missing from that header would be defined by both static
+A common C library function missing from that header would be defined by both static
 libraries, and the linker would bind every call to just one of them, so one
 engine would read its data file through the other engine's code.
 
@@ -87,7 +87,7 @@ $borrowed = $ipi.Undefined |
     Where-Object { $_ -notlike 'ipi_*' -and -not $ipi.Defined.Contains($_) -and $common.Defined.Contains($_) } |
     Sort-Object
 
-Write-Output ("Device Detection common-cxx defines {0} fiftyoneDegrees names, IP Intelligence defines {1}." -f $common.Defined.Count, $ipi.Defined.Count)
+Write-Output ("Device Detection common C library defines {0} fiftyoneDegrees names, IP Intelligence defines {1}." -f $common.Defined.Count, $ipi.Defined.Count)
 if ($both -or $borrowed) {
     foreach ($name in $both) {
         Write-Output "Defined by both libraries: $name. Add it to ip-intelligence-sys/src/symbol_prefix.h."
@@ -97,4 +97,4 @@ if ($both -or $borrowed) {
     }
     exit 1
 }
-Write-Output 'No common-cxx name is shared between the two libraries.'
+Write-Output 'No common C library name is shared between the two libraries.'

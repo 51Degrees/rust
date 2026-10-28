@@ -4,9 +4,9 @@ name: Nightly Performance
 # example writes its results JSON, the shared
 # steps/publish-performance-results.ps1 validates it and puts it at
 # results_<name>.json, and the shared steps/compare-performance.ps1 charts it on
-# the documentation performance graphs. The Rust on-premise engines call the
-# device-detection-cxx and ip-intelligence-cxx libraries through FFI, so the
-# figures track native performance.
+# the documentation performance graphs. The Rust on-premise engines call the C
+# libraries in the cxx submodule through FFI, so the figures track native
+# performance.
 #
 # This mirrors the per-language performance steps in common-ci's nightly
 # workflows. It is kept self-contained here (rather than calling the shared
@@ -27,13 +27,9 @@ on:
         type: string
         description: "common-ci branch/tag/sha to use (default: main)"
         default: ''
-      dd-cxx-ref:
+      cxx-ref:
         type: string
-        description: "device-detection-cxx branch/tag/sha to use (default: main)"
-        default: ''
-      ipi-cxx-ref:
-        type: string
-        description: "ip-intelligence-cxx branch/tag/sha to use (default: main)"
+        description: "51degrees-cxx branch/tag/sha to use (default: the commit the cxx submodule records)"
         default: ''
 
 jobs:
@@ -72,55 +68,32 @@ jobs:
           path: common-ci
           ref: ${{ inputs.common-ci-ref }}
 
-      # 3. The C/C++ source repositories the -sys crates compile, plus the data
-      #    submodules the performance examples read. They are checked out as
-      #    siblings of the rust checkout (at the workspace root, not under a
-      #    cxx/ subdirectory) so the examples' data-file finder, which walks up
-      #    from the working directory looking for `device-detection-cxx/...` and
-      #    `ip-intelligence-cxx/...`, locates the bundled `.hash`/`.ipi` and
-      #    User-Agent/evidence files. This also matches the -sys build scripts'
-      #    sibling fallback layout.
-      - name: Checkout device-detection-cxx
-        uses: actions/checkout@v4
-        with:
-          repository: 51Degrees/device-detection-cxx
-          path: device-detection-cxx
-          ref: ${{ inputs.dd-cxx-ref }}
-          submodules: recursive
+      # 3. The data files (.hash, .ipi) and the User-Agent and evidence records
+      #    are stored in Git LFS inside the data submodules of the cxx
+      #    submodule. actions/checkout brings the submodule pointers down but
+      #    not their LFS content, so fetch it explicitly. Without this the
+      #    example reads an LFS pointer instead of the real data and reports a
+      #    missing or corrupt data file. A cxx-ref given by hand first moves
+      #    the C sources and their data to that branch, tag or commit.
+      - name: Fetch LFS data for the cxx submodule
+        shell: bash
+        env:
+          CXX_REF: ${{ inputs.cxx-ref }}
+        run: |
+          if [ -n "$CXX_REF" ]; then
+            git -C rust/cxx fetch origin "$CXX_REF"
+            git -C rust/cxx checkout --detach FETCH_HEAD
+            git -C rust/cxx submodule update --init --recursive
+          fi
+          git -C rust/cxx submodule foreach --recursive 'git lfs install --local && git lfs pull'
 
-      - name: Checkout ip-intelligence-cxx
-        uses: actions/checkout@v4
-        with:
-          repository: 51Degrees/ip-intelligence-cxx
-          path: ip-intelligence-cxx
-          ref: ${{ inputs.ipi-cxx-ref }}
-          submodules: recursive
-
-      # 3a. The data files (.hash, .ipi) and the User-Agent / evidence records are
-      #     stored in Git LFS inside the *-data submodules. actions/checkout brings
-      #     the submodule pointers down but not their LFS content, so fetch it
-      #     explicitly, recursing into the submodules. Without this the example
-      #     reads an LFS pointer instead of the real data and reports a missing or
-      #     corrupt data file.
-      - name: Fetch LFS data for the cxx checkouts
+      # 4. Point the examples at the Lite and ASN data files in the cxx
+      #    submodule.
+      - name: Configure data files
         shell: bash
         run: |
-          for d in device-detection-cxx ip-intelligence-cxx; do
-            git -C "$d" lfs install --local
-            git -C "$d" lfs pull
-            git -C "$d" submodule foreach --recursive 'git lfs install --local && git lfs pull'
-          done
-
-      # 4. Point each -sys build script at its checkout, and the examples at the
-      #    Lite/ASN data files in the checked-out data submodules.
-      - name: Configure native source and data directories
-        shell: bash
-        run: |
-          echo "FIFTYONE_COMMON_CXX_DIR=${GITHUB_WORKSPACE}/device-detection-cxx/src/common-cxx" >> "$GITHUB_ENV"
-          echo "FIFTYONE_DEVICE_DETECTION_CXX_DIR=${GITHUB_WORKSPACE}/device-detection-cxx" >> "$GITHUB_ENV"
-          echo "FIFTYONE_IP_INTELLIGENCE_CXX_DIR=${GITHUB_WORKSPACE}/ip-intelligence-cxx" >> "$GITHUB_ENV"
-          echo "51DEGREES_DD_PATH=${GITHUB_WORKSPACE}/device-detection-cxx/device-detection-data/51Degrees-LiteV4.1.hash" >> "$GITHUB_ENV"
-          echo "51DEGREES_IPI_PATH=${GITHUB_WORKSPACE}/ip-intelligence-cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi" >> "$GITHUB_ENV"
+          echo "51DEGREES_DD_PATH=${GITHUB_WORKSPACE}/rust/cxx/device-detection-data/51Degrees-LiteV4.1.hash" >> "$GITHUB_ENV"
+          echo "51DEGREES_IPI_PATH=${GITHUB_WORKSPACE}/rust/cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi" >> "$GITHUB_ENV"
 
       - name: Install CMake
         uses: lukka/get-cmake@latest

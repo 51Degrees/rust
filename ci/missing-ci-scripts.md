@@ -11,7 +11,7 @@ truth.
 
 Consuming repositories keep their GitHub Actions YAML deliberately thin. They do
 not `run:` common-ci PowerShell directly; instead they `uses:` common-ci's
-*reusable workflows*. For example, `device-detection-cxx/.github/workflows`:
+*reusable workflows*. For example, `51degrees-cxx/.github/workflows`:
 
 ```
 nightly-pipeline.yml

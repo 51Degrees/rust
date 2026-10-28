@@ -32,7 +32,7 @@
 //! # Thread safety
 //!
 //! The native resource manager is internally reference counted and lock
-//! protected (see `common-cxx/resource.h`), so a [`Manager`] is both [`Send`]
+//! protected (see `src/common/resource.h`), so a [`Manager`] is both [`Send`]
 //! and [`Sync`] and a single one may be shared across threads behind an
 //! [`Arc`]. A data set that reads from its file after it is loaded holds one
 //! file handle for each concurrent operation it was opened to expect, and a
@@ -65,7 +65,7 @@ use crate::status::{status_name, status_to_result, NativeException, NativeStatus
 const PSEUDO_HEADER_SEPARATOR: char = '\x1F';
 
 // ---------------------------------------------------------------------------
-// Status and exception trait wiring for the Device Detection common-cxx build
+// Status and exception trait wiring for the Device Detection common C library build
 // ---------------------------------------------------------------------------
 
 impl NativeStatus for sys::StatusCode {
@@ -180,7 +180,7 @@ pub struct Manager {
 }
 
 // Safety: the native resource manager is internally reference counted and
-// lock protected per `common-cxx/resource.h`, so concurrent access from several
+// lock protected per `src/common/resource.h`, so concurrent access from several
 // threads through a shared `&Manager` is sound. The cached property index is
 // set once through a `OnceLock` and only read after that, and the file read
 // permits are lock protected. Therefore the manager is both `Send` and `Sync`.
@@ -858,8 +858,8 @@ mod tests {
 
     use fiftyone_pipeline_core::Evidence;
 
-    /// The Hash data file `51DEGREES_DD_PATH` names, or the Lite file in a
-    /// `device-detection-cxx` checkout inside or beside the workspace.
+    /// The Hash data file `51DEGREES_DD_PATH` names, or the Lite file in the
+    /// `cxx` submodule.
     fn data_file() -> Option<PathBuf> {
         if let Ok(path) = std::env::var("51DEGREES_DD_PATH") {
             let path = PathBuf::from(path);
@@ -874,7 +874,7 @@ mod tests {
         roots
             .into_iter()
             .map(|root| {
-                root.join("device-detection-cxx")
+                root.join("cxx")
                     .join("device-detection-data")
                     .join("51Degrees-LiteV4.1.hash")
             })

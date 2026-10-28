@@ -25,7 +25,7 @@
 //! This integration test links the Device Detection on-premise Hash engine and
 //! the IP Intelligence on-premise engine into a single binary, then runs a real
 //! detection and a real lookup. It is the facade-level proof of the native
-//! coexistence fact: IP Intelligence's common-cxx symbols are namespaced to
+//! coexistence fact: IP Intelligence's common C library symbols are namespaced to
 //! `ipi_fiftyoneDegrees*`, so the two native engines link side by side with no
 //! collision.
 //!
@@ -70,14 +70,12 @@ fn dd_and_ipi_on_premise_coexist_in_one_binary() {
         .ok()
         .map(PathBuf::from)
         .filter(|p| p.is_file())
-        .or_else(|| find_up("device-detection-cxx/device-detection-data/51Degrees-LiteV4.1.hash"));
+        .or_else(|| find_up("cxx/device-detection-data/51Degrees-LiteV4.1.hash"));
     let ipi_file = std::env::var("51DEGREES_IPI_PATH")
         .ok()
         .map(PathBuf::from)
         .filter(|p| p.is_file())
-        .or_else(|| {
-            find_up("ip-intelligence-cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi")
-        });
+        .or_else(|| find_up("cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi"));
 
     // Build both on-premise pipelines in this one binary. The mere fact that this
     // links and both builders run is the coexistence proof.
@@ -174,14 +172,12 @@ fn dd_and_ipi_combined_in_one_pipeline() {
         .ok()
         .map(PathBuf::from)
         .filter(|p| p.is_file())
-        .or_else(|| find_up("device-detection-cxx/device-detection-data/51Degrees-LiteV4.1.hash"));
+        .or_else(|| find_up("cxx/device-detection-data/51Degrees-LiteV4.1.hash"));
     let ipi_file = std::env::var("51DEGREES_IPI_PATH")
         .ok()
         .map(PathBuf::from)
         .filter(|p| p.is_file())
-        .or_else(|| {
-            find_up("ip-intelligence-cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi")
-        });
+        .or_else(|| find_up("cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi"));
     let (Some(dd_file), Some(ipi_file)) = (dd_file, ipi_file) else {
         eprintln!("skipping the combined-pipeline test: both data files are required");
         return;

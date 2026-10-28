@@ -41,9 +41,9 @@ use fiftyone_device_detection::{
 };
 
 /// The relative path to the bundled evidence file within the
-/// `device-detection-cxx` data submodule, used when no path is supplied.
+/// data in the `cxx` submodule, used when no path is supplied.
 const EVIDENCE_RELATIVE_PATH: &str =
-    "device-detection-cxx/device-detection-data/20000 Evidence Records.yml";
+    "cxx/device-detection-data/20000 Evidence Records.yml";
 
 /// Options the example runs with, so `main` and the test share one entry point.
 pub struct ExampleOptions {
@@ -394,7 +394,7 @@ mod tests {
  *
  * The data and evidence files are read from the first two command-line arguments,
  * the `51DEGREES_DD_PATH` environment variable, or the files shipped in the
- * device-detection-cxx submodule. The output file defaults to
+ * cxx submodule. The output file defaults to
  * `dd-offline-processing-output.yml` next to the evidence file, or the third
  * command-line argument.
  *

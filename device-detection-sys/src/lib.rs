@@ -23,11 +23,11 @@
 //! [![51Degrees](https://51degrees.com/img/logo.png?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-device-detection-sys-lib.rs&utm_term=logo "Data rewards the curious")](https://51degrees.com/?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-device-detection-sys-lib.rs&utm_term=logo)
 //!
 //! Raw FFI bindings to the Hash on-premise device detection ABI in
-//! `device-detection-cxx`.
+//! the 51degrees-cxx C sources.
 //!
 //! This crate is the native foundation for on-premise Hash device detection. It
-//! compiles the device detection and Hash C layers from `device-detection-cxx`
-//! and links them statically, building on top of the shared `common-cxx` layer
+//! compiles the device detection and Hash C layers from 51degrees-cxx
+//! and links them statically, building on top of the shared common C layer
 //! supplied by the [`fiftyone_common_sys`] crate. It then exposes hand written
 //! `extern "C"` declarations and `#[repr(C)]` structures for the public Hash
 //! ABI declared in `src/hash/hash.h`.
@@ -74,7 +74,7 @@
 //!
 //! Every item in this crate is an unchecked binding to a C function or
 //! structure. Callers must uphold the contracts described in `hash.h` and the
-//! shared `common-cxx` headers. The names mirror the C names exactly so the
+//! shared common C library headers. The names mirror the C names exactly so the
 //! headers remain the authoritative reference. In particular a results
 //! structure must be freed with [`fiftyoneDegreesResultsHashFree`] before its
 //! manager is freed with [`fiftyoneDegreesResourceManagerFree`], and a data set
@@ -121,7 +121,7 @@ pub enum HashMatchMethod {
 
 /// Reason a value is missing or invalid for a property in a result.
 ///
-/// Mirrors `fiftyoneDegreesResultsNoValueReason` from `common-cxx/results.h`.
+/// Mirrors `fiftyoneDegreesResultsNoValueReason` from `src/common/results.h`.
 /// Returned by [`fiftyoneDegreesResultsHashGetNoValueReason`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -152,7 +152,7 @@ pub enum ResultsNoValueReason {
 
 /// Configuration applied to a single managed collection.
 ///
-/// Mirrors `fiftyoneDegreesCollectionConfig` from `common-cxx/collection.h`. The
+/// Mirrors `fiftyoneDegreesCollectionConfig` from `src/common/collection.h`. The
 /// fields tune the in memory caching and loading behavior for one collection
 /// within the data set.
 #[repr(C)]
@@ -168,7 +168,7 @@ pub struct CollectionConfig {
 
 /// Base configuration shared by every data set.
 ///
-/// Mirrors `fiftyoneDegreesConfigBase` from `common-cxx/config.h`. A caller
+/// Mirrors `fiftyoneDegreesConfigBase` from `src/common/config.h`. A caller
 /// rarely constructs this directly, preferring one of the predefined Hash
 /// configuration globals.
 #[repr(C)]

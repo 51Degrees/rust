@@ -53,8 +53,8 @@ const ROUNDS: usize = 3;
 /// machines continuous integration runs on.
 const MAX_THREADS: usize = 4;
 
-/// The Lite Hash file named by `51DEGREES_DD_PATH`, else the copy in a
-/// `device-detection-cxx` checkout beside or above this workspace.
+/// The Lite Hash file named by `51DEGREES_DD_PATH`, else the copy in the
+/// `cxx` submodule.
 fn lite_data_file() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("51DEGREES_DD_PATH") {
         let path = PathBuf::from(path);
@@ -65,13 +65,9 @@ fn lite_data_file() -> Option<PathBuf> {
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()?
         .to_path_buf();
-    let relative = [
-        "device-detection-cxx",
-        "device-detection-data",
-        "51Degrees-LiteV4.1.hash",
-    ]
-    .iter()
-    .collect::<PathBuf>();
+    let relative = ["cxx", "device-detection-data", "51Degrees-LiteV4.1.hash"]
+        .iter()
+        .collect::<PathBuf>();
     for root in [Some(workspace.as_path()), workspace.parent()]
         .into_iter()
         .flatten()
