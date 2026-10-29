@@ -308,7 +308,7 @@ fn main() -> anyhow::Result<()> {
                 writeln!(
                     out,
                     "No IP Intelligence data file could be located. Set {} to an \
-                     .ipi file, or check out the ip-intelligence-cxx submodule so the \
+                     .ipi file, or check out the cxx submodule so the \
                      ASN data file is present.",
                     examples_shared::IPI_PATH_ENV_VAR
                 )?;
@@ -379,7 +379,7 @@ mod tests {
  *
  * The data file is resolved by `examples_shared::ipi_data_path`, which prefers
  * the `51DEGREES_IPI_PATH` environment variable and otherwise locates the ASN
- * file checked into the `ip-intelligence-cxx` submodule. An Enterprise `.ipi`
+ * file checked into the `cxx` submodule. An Enterprise `.ipi`
  * file (with the full property set) is available from 51Degrees: see <https://51degrees.com/contact-us?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-ip-intelligence-examples-src-bin-ipi-onprem-getting-started.rs&utm_term=ipi-onprem-getting-started>.
  *
  * # Usage sharing

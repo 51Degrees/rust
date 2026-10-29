@@ -31,8 +31,8 @@
  * which is fragile across platforms and compiler versions. The helpers below
  * read those private layouts from C, where the headers describe them, and
  * present a flat C ABI to the Rust crate. They use only the public IP
- * Intelligence and common-cxx headers, so they stay correct as the upstream
- * layouts change.
+ * Intelligence and common C library headers, so they stay correct as the
+ * upstream layouts change.
  *
  * This mirrors the equivalent shim in fiftyone-device-detection-sys. The Hash
  * data set nests as DataSetHash -> DataSetHashBase b -> DataSetBase b, so the
@@ -271,4 +271,73 @@ size_t fiftyoneDegreesShimIpiGetUniqueHeaderName(
 
     fiftyoneDegreesDataSetIpiRelease(dataSet);
     return written;
+}
+
+/*
+ * Initialises `manager` from the data file `fileName` with a copy of
+ * `config`, setting the expected concurrency of every collection in the copy
+ * to `concurrency` when that is zero or more. The expected concurrency sizes
+ * the pool of file handles the collections that are not held in memory read
+ * through. The configuration `config` points to is not changed.
+ */
+fiftyoneDegreesStatusCode fiftyoneDegreesShimIpiInitManagerFromFile(
+    fiftyoneDegreesResourceManager *manager,
+    const fiftyoneDegreesConfigIpi *config,
+    int32_t concurrency,
+    fiftyoneDegreesPropertiesRequired *properties,
+    const char *fileName,
+    fiftyoneDegreesException *exception) {
+    fiftyoneDegreesConfigIpi copy = *config;
+    if (concurrency >= 0) {
+        const uint16_t expected = (uint16_t)concurrency;
+        copy.strings.concurrency = expected;
+        copy.components.concurrency = expected;
+        copy.maps.concurrency = expected;
+        copy.properties.concurrency = expected;
+        copy.values.concurrency = expected;
+        copy.profiles.concurrency = expected;
+        copy.graphs.concurrency = expected;
+        copy.profileGroups.concurrency = expected;
+        copy.profileOffsets.concurrency = expected;
+        copy.propertyTypes.concurrency = expected;
+        copy.graph.concurrency = expected;
+    }
+    return fiftyoneDegreesIpiInitManagerFromFile(
+        manager,
+        &copy,
+        properties,
+        fileName,
+        exception);
+}
+
+/*
+ * Returns the number of handles in the file pool of the data set managed by
+ * `manager` when any of its collections reads from the data file after it is
+ * loaded, or zero when the whole data set is held in memory. A read that
+ * finds every handle in use fails rather than waiting for one, so this is
+ * how many calls can read the data file at once.
+ */
+uint16_t fiftyoneDegreesShimIpiGetFileHandleCount(
+    fiftyoneDegreesResourceManager *manager) {
+    fiftyoneDegreesDataSetIpi *dataSet =
+        fiftyoneDegreesDataSetIpiGet(manager);
+    if (dataSet == NULL) {
+        return 0;
+    }
+    const fiftyoneDegreesConfigIpi *config = &dataSet->config;
+    const bool readsFile = dataSet->b.b.isInMemory == false && (
+        config->strings.loaded == false ||
+        config->components.loaded == false ||
+        config->maps.loaded == false ||
+        config->properties.loaded == false ||
+        config->values.loaded == false ||
+        config->profiles.loaded == false ||
+        config->graphs.loaded == false ||
+        config->profileGroups.loaded == false ||
+        config->profileOffsets.loaded == false ||
+        config->propertyTypes.loaded == false ||
+        config->graph.loaded == false);
+    const uint16_t count = readsFile ? dataSet->b.b.filePool.pool.count : 0;
+    fiftyoneDegreesDataSetIpiRelease(dataSet);
+    return count;
 }

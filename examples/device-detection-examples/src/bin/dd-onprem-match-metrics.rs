@@ -295,7 +295,7 @@ fn main() -> Result<()> {
         eprintln!(
             "No device-detection data file found. Set 51DEGREES_DD_PATH (or pass \
              the path as the first argument), or run `git submodule update \
-             --recursive` so the Lite Hash file in device-detection-cxx is present."
+             --recursive` so the Lite Hash file in the cxx submodule is present."
         );
         return Ok(());
     };
@@ -375,5 +375,5 @@ mod tests {
  *
  * The data file is read from the first command-line argument, the
  * `51DEGREES_DD_PATH` environment variable, or the Lite Hash file shipped in the
- * device-detection-cxx submodule.
+ * cxx submodule.
  */

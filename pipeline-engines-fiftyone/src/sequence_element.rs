@@ -112,8 +112,9 @@ impl ElementData for SequenceData {
 ///
 /// - If `query.session-id` is absent from the evidence, a new GUID is generated
 ///   using the `uuid` crate.
-/// - If `query.sequence` is present, it is parsed and incremented. Otherwise the
-///   sequence is set to `1`.
+/// - If `query.sequence` is present, it is parsed and incremented, wrapping
+///   after `i64::MAX` as the .NET and Java pipelines do. Otherwise, or when it
+///   is not an integer, the sequence is set to `1`.
 ///
 /// Both values are written to a [`SequenceData`] under this element's data key.
 /// The element takes no configuration.
@@ -170,14 +171,16 @@ impl FlowElement for SequenceElement {
             .map(str::to_owned)
             .unwrap_or_else(Self::new_session_id);
 
-        // If a sequence is supplied, increment it. Anything that does not parse
-        // as an integer is treated as a fresh sequence of 1, which keeps the
-        // element robust to malformed client input rather than failing the
+        // If a sequence is supplied, increment it, wrapping after the largest
+        // integer as the .NET and Java pipelines do. Anything that does not
+        // parse as an integer is treated as a fresh sequence of 1, which keeps
+        // the element robust to malformed client input rather than failing the
         // whole flow.
-        let sequence = match data.evidence().get(EVIDENCE_SEQUENCE) {
-            Some(raw) => raw.trim().parse::<i64>().map(|n| n + 1).unwrap_or(1),
-            None => 1,
-        };
+        let sequence = data
+            .evidence()
+            .get(EVIDENCE_SEQUENCE)
+            .and_then(|raw| raw.trim().parse::<i64>().ok())
+            .map_or(1, |sequence| sequence.wrapping_add(1));
 
         data.get_or_add(Self::KEY, || SequenceData::new(session_id, sequence))?;
         Ok(())

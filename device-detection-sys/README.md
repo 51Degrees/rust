@@ -2,7 +2,7 @@
 
 # 51Degrees Device Detection Sys
 
-Raw Foreign Function Interface (FFI) bindings to the Hash device-detection Application Binary Interface (ABI) in device-detection-cxx, built on fiftyone-common-sys.
+Raw Foreign Function Interface (FFI) bindings to the Hash device-detection Application Binary Interface (ABI) in the 51Degrees C library, built on fiftyone-common-sys.
 
 This crate is part of the [51Degrees](https://51degrees.com/?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fiftyone-device-detection-sys-readme.md&utm_term=introduction) Rust solution for high-performance
 device detection and IP intelligence, available both on-premise from a local

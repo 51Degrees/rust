@@ -14,6 +14,9 @@ parameters it declares.
 
 ```text
 nightly-pipeline.yml
+  ├─ SubmoduleUpdate: uses common-ci nightly-submodule-update.yml
+  │    moves cxx and owid-rust to the head of their default branches and
+  │    raises a pull request when either has moved
   ├─ PullRequests: uses common-ci nightly-pull-requests.yml
   │    builds and tests each eligible pull request merged into main on every
   │    platform in ci/options.json, then merges it
@@ -21,6 +24,10 @@ nightly-pipeline.yml
   │    publishes main when it has moved past the last release tag
   └─ published-examples: tests the examples against the crates on crates.io
 ```
+
+The submodule update stage runs only common-ci's own steps and calls no hook.
+Its pull request goes through the pull request stage like any other, in the
+same run when it is eligible.
 
 The pull request stage calls `ci/setup-environment.ps1`, `ci/fetch-assets.ps1`,
 `ci/build-project.ps1`, `ci/run-unit-tests.ps1` and
@@ -62,4 +69,6 @@ the publish. No crates.io token is stored.
 
 `.github/workflows/nightly-performance.yml` stays self-contained. It runs
 `ci/run-performance-tests.ps1` from this repository and takes only the shared
-comparison step, `steps/compare-performance.ps1`, from common-ci.
+steps that publish and compare the results,
+`steps/publish-performance-results.ps1` and `steps/compare-performance.ps1`,
+from common-ci.

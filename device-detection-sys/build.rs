@@ -22,43 +22,42 @@
 
 //! Build script for `fiftyone-device-detection-sys`.
 //!
-//! This compiles the Hash on-premise C layer from `device-detection-cxx`
+//! This compiles the Hash on-premise C layer from the 51degrees-cxx sources
 //! directly with the `cc` crate and links it statically as
-//! `fiftyone-device-detection-c`. The shared `common-cxx` C layer is supplied by
+//! `fiftyone-device-detection-c`. The shared common C layer is supplied by
 //! the `fiftyone-common-sys` crate (linked as `fiftyone-common-c`), so only the
 //! device detection and Hash sources are compiled here.
 //!
-//! The two library source groups are the device detection C sources in `src`
-//! (the `fiftyone-device-detection-c` CMake target) and the Hash C sources in
-//! `src/hash` (the `fiftyone-hash-c` CMake target). Both are placed in a single
-//! static archive here because Cargo links one native library per `links` key.
+//! The two library source groups are the device detection C sources in
+//! `src/dd` (the `fiftyone-device-detection-c` CMake target) and the Hash C
+//! sources in `src/dd/hash` (the `fiftyone-hash-c` CMake target). Both are
+//! placed in a single static archive here because Cargo links one native
+//! library per `links` key.
 //!
 //! A small C shim (`src/shim.c` in this crate) is compiled alongside them. It
 //! exposes a handful of property enumeration helpers that read fields buried
 //! inside the deeply nested data set structures, which keeps the Rust side free
 //! of any need to mirror those private C layouts.
 //!
-//! The `device-detection-cxx` checkout is resolved from the
-//! `FIFTYONE_DEVICE_DETECTION_CXX_DIR` environment variable when set, otherwise
-//! from the sibling `../device-detection-cxx` directory relative to the Rust
-//! workspace. When a Lite Hash data file is found under the checkout, its path
-//! is exported as the `51DEGREES_DD_PATH` compile time environment
-//! variable so the crate's smoke test can run a real detection.
+//! The sources are found as `resolve_cxx_dir` describes. When a Lite Hash data
+//! file is found beside them, its path is exported as the `51DEGREES_DD_PATH`
+//! compile time environment variable so the crate's smoke test can run a real
+//! detection.
 
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let cxx = resolve_device_detection_cxx_dir();
-    let src = cxx.join("src");
+    let cxx = resolve_cxx_dir();
+    let src = cxx.join("src").join("dd");
     let hash = src.join("hash");
 
     // Rebuild whenever the override variable changes so a relocated checkout is
     // picked up without a manual clean.
-    println!("cargo:rerun-if-env-changed=FIFTYONE_DEVICE_DETECTION_CXX_DIR");
+    println!("cargo:rerun-if-env-changed=FIFTYONE_CXX_DIR");
 
     // Collect the device detection C sources (the fiftyone-device-detection-c
     // target) and the Hash C sources (the fiftyone-hash-c target). Globbing
-    // keeps the list in step with the upstream checkout.
+    // keeps the list in step with the 51degrees-cxx sources.
     let mut sources: Vec<PathBuf> = Vec::new();
     collect_c_sources(&src, &mut sources);
     collect_c_sources(&hash, &mut sources);
@@ -76,15 +75,14 @@ fn main() {
     let mut build = cc::Build::new();
     build.files(&sources).warnings(false);
 
-    // Only the device detection `src` directory is added to the angle bracket
-    // search path. The device detection sources include the shared headers with
-    // the `common-cxx/` prefix (for example `#include "common-cxx/dataset.h"`),
-    // which resolves from here, and the Hash sources include their siblings with
-    // `../common-cxx/` which the compiler resolves relative to the including
-    // file. The `common-cxx` directory itself must NOT be placed on the search
-    // path because it ships its own `string.h` which would shadow the C runtime
-    // `<string.h>` and corrupt the CRT declarations. The `src` directory has no
-    // such shadowing header, so adding it is safe.
+    // Only `src/dd` is added to the angle bracket search path, so the shim and
+    // the declarations check can include `"hash/hash.h"`. The C sources include
+    // the shared headers relative to themselves (for example
+    // `"../common/dataset.h"` from `src/dd`), which the compiler resolves from
+    // the including file's own directory. `src/common` must NOT be placed on
+    // the search path because it ships its own `string.h` which would shadow
+    // the C runtime `<string.h>` and corrupt the CRT declarations. `src/dd` has
+    // no such shadowing header, so adding it is safe.
     build.include(&src);
 
     if build.get_compiler().is_like_msvc() {
@@ -177,48 +175,44 @@ fn collect_c_sources(dir: &Path, sources: &mut Vec<PathBuf>) {
     }
 }
 
-/// Resolve the directory holding the `device-detection-cxx` C sources.
+/// A file every directory holding the sources this crate compiles contains.
+const MARKER: &str = "src/dd/hash/hash.h";
+
+/// Resolve the root of the 51degrees-cxx sources.
 ///
 /// Resolution order:
-/// 1. `FIFTYONE_DEVICE_DETECTION_CXX_DIR` when set (a developer pointing at a
-///    checkout).
-/// 2. The `vendor/device-detection-cxx` copy shipped inside this crate, which
-///    makes the published crate self-contained (the C sources travel with it,
-///    so it builds with no submodule or environment setup).
-/// 3. The sibling `../../device-detection-cxx` submodule, as a fallback.
-fn resolve_device_detection_cxx_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("FIFTYONE_DEVICE_DETECTION_CXX_DIR") {
+/// 1. `FIFTYONE_CXX_DIR` when set, for a developer pointing at a checkout.
+/// 2. The `cxx` submodule at the root of the workspace, which a source
+///    checkout builds from.
+/// 3. The `cxx` folder inside this crate. `ci/copy-cxx-sources.ps1` copies
+///    the sources there before publishing, so the published crate carries
+///    them and builds with no submodule or environment setup.
+fn resolve_cxx_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("FIFTYONE_CXX_DIR") {
         let path = PathBuf::from(dir);
         assert!(
-            path.join("src/hash/hash.h").is_file(),
-            "FIFTYONE_DEVICE_DETECTION_CXX_DIR={} does not contain src/hash/hash.h",
+            path.join(MARKER).is_file(),
+            "FIFTYONE_CXX_DIR={} does not contain {MARKER}",
             path.display()
         );
         return path;
     }
 
     let manifest_dir = PathBuf::from(env("CARGO_MANIFEST_DIR"));
-
-    // The vendored copy that ships with the crate.
-    let vendored = manifest_dir.join("vendor").join("device-detection-cxx");
-    if vendored.join("src/hash/hash.h").is_file() {
-        return vendored;
-    }
-
-    // The sibling submodule checkout, two levels up from the crate.
-    let sibling = manifest_dir
+    let submodule = manifest_dir
         .parent()
-        .and_then(Path::parent)
-        .map(|workspace_parent| workspace_parent.join("device-detection-cxx"))
-        .expect("crate directory has a workspace parent");
+        .map(|workspace| workspace.join("cxx"))
+        .expect("crate directory has a parent");
+    let copied = manifest_dir.join("cxx");
 
-    assert!(
-        sibling.join("src/hash/hash.h").is_file(),
-        "could not find device-detection-cxx. Looked for the vendored copy and {} \
-         (set FIFTYONE_DEVICE_DETECTION_CXX_DIR to override)",
-        sibling.display()
-    );
-    sibling
+    [submodule, copied]
+        .into_iter()
+        .find(|dir| dir.join(MARKER).is_file())
+        .expect(
+            "could not find the 51degrees-cxx sources. Run \
+             'git submodule update --init --recursive' to check out the cxx \
+             submodule, or set FIFTYONE_CXX_DIR to a checkout",
+        )
 }
 
 /// Find a Lite Hash data file under the checkout, if one is present.

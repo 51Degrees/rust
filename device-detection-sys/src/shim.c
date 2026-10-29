@@ -29,8 +29,8 @@
  * struct exactly, which is fragile across platforms and compiler versions. The
  * helpers below read those private layouts from C, where the headers describe
  * them, and present a flat C ABI to the Rust crate. They use only the public
- * Hash and common-cxx headers, so they stay correct as the upstream layouts
- * change.
+ * Hash and common C library headers, so they stay correct as the upstream
+ * layouts change.
  */
 
 #include "hash/hash.h"
@@ -351,4 +351,34 @@ size_t fiftyoneDegreesShimHashGetMatchedUserAgent(
         buffer,
         length,
         results->items[resultIndex].b.matchedUserAgent);
+}
+
+/*
+ * Returns the number of handles in the file pool of the data set managed by
+ * `manager` when any of its collections reads from the data file after it is
+ * loaded, or zero when the whole data set is held in memory. A read that
+ * finds every handle in use fails rather than waiting for one, so this is
+ * how many calls can read the data file at once.
+ */
+uint16_t fiftyoneDegreesShimHashGetFileHandleCount(
+    fiftyoneDegreesResourceManager *manager) {
+    fiftyoneDegreesDataSetHash *dataSet =
+        fiftyoneDegreesDataSetHashGet(manager);
+    if (dataSet == NULL) {
+        return 0;
+    }
+    const fiftyoneDegreesConfigHash *config = &dataSet->config;
+    const bool readsFile = dataSet->b.b.isInMemory == false && (
+        config->strings.loaded == false ||
+        config->components.loaded == false ||
+        config->maps.loaded == false ||
+        config->properties.loaded == false ||
+        config->values.loaded == false ||
+        config->profiles.loaded == false ||
+        config->rootNodes.loaded == false ||
+        config->nodes.loaded == false ||
+        config->profileOffsets.loaded == false);
+    const uint16_t count = readsFile ? dataSet->b.b.filePool.pool.count : 0;
+    fiftyoneDegreesDataSetHashRelease(dataSet);
+    return count;
 }

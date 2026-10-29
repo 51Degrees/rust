@@ -33,9 +33,10 @@
 //! function does the minimum work on the request thread: apply the ignore
 //! filter, roll the share dice, consult the repeat-evidence tracker, extract
 //! the wanted evidence into a self-contained [`ShareUsageData`], then hand it
-//! to a bounded channel. A single background thread consumes the channel,
-//! accumulates a batch of the configured minimum entries, builds the XML and
-//! sends it.
+//! to a bounded channel. A single background thread consumes the channel.
+//! Once it holds the configured minimum entries it takes more until none
+//! arrives within the take timeout or it holds twice the minimum, as the .NET
+//! and Java pipelines do, then builds the XML and sends it.
 //!
 //! Usage sharing is expendable. A failure (a full queue, a send error, an
 //! offline endpoint) is logged through the [`log`] facade and never disrupts
@@ -76,7 +77,7 @@ use std::fmt::Write as _;
 use std::io::Write;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -103,6 +104,9 @@ use crate::share_usage_tracker::ShareUsageTracker;
 /// The smallest value accepted for the minimum entries per message. A message
 /// needs at least one record.
 pub const MIN_ENTRIES_PER_MESSAGE_FLOOR: usize = 1;
+
+/// A message holds at most this many times the minimum entries per message.
+const MAXIMUM_ENTRIES_MULTIPLE: usize = 2;
 
 /// How long the built-in transport waits for the endpoint to answer.
 #[cfg(feature = "share-usage-transport")]
@@ -178,7 +182,8 @@ impl ShareUsageConfig {
         self.share_percentage
     }
 
-    /// The number of entries accumulated before a message is sent.
+    /// The number of entries accumulated before a message is sent. A message
+    /// holds up to twice this number.
     pub fn minimum_entries_per_message(&self) -> usize {
         self.minimum_entries_per_message
     }
@@ -248,8 +253,9 @@ impl ShareUsageConfigBuilder {
     }
 
     /// Set the minimum entries per message. Values below
-    /// [`MIN_ENTRIES_PER_MESSAGE_FLOOR`] are raised to it. Returns `self` for
-    /// chaining.
+    /// [`MIN_ENTRIES_PER_MESSAGE_FLOOR`] are raised to it. A message is sent
+    /// once it holds this many entries and no more arrive within the take
+    /// timeout, or once it holds twice this many. Returns `self` for chaining.
     pub fn minimum_entries_per_message(mut self, minimum_entries_per_message: usize) -> Self {
         self.config.minimum_entries_per_message =
             minimum_entries_per_message.max(MIN_ENTRIES_PER_MESSAGE_FLOOR);
@@ -263,15 +269,20 @@ impl ShareUsageConfigBuilder {
     }
 
     /// Set how long a request waits for room when the queue is full. The
-    /// request's data is discarded if no room appears in that time. Returns
-    /// `self` for chaining.
+    /// request's data is discarded if no room appears in that time. A timeout
+    /// too long to add to the clock, such as `Duration::MAX`, waits until there
+    /// is room. Returns `self` for chaining.
     pub fn add_timeout(mut self, add_timeout: Duration) -> Self {
         self.config.add_timeout = add_timeout;
         self
     }
 
-    /// Set the timeout used when taking from the queue. Returns `self` for
-    /// chaining.
+    /// Set how long the background thread waits for another entry once a
+    /// message holds the minimum entries per message. The message is sent when
+    /// none arrives in that time, or when it holds twice the minimum, as the
+    /// .NET and Java pipelines do. Below the minimum the thread waits with no
+    /// time limit, so an idle element uses no processor time. Returns `self`
+    /// for chaining.
     pub fn take_timeout(mut self, take_timeout: Duration) -> Self {
         self.config.take_timeout = take_timeout;
         self
@@ -406,17 +417,45 @@ trait UsageSender: Send + Sync {
 /// The production transport: a blocking `reqwest` client posting gzip XML.
 /// Compiled only with the `share-usage-transport` feature, because reqwest does
 /// not build for wasm32-wasip1.
+///
+/// The client is built by the first send, which runs on the background thread,
+/// because building a blocking client inside an async runtime panics and an
+/// element is often created inside one.
 #[cfg(feature = "share-usage-transport")]
 struct HttpUsageSender {
-    client: reqwest::blocking::Client,
+    client: OnceLock<std::result::Result<reqwest::blocking::Client, String>>,
     url: String,
+}
+
+#[cfg(feature = "share-usage-transport")]
+impl HttpUsageSender {
+    fn new(url: String) -> Self {
+        HttpUsageSender {
+            client: OnceLock::new(),
+            url,
+        }
+    }
+
+    /// The client, built on first use. A client that cannot be built makes
+    /// every send fail with the reason, which is logged like any failed send.
+    fn client(&self) -> std::result::Result<&reqwest::blocking::Client, String> {
+        self.client
+            .get_or_init(|| {
+                reqwest::blocking::Client::builder()
+                    .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
+                    .build()
+                    .map_err(|e| format!("The HTTP client could not be built: {e}"))
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
 }
 
 #[cfg(feature = "share-usage-transport")]
 impl UsageSender for HttpUsageSender {
     fn send(&self, body: Vec<u8>) -> std::result::Result<(), String> {
         let response = self
-            .client
+            .client()?
             .post(&self.url)
             .header("content-encoding", "gzip")
             .header("content-type", "text/xml")
@@ -528,21 +567,16 @@ impl ShareUsageElement {
     /// off, the element is constructed with a no-op transport: it collects and
     /// batches evidence but sends nothing to 51Degrees. See the module-level
     /// documentation for the full rationale.
+    ///
+    /// The element can be created inside an async runtime, because the HTTP
+    /// client is built on the element's own background thread.
     pub fn new(config: ShareUsageConfig) -> Self {
         // With the built-in transport, post over a blocking reqwest client.
         // Without it (for example on wasm32-wasip1) fall back to a no-op sender
         // so the element still constructs and runs.
         #[cfg(feature = "share-usage-transport")]
-        let sender: Box<dyn UsageSender> = {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(HTTP_TIMEOUT_SECONDS))
-                .build()
-                .unwrap_or_default();
-            Box::new(HttpUsageSender {
-                client,
-                url: config.share_usage_url.clone(),
-            })
-        };
+        let sender: Box<dyn UsageSender> =
+            Box::new(HttpUsageSender::new(config.share_usage_url.clone()));
         #[cfg(not(feature = "share-usage-transport"))]
         let sender: Box<dyn UsageSender> = Box::new(NoopUsageSender);
 
@@ -836,20 +870,24 @@ fn add_to_queue(
     mut usage: ShareUsageData,
     timeout: Duration,
 ) -> std::result::Result<(), Discarded> {
-    let deadline = Instant::now() + timeout;
+    // A timeout too long to add to the clock, such as Duration::MAX, has no
+    // deadline, as with the standard library's own timeouts.
+    let deadline = Instant::now().checked_add(timeout);
     loop {
         match sender.try_send(usage) {
             Ok(()) => return Ok(()),
             Err(TrySendError::Disconnected(_)) => return Err(Discarded::Stopped),
             Err(TrySendError::Full(returned)) => {
-                let now = Instant::now();
-                if now >= deadline {
-                    return Err(Discarded::QueueFull);
+                let mut wait = Duration::from_millis(ADD_RETRY_INTERVAL_MILLISECONDS);
+                if let Some(deadline) = deadline {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        return Err(Discarded::QueueFull);
+                    }
+                    wait = wait.min(deadline - now);
                 }
                 usage = returned;
-                std::thread::sleep(
-                    Duration::from_millis(ADD_RETRY_INTERVAL_MILLISECONDS).min(deadline - now),
-                );
+                std::thread::sleep(wait);
             }
         }
     }
@@ -867,39 +905,34 @@ struct Worker {
 }
 
 impl Worker {
-    /// The consumer loop. Accumulates a batch then sends it. On channel
-    /// disconnection it flushes whatever remains and exits.
+    /// The consumer loop. Below the minimum entries it waits for each record
+    /// with no time limit, so an idle element uses no processor time. Once it
+    /// holds the minimum it takes more until none arrives within the take
+    /// timeout or it holds twice the minimum, then sends the message. Once the
+    /// element is dropped and every queued record has been received, it sends
+    /// what remains, even below the minimum, and exits.
     fn run(self) {
         let min_entries = self.config.minimum_entries_per_message;
+        let max_entries = min_entries.saturating_mul(MAXIMUM_ENTRIES_MULTIPLE);
         let take_timeout = self.config.take_timeout;
-        let mut batch: Vec<ShareUsageData> = Vec::with_capacity(min_entries);
+        let mut batch: Vec<ShareUsageData> = Vec::with_capacity(max_entries);
 
-        loop {
-            match self.receiver.recv_timeout(take_timeout) {
-                Ok(item) => {
-                    batch.push(item);
-                    // Once a full batch is gathered, send it.
-                    if batch.len() >= min_entries {
-                        self.send_batch(std::mem::take(&mut batch));
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    // The producer paused. Keep accumulating; do not send a
-                    // partial batch until shutdown, to keep batches efficient.
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    // The element is being dropped. Drain anything still
-                    // buffered in the channel, then send the final (possibly
-                    // partial) batch.
-                    while let Ok(item) = self.receiver.try_recv() {
-                        batch.push(item);
-                    }
-                    if !batch.is_empty() {
-                        self.send_batch(std::mem::take(&mut batch));
-                    }
-                    break;
+        // `recv` fails only when the channel is closed and empty.
+        while let Ok(item) = self.receiver.recv() {
+            batch.push(item);
+            if batch.len() < min_entries {
+                continue;
+            }
+            while batch.len() < max_entries {
+                match self.receiver.recv_timeout(take_timeout) {
+                    Ok(item) => batch.push(item),
+                    Err(_) => break,
                 }
             }
+            self.send_batch(std::mem::take(&mut batch));
+        }
+        if !batch.is_empty() {
+            self.send_batch(batch);
         }
     }
 
@@ -1576,6 +1609,32 @@ mod tests {
     }
 
     #[test]
+    fn a_message_takes_up_to_twice_the_minimum_within_the_take_timeout() {
+        // A take timeout far longer than processing five requests takes, so
+        // every record after the minimum arrives within it.
+        const TAKE_TIMEOUT_SECONDS: u64 = 5;
+        let capture = Capture::default();
+        share(
+            ShareUsageConfig::builder()
+                .minimum_entries_per_message(2)
+                .take_timeout(Duration::from_secs(TAKE_TIMEOUT_SECONDS))
+                .build(),
+            capture.clone(),
+            Vec::new(),
+            ["one", "two", "three", "four", "five"]
+                .into_iter()
+                .map(user_agent)
+                .collect(),
+        );
+        let sizes: Vec<usize> = capture
+            .messages()
+            .iter()
+            .map(|xml| xml.matches("<Device>").count())
+            .collect();
+        assert_eq!(sizes, [4, 1], "twice the minimum, then the rest");
+    }
+
+    #[test]
     fn a_full_queue_waits_for_the_add_timeout_then_discards() {
         const ADD_TIMEOUT_MILLISECONDS: u64 = 50;
         let (entered_tx, entered_rx) = mpsc::channel();
@@ -1640,6 +1699,36 @@ mod tests {
             add_to_queue(&tx, ShareUsageData::default(), Duration::ZERO),
             Err(Discarded::Stopped)
         ));
+    }
+
+    #[test]
+    fn an_add_timeout_too_long_for_the_clock_waits_for_room() {
+        let (tx, rx) = sync_channel::<ShareUsageData>(1);
+        assert!(add_to_queue(&tx, ShareUsageData::default(), Duration::MAX).is_ok());
+
+        // The queue of one is full, so the next add waits until it has room.
+        let taker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            rx.recv().unwrap();
+            rx
+        });
+        assert!(add_to_queue(&tx, ShareUsageData::default(), Duration::MAX).is_ok());
+        let rx = taker.join().unwrap();
+        assert!(rx.try_recv().is_ok(), "the second record was queued");
+    }
+
+    #[test]
+    fn a_request_is_shared_with_the_longest_add_timeout() {
+        let capture = Capture::default();
+        share(
+            ShareUsageConfig::builder()
+                .add_timeout(Duration::MAX)
+                .build(),
+            capture.clone(),
+            Vec::new(),
+            vec![user_agent("one")],
+        );
+        assert_eq!(capture.devices(), 1);
     }
 
     #[test]

@@ -249,7 +249,7 @@ fn main() -> anyhow::Result<()> {
     // production share is reachable.
     let data_file = examples_shared::ipi_data_path(examples_shared::IpiTier::default()).context(
         "no on-premise IP Intelligence data file found. Set 51DEGREES_IPI_PATH to an .ipi data \
-         file, or check out the ip-intelligence-cxx submodule with its ASN data file.",
+         file, or check out the cxx submodule with its ASN data file.",
     )?;
 
     let port: u16 = std::env::var("PORT")
@@ -391,7 +391,6 @@ mod tests {
  * its data-file warnings are read before it is handed to the web pipeline as an
  * application element, so no data file is opened twice.
  *
- * Resolve the data file with `51DEGREES_IPI_PATH` (or rely on the ASN file in a
- * sibling `ip-intelligence-cxx` checkout), then run the binary and open
- * http://127.0.0.1:8083.
+ * Resolve the data file with `51DEGREES_IPI_PATH` (or rely on the ASN file in
+ * the `cxx` submodule), then run the binary and open http://127.0.0.1:8083.
  */

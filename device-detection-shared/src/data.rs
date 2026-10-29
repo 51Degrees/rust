@@ -30,6 +30,8 @@
 //! interface-compatible.
 
 use std::any::Any;
+use std::fmt;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use fiftyone_pipeline_core::{
     ElementData, NoValueError, PropertyMetaData, PropertyValue, PropertyValueType, TypedKey,
@@ -71,6 +73,118 @@ const ABSENT_MESSAGE: &str = "The property was not present in the device data.";
 const WRONG_TYPE_MESSAGE: &str =
     "The property was present but its stored value did not match the requested type.";
 
+/// Reads the properties of one detection from its native results when they are
+/// requested.
+///
+/// An on-premise engine gives its [`DeviceDataBase`] a reader rather than a copy
+/// of every value, so a caller that reads one property does not pay to read the
+/// others.
+pub trait DevicePropertyReader: Send + Sync {
+    /// The lowercase names of the properties this reader can read. A property
+    /// is identified by its position in this list.
+    fn property_names(&self) -> &[String];
+
+    /// The position of the property with the given lowercase name, or `None`
+    /// when this reader cannot read it.
+    fn position(&self, name: &str) -> Option<usize>;
+
+    /// Read the property at `position`. `Ok(None)` when it has no value, and
+    /// `Err` with a message when the read fails.
+    fn read_property(&self, position: usize) -> Result<Option<PropertyValue>, String>;
+}
+
+/// The outcome of reading one property.
+type ReadOutcome = Result<Option<PropertyValue>, String>;
+
+/// The values a [`DevicePropertyReader`] has read, so each property is read at
+/// most once.
+struct DeferredValues {
+    reader: Box<dyn DevicePropertyReader>,
+    /// The outcome of each read so far, by position in the reader's names.
+    /// Empty until the first read.
+    read: Mutex<Vec<Option<ReadOutcome>>>,
+}
+
+impl DeferredValues {
+    /// The position of a property in the reader's names, or `None` when the
+    /// reader cannot read it.
+    fn position(&self, name: &str) -> Option<usize> {
+        match self.reader.position(name) {
+            Some(position) => Some(position),
+            None if needs_lowercase(name) => self.reader.position(&name.to_lowercase()),
+            None => None,
+        }
+    }
+
+    /// The outcome of reading the property at `position`, read on its first
+    /// request.
+    fn outcome<'a>(
+        &self,
+        read: &'a mut Vec<Option<ReadOutcome>>,
+        position: usize,
+    ) -> &'a ReadOutcome {
+        if read.is_empty() {
+            read.resize(self.reader.property_names().len(), None);
+        }
+        read[position].get_or_insert_with(|| self.reader.read_property(position))
+    }
+
+    /// The value of a property, read on its first request, or `None` when the
+    /// reader cannot read it.
+    fn get(&self, name: &str) -> Option<ReadOutcome> {
+        let position = self
+            .position(name)
+            .filter(|position| *position < self.reader.property_names().len())?;
+        let mut read = self.read.lock().unwrap_or_else(PoisonError::into_inner);
+        Some(self.outcome(&mut read, position).clone())
+    }
+
+    /// The lowercase names of the properties that have a value, reading any not
+    /// yet read.
+    fn keys(&self) -> Vec<String> {
+        let mut read = self.read.lock().unwrap_or_else(PoisonError::into_inner);
+        let names = self.reader.property_names();
+        let mut keys = Vec::new();
+        for (position, name) in names.iter().enumerate() {
+            if matches!(self.outcome(&mut read, position), Ok(Some(_))) {
+                keys.push(name.clone());
+            }
+        }
+        keys
+    }
+}
+
+/// Whether a property name has letters that lowercasing would change.
+fn needs_lowercase(name: &str) -> bool {
+    !name.is_ascii() || name.bytes().any(|byte| byte.is_ascii_uppercase())
+}
+
+impl fmt::Debug for DeferredValues {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let read = self.read.lock().unwrap_or_else(PoisonError::into_inner);
+        let read: Vec<(&String, &ReadOutcome)> = self
+            .reader
+            .property_names()
+            .iter()
+            .zip(read.iter())
+            .filter_map(|(name, outcome)| outcome.as_ref().map(|outcome| (name, outcome)))
+            .collect();
+        f.debug_struct("DeferredValues")
+            .field("read", &read)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Where a property's value came from when it was looked up.
+enum Lookup {
+    /// The value, from the bag or the reader.
+    Found(PropertyValue),
+    /// No value, with the bag's explanation.
+    Absent(NoValueError),
+    /// The reader failed to read the value, with its message.
+    Failed(String),
+}
+
 // The strongly-typed `DeviceData` read trait and its `impl` for
 // `DeviceDataBase` are generated from the common metadata by the 51Degrees
 // PropertyGenerator tool and live in the `crate::device_data` module. Each
@@ -91,6 +205,10 @@ const WRONG_TYPE_MESSAGE: &str =
 /// The bag keys are the property names (for example `IsMobile`,
 /// `HardwareVendor`). Lookups are case-insensitive, so an engine that populates
 /// `ismobile` and a caller that reads `IsMobile` agree.
+///
+/// An on-premise engine also attaches a [`DevicePropertyReader`] through
+/// [`DeviceDataBase::with_reader`], and a property not in the bag is then read
+/// from the native results the first time it is requested.
 ///
 /// # Example
 ///
@@ -115,6 +233,8 @@ const WRONG_TYPE_MESSAGE: &str =
 #[derive(Debug, Clone)]
 pub struct DeviceDataBase {
     base: AspectDataBase,
+    /// The values read on request, when an engine attached a reader.
+    deferred: Option<Arc<DeferredValues>>,
 }
 
 impl DeviceDataBase {
@@ -123,6 +243,7 @@ impl DeviceDataBase {
     pub fn new() -> Self {
         DeviceDataBase {
             base: AspectDataBase::new(DEVICE_ELEMENT_DATA_KEY),
+            deferred: None,
         }
     }
 
@@ -132,7 +253,59 @@ impl DeviceDataBase {
     /// example when restoring a cached result, so the engine keys and cache-hit
     /// flag carried by the `AspectDataBase` are preserved.
     pub fn from_base(base: AspectDataBase) -> Self {
-        DeviceDataBase { base }
+        DeviceDataBase {
+            base,
+            deferred: None,
+        }
+    }
+
+    /// Read every property not in the bag from `reader` when it is first
+    /// requested, keeping each value once read.
+    ///
+    /// A value in the bag takes precedence over the reader's. Reads go through
+    /// a lock, so the data can be shared between threads.
+    pub fn with_reader(mut self, reader: impl DevicePropertyReader + 'static) -> Self {
+        self.deferred = Some(Arc::new(DeferredValues {
+            reader: Box::new(reader),
+            read: Mutex::new(Vec::new()),
+        }));
+        self
+    }
+
+    /// Look a property up in the bag, then through the reader if there is one.
+    fn lookup(&self, name: &str) -> Lookup {
+        if let Some(value) = self.base.values().get_value(name) {
+            return Lookup::Found(value.clone());
+        }
+        match self
+            .deferred
+            .as_ref()
+            .and_then(|deferred| deferred.get(name))
+        {
+            Some(Ok(Some(value))) => Lookup::Found(value),
+            Some(Err(message)) => Lookup::Failed(message),
+            // The bag's own explanation, as when there is no reader.
+            _ => match self.base.get(name) {
+                Ok(value) => Lookup::Found(value),
+                Err(absent) => Lookup::Absent(absent),
+            },
+        }
+    }
+
+    /// Convert a looked-up value to a typed value, explaining a no-value.
+    fn typed<T>(
+        &self,
+        name: &str,
+        convert: impl FnOnce(PropertyValue) -> Option<T>,
+    ) -> AspectPropertyValue<T> {
+        match self.lookup(name) {
+            Lookup::Found(value) => match convert(value) {
+                Some(typed) => AspectPropertyValue::new(typed),
+                None => AspectPropertyValue::no_value(WRONG_TYPE_MESSAGE),
+            },
+            Lookup::Absent(_) => AspectPropertyValue::no_value(ABSENT_MESSAGE),
+            Lookup::Failed(message) => AspectPropertyValue::no_value(message),
+        }
     }
 
     /// Set a property value, overwriting any existing value for that name, and
@@ -156,7 +329,9 @@ impl DeviceDataBase {
         self.base.set_cache_hit();
     }
 
-    /// Borrow the wrapped [`AspectDataBase`].
+    /// Borrow the wrapped [`AspectDataBase`], which holds the values set on
+    /// this data directly. Values a reader supplies are not in it, so read
+    /// through [`ElementData`] or the typed getters to see every value.
     pub fn base(&self) -> &AspectDataBase {
         &self.base
     }
@@ -173,37 +348,19 @@ impl DeviceDataBase {
     /// The generated [`DeviceData`](crate::DeviceData) accessors delegate here
     /// (and to the sibling typed getters) by property name.
     pub fn string_property(&self, name: &str) -> AspectPropertyValue<String> {
-        match self.base.get(name) {
-            Ok(value) => match value.as_str() {
-                Some(s) => AspectPropertyValue::new(s.to_owned()),
-                None => AspectPropertyValue::no_value(WRONG_TYPE_MESSAGE),
-            },
-            Err(_) => AspectPropertyValue::no_value(ABSENT_MESSAGE),
-        }
+        self.typed(name, |value| value.as_str().map(str::to_owned))
     }
 
     /// Read a boolean-typed property, wrapping the result in an
     /// [`AspectPropertyValue`].
     pub fn bool_property(&self, name: &str) -> AspectPropertyValue<bool> {
-        match self.base.get(name) {
-            Ok(value) => match value.as_bool() {
-                Some(b) => AspectPropertyValue::new(b),
-                None => AspectPropertyValue::no_value(WRONG_TYPE_MESSAGE),
-            },
-            Err(_) => AspectPropertyValue::no_value(ABSENT_MESSAGE),
-        }
+        self.typed(name, |value| value.as_bool())
     }
 
     /// Read an integer-typed property, wrapping the result in an
     /// [`AspectPropertyValue`].
     pub fn integer_property(&self, name: &str) -> AspectPropertyValue<i64> {
-        match self.base.get(name) {
-            Ok(value) => match value.as_integer() {
-                Some(i) => AspectPropertyValue::new(i),
-                None => AspectPropertyValue::no_value(WRONG_TYPE_MESSAGE),
-            },
-            Err(_) => AspectPropertyValue::no_value(ABSENT_MESSAGE),
-        }
+        self.typed(name, |value| value.as_integer())
     }
 
     /// Read a double-typed property, wrapping the result in an
@@ -211,13 +368,7 @@ impl DeviceDataBase {
     /// doubles too, so this serves every floating-point Device Detection
     /// property.
     pub fn double_property(&self, name: &str) -> AspectPropertyValue<f64> {
-        match self.base.get(name) {
-            Ok(value) => match value.as_double() {
-                Some(d) => AspectPropertyValue::new(d),
-                None => AspectPropertyValue::no_value(WRONG_TYPE_MESSAGE),
-            },
-            Err(_) => AspectPropertyValue::no_value(ABSENT_MESSAGE),
-        }
+        self.typed(name, |value| value.as_double())
     }
 
     /// Read a string-list-typed property, wrapping the result in an
@@ -225,12 +376,11 @@ impl DeviceDataBase {
     /// as a one-element list, since some sources return a scalar where the
     /// property is declared as a list.
     pub fn string_list_property(&self, name: &str) -> AspectPropertyValue<Vec<String>> {
-        match self.base.get(name) {
-            Ok(PropertyValue::StringList(list)) => AspectPropertyValue::new(list),
-            Ok(PropertyValue::String(s)) => AspectPropertyValue::new(vec![s]),
-            Ok(_) => AspectPropertyValue::no_value(WRONG_TYPE_MESSAGE),
-            Err(_) => AspectPropertyValue::no_value(ABSENT_MESSAGE),
-        }
+        self.typed(name, |value| match value {
+            PropertyValue::StringList(list) => Some(list),
+            PropertyValue::String(s) => Some(vec![s]),
+            _ => None,
+        })
     }
 }
 
@@ -242,11 +392,29 @@ impl Default for DeviceDataBase {
 
 impl ElementData for DeviceDataBase {
     fn get(&self, name: &str) -> Result<PropertyValue, NoValueError> {
-        self.base.get(name)
+        match self.lookup(name) {
+            Lookup::Found(value) => Ok(value),
+            Lookup::Absent(absent) => Err(absent),
+            Lookup::Failed(message) => Err(NoValueError::new(message)),
+        }
     }
 
+    /// The names of the properties that have a value. With a reader attached
+    /// this reads every property not yet read, because whether a property has
+    /// a value is only known once it is read.
     fn keys(&self) -> Vec<String> {
-        self.base.keys()
+        let mut keys = self.base.keys();
+        if let Some(deferred) = &self.deferred {
+            // The reader's names are distinct, so only the bag's few names can
+            // repeat one of them.
+            let in_bag = keys.len();
+            for name in deferred.keys() {
+                if !keys[..in_bag].contains(&name) {
+                    keys.push(name);
+                }
+            }
+        }
+        keys
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -318,6 +486,7 @@ pub fn default_aspect_property_metadata() -> Vec<AspectPropertyMetaData> {
 mod tests {
     use super::*;
     use crate::DeviceData;
+    use std::collections::HashMap;
 
     #[test]
     fn data_key_string_is_device() {
@@ -441,5 +610,143 @@ mod tests {
         let device = DeviceDataBase::new().set("ScreenMMWidth", 71.0f64);
         assert_eq!(device.get("ScreenMMWidth").unwrap().as_double(), Some(71.0));
         assert!(device.keys().iter().any(|k| k == "screenmmwidth"));
+    }
+
+    /// A reader over fixed outcomes that counts how often each is read.
+    struct CountingReader {
+        names: Vec<String>,
+        outcomes: Vec<Result<Option<PropertyValue>, String>>,
+        reads: Arc<Mutex<HashMap<String, usize>>>,
+    }
+
+    impl CountingReader {
+        fn new() -> (Self, Arc<Mutex<HashMap<String, usize>>>) {
+            let reads = Arc::new(Mutex::new(HashMap::new()));
+            let reader = CountingReader {
+                names: ["ismobile", "platformname", "browsername", "hardwarevendor"]
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect(),
+                outcomes: vec![
+                    Ok(Some(PropertyValue::Bool(true))),
+                    Ok(Some(PropertyValue::from("Android"))),
+                    Ok(None),
+                    Err("the native read failed".to_owned()),
+                ],
+                reads: Arc::clone(&reads),
+            };
+            (reader, reads)
+        }
+    }
+
+    impl DevicePropertyReader for CountingReader {
+        fn property_names(&self) -> &[String] {
+            &self.names
+        }
+
+        fn position(&self, name: &str) -> Option<usize> {
+            self.names.iter().position(|known| known == name)
+        }
+
+        fn read_property(&self, position: usize) -> Result<Option<PropertyValue>, String> {
+            *self
+                .reads
+                .lock()
+                .unwrap()
+                .entry(self.names[position].clone())
+                .or_insert(0) += 1;
+            self.outcomes[position].clone()
+        }
+    }
+
+    fn reads_of(reads: &Mutex<HashMap<String, usize>>, name: &str) -> usize {
+        reads.lock().unwrap().get(name).copied().unwrap_or(0)
+    }
+
+    #[test]
+    fn reader_reads_only_the_properties_requested() {
+        let (reader, reads) = CountingReader::new();
+        let device = DeviceDataBase::new().with_reader(reader);
+        assert!(*device.is_mobile().value().unwrap());
+        assert_eq!(reads_of(&reads, "ismobile"), 1);
+        assert_eq!(reads_of(&reads, "platformname"), 0);
+        assert_eq!(reads_of(&reads, "hardwarevendor"), 0);
+    }
+
+    #[test]
+    fn reader_reads_each_property_once() {
+        let (reader, reads) = CountingReader::new();
+        let device = DeviceDataBase::new().with_reader(reader);
+        assert!(*device.is_mobile().value().unwrap());
+        assert_eq!(device.get("ISMOBILE").unwrap().as_bool(), Some(true));
+        assert!(*device.is_mobile().value().unwrap());
+        assert_eq!(reads_of(&reads, "ismobile"), 1);
+    }
+
+    #[test]
+    fn keys_list_only_the_properties_with_a_value() {
+        let (reader, reads) = CountingReader::new();
+        let device = DeviceDataBase::new()
+            .set("DeviceId", "1-2-3-4")
+            .with_reader(reader);
+        let mut keys = device.keys();
+        keys.sort();
+        assert_eq!(keys, ["deviceid", "ismobile", "platformname"]);
+        // Every property was read once to find which have a value.
+        for name in ["ismobile", "platformname", "browsername", "hardwarevendor"] {
+            assert_eq!(reads_of(&reads, name), 1, "{name}");
+        }
+        device.keys();
+        assert_eq!(reads_of(&reads, "ismobile"), 1);
+    }
+
+    #[test]
+    fn a_value_in_the_bag_wins_over_the_reader() {
+        let (reader, reads) = CountingReader::new();
+        let mut device = DeviceDataBase::new().with_reader(reader);
+        device.insert("IsMobile", false);
+        assert!(!*device.is_mobile().value().unwrap());
+        assert_eq!(reads_of(&reads, "ismobile"), 0);
+    }
+
+    #[test]
+    fn a_property_without_a_value_reads_as_absent() {
+        let (reader, _) = CountingReader::new();
+        let device = DeviceDataBase::new().with_reader(reader);
+        let browser = device.browser_name();
+        assert!(!browser.has_value());
+        assert_eq!(browser.no_value_message(), Some(ABSENT_MESSAGE));
+        assert!(device.get("BrowserName").is_err());
+        assert!(device.get("NotAProperty").is_err());
+    }
+
+    #[test]
+    fn a_failed_read_is_a_no_value_carrying_its_message() {
+        let (reader, _) = CountingReader::new();
+        let device = DeviceDataBase::new().with_reader(reader);
+        let vendor = device.hardware_vendor();
+        assert_eq!(vendor.no_value_message(), Some("the native read failed"));
+        assert_eq!(
+            device.get("HardwareVendor").unwrap_err().message,
+            "the native read failed"
+        );
+    }
+
+    // WebAssembly has no threads to spawn.
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn reads_from_several_threads_agree_and_read_once() {
+        let (reader, reads) = CountingReader::new();
+        let device = Arc::new(DeviceDataBase::new().with_reader(reader));
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let device = Arc::clone(&device);
+                std::thread::spawn(move || device.platform_name().value().unwrap().clone())
+            })
+            .collect();
+        for handle in handles {
+            assert_eq!(handle.join().unwrap(), "Android");
+        }
+        assert_eq!(reads_of(&reads, "platformname"), 1);
     }
 }

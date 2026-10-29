@@ -30,7 +30,7 @@
 //! one is available.
 //!
 //! Device Detection and IP Intelligence compile separate copies of the shared
-//! `common-cxx` layer (the IP Intelligence build widens the file offset types,
+//! common C layer (the IP Intelligence build widens the file offset types,
 //! see the `fiftyone-ip-intelligence-sys` crate docs). That gives each engine
 //! its own distinct, although structurally identical, `StatusCode` and
 //! `Exception` types and its own message functions. The [`NativeStatus`] and

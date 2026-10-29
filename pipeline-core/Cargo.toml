@@ -17,6 +17,9 @@ thiserror.workspace = true
 # pipeline is used in high-traffic web servers, so a faster hasher than the
 # default SipHash is worthwhile.
 ahash.workspace = true
+# Processing logs the errors it suppresses through the log facade, which does
+# nothing until the application installs a logger.
+log = "0.4"
 
 [package.metadata.docs.rs]
 # Build the documentation on docs.rs with every feature enabled, so the

@@ -26,6 +26,16 @@ name: Nightly Pipeline
 # request as well. This runs the core gate again, being format, build, test,
 # lint and documentation on all four platforms, against what main will
 # actually contain once the pull request is merged.
+#
+# Before the pull requests, the shared submodule update moves each submodule to
+# the latest commit on its default branch and, when one has moved, raises a
+# pull request for it, as the C repositories do. The cxx submodule holds the C
+# sources the -sys crates compile, so this is how a change to them reaches the
+# crates. The update moves every submodule, owid-rust included, so a push to
+# the main branch of SWAN-community/owid-rust also arrives this way and is
+# compiled into fodid. The update pull request then goes through the same
+# checks as any other, in this run when it is eligible, and once it is merged
+# the publish that follows releases the crates.
 
 on:
   workflow_dispatch:
@@ -42,7 +52,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  SubmoduleUpdate:
+    name: Nightly Submodule Update
+    uses: 51Degrees/common-ci/.github/workflows/nightly-submodule-update.yml@main
+    with:
+      repo-name: ${{ github.event.repository.name }}
+      org-name: ${{ github.event.repository.owner.login }}
+      dryrun: ${{ inputs.dryrun || false }}
+    secrets:
+      token: ${{ secrets.ACCESS_TOKEN }}
+
   PullRequests:
+    # Runs even when the submodule update failed, so one failure does not
+    # hold back every other pull request.
+    if: ${{ !cancelled() }}
+    needs: SubmoduleUpdate
     name: Nightly Pull Requests
     uses: 51Degrees/common-ci/.github/workflows/nightly-pull-requests.yml@main
     with:

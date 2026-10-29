@@ -21,32 +21,26 @@ workspace of runnable examples.
   real consumer's project would. See [examples/](examples/) below.
 
 The three `-sys` crates (`common-sys`, `device-detection-sys`,
-`ip-intelligence-sys`) link the 51Degrees C/C++ sources. They **vendor** those
-sources under `<crate>/vendor/`, so the published crates are self-contained and
-build without any submodule checkout. Each `vendor/UPSTREAM.txt` names the
-repository and commits the copy was taken from.
-
-To refresh the vendored sources, check out `device-detection-cxx` and
-`ip-intelligence-cxx` with their submodules at the commits wanted, then run:
-
-```
-pwsh ./ci/vendor-c-sources.ps1 -DeviceDetectionCxx <checkout> -IpIntelligenceCxx <checkout>
-```
-
-It copies the `.c` and `.h` files of exactly the directories each build script
-compiles and rewrites the `UPSTREAM.txt` files. `common-sys` takes the
-`common-cxx` that `device-detection-cxx` pins. After a refresh, build and run
-`pwsh ./ci/check-native-symbols.ps1`, which fails when a `common-cxx` function
-is missing from `ip-intelligence-sys/src/symbol_prefix.h`.
+`ip-intelligence-sys`) link the 51Degrees C sources, which come from the `cxx`
+submodule at the root of the repository
+(https://github.com/51Degrees/51degrees-cxx). The submodule's data submodules,
+`cxx/device-detection-data` and `cxx/ip-intelligence-data`, hold the Lite data
+files and the evidence the tests and examples read. The submodule pointer
+records which C commit the crates build, and the nightly pipeline moves it
+with an update pull request when 51degrees-cxx changes. After a move, build
+and run `pwsh ./ci/check-native-symbols.ps1`, which fails when a common C
+function is missing from `ip-intelligence-sys/src/symbol_prefix.h`.
 
 ## Building and testing
 
-Once per clone, and again whenever the `owid-rust` submodule moves, place the
-OWID source that `fodid` compiles in (see "Releasing to crates.io" below for
-why it is carried this way):
+Once per clone, and again whenever the `owid-rust` submodule moves, check out
+the submodules and place the OWID source that `fodid` compiles in (see
+"Releasing to crates.io" below for why it is carried this way). The data files
+are Git LFS content, so pull them too:
 
 ```
-git submodule update --init
+git submodule update --init --recursive
+git -C cxx submodule foreach --recursive 'git lfs pull'
 pwsh ./ci/copy-owid-source.ps1
 ```
 
@@ -62,18 +56,17 @@ cargo doc --workspace --no-deps
 CI builds with `RUSTFLAGS=-D warnings` and `RUSTDOCFLAGS=-D warnings`, so any
 warning fails the build. Match that locally before pushing.
 
-Each `-sys` `build.rs` resolves its C sources in this order: an override
-environment variable, then the vendored copy, then a sibling `*-cxx` checkout.
-The override variables are `FIFTYONE_COMMON_CXX_DIR`,
-`FIFTYONE_DEVICE_DETECTION_CXX_DIR` and `FIFTYONE_IP_INTELLIGENCE_CXX_DIR`. With
-no override set, the vendored sources are used, so a plain `cargo build` works
-out of the box.
+Each `-sys` `build.rs` resolves its C sources in this order: the
+`FIFTYONE_CXX_DIR` environment variable, pointing at a 51degrees-cxx checkout,
+then the `cxx` submodule, then the `cxx` folder inside the crate, which only a
+packaged crate has (see "Releasing to crates.io" below).
 
-On-premise tests and examples need a data file. They skip cleanly when one is
-absent, so the offline build and tests stay green without data. To run them,
-point the relevant variable at a local file: `51DEGREES_DD_PATH` for a Device
-Detection `.hash` file, `51DEGREES_IPI_PATH` for an IP Intelligence `.ipi`
-file. Live cloud tests are `#[ignore]`d and read a resource key from
+On-premise tests and examples need a data file. They find the Lite files in
+the `cxx` submodule, and skip cleanly when no file is present, so the offline
+build and tests stay green without data. To run them against another file,
+point the relevant variable at it: `51DEGREES_DD_PATH` for a Device Detection
+`.hash` file, `51DEGREES_IPI_PATH` for an IP Intelligence `.ipi` file. Live
+cloud tests are `#[ignore]`d and read a resource key from
 `51DEGREES_RESOURCE_KEY` (or the CI tiered names `_51DEGREES_RESOURCE_KEY_BESPOKE`
 then `_51DEGREES_RESOURCE_KEY_BASIC`).
 
@@ -130,20 +123,23 @@ OWID crate has to exist on any registry. The copied directory `fodid/src/owid`
 is ignored by git and listed in the `fodid` manifest's `include`, so
 `cargo publish` packages it.
 
+The `-sys` crates carry their C sources the same way. Cargo will not package
+files from outside a crate's folder, so before publishing
+`ci/copy-cxx-sources.ps1` copies the `.c` and `.h` files each build script
+compiles from the `cxx` submodule into a `cxx` folder inside the crate,
+keeping the `src/` layout because the C files include each other by relative
+path. Each copy is ignored by git, listed in the crate manifest's `include`,
+and records the 51degrees-cxx commit in `cxx/SOURCE.txt`. A build in the
+workspace reads the submodule and never needs the copy.
+
 ## CI gates
 
 - `pull-request.yml` — fmt, build, test, clippy and doc on Windows, Linux
   (two LTS) and macOS (Intel and Apple Silicon), plus a wasm32-wasip1 job for
   the cloud crates. Runs on pushes to `main` and PRs targeting `main`. It
-  builds the vendored C sources, which are what the published crates compile,
-  and takes the data files from the C repositories at the commits recorded in
-  `vendor/UPSTREAM.txt`. It also runs `ci/check-native-symbols.ps1` and the
-  property lookup scaling test in release.
-- `vendored-c-drift.yml` checks the vendored C sources against the commits in
-  `vendor/UPSTREAM.txt` on every push and PR. Weekly and on a manual run it
-  checks them against upstream `main` instead, and builds and tests the
-  workspace against upstream `main`. A failure there means the vendored copies
-  need refreshing with `ci/vendor-c-sources.ps1`.
+  builds the C sources and reads the data files in the `cxx` submodule. It
+  also runs `ci/check-native-symbols.ps1` and the property lookup scaling
+  test in release.
 - `caching-wasm.yml` lints and tests `fiftyone-caching`, the loading cache
   included, on wasm32-wasip1 under wasmtime and, with default features off,
   on wasm32-unknown-unknown under Node through `ci/run-wasm-unknown.mjs`.
@@ -155,9 +151,14 @@ is ignored by git and listed in the `fodid` manifest's `include`, so
   reads no secrets.
 - `examples.yml` — builds and tests `examples/` against local source
   (`source.toml`) before a release. Runs on every PR.
-- `nightly-pipeline.yml` — at 01:00 UTC merges the eligible pull requests and
-  publishes `main` through common-ci's shared workflows, then builds and tests
-  `examples/` against the crates.io packages.
+- `nightly-pipeline.yml` runs at 01:00 UTC. It first runs common-ci's submodule
+  update, which moves every submodule to the head of its default branch and
+  raises a pull request when one has moved. That covers `owid-rust` as well as
+  `cxx`, so a push to the main branch of SWAN-community/owid-rust reaches
+  `fodid` through the next update pull request once its checks pass. It then
+  merges the eligible pull requests, publishes `main` through common-ci's
+  shared workflows, and builds and tests `examples/` against the crates.io
+  packages.
 - `publish.yml` — the same publish, dispatched by hand, the only route that can
   allow a major or minor version move.
 - `utm-link-lint.yml` — see UTM conventions below. Runs on every PR.
@@ -171,9 +172,12 @@ is ignored by git and listed in the `fodid` manifest's `include`, so
   the bundled asset and `UPSTREAM_PINNED_REF` to the same commit in one pull
   request.
 - `nightly-performance.yml` — nightly (and on-demand) on-premise throughput
-  run that feeds the documentation performance graphs. Its Rust adapter lives
-  in this repo at `ci/run-performance-tests.ps1`; only the shared comparison
-  step (`compare-performance.ps1`) comes from common-ci. See
+  run that feeds the documentation performance graphs. Its adapter,
+  `ci/run-performance-tests.ps1`, runs the performance examples against this
+  checkout's crates through `ci/test-examples-against-source.ps1`. Each
+  example writes its own results JSON, and common-ci provides the steps that
+  validate and compare it (`steps/publish-performance-results.ps1` and
+  `steps/compare-performance.ps1`). See
   [ci/missing-ci-scripts.md](ci/missing-ci-scripts.md) for how the repository
   uses the shared reusable workflows.
 

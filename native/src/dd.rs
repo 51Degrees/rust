@@ -32,9 +32,13 @@
 //! # Thread safety
 //!
 //! The native resource manager is internally reference counted and lock
-//! protected (see `common-cxx/resource.h`), so a [`Manager`] is both [`Send`]
+//! protected (see `src/common/resource.h`), so a [`Manager`] is both [`Send`]
 //! and [`Sync`] and a single one may be shared across threads behind an
-//! [`Arc`]. A native results structure is per-thread scratch, so [`Results`] is
+//! [`Arc`]. A data set that reads from its file after it is loaded holds one
+//! file handle for each concurrent operation it was opened to expect, and a
+//! read that finds none free fails. So no more calls that can read the file
+//! run at once than there are handles, and a call beyond them waits for one.
+//! A native results structure is per-thread scratch, so [`Results`] is
 //! [`Send`] (it may be moved to another thread) but not [`Sync`] (it must not be
 //! used from two threads at once). This matches the pipeline rule that one flow
 //! data, and therefore one results structure, belongs to a single thread at a
@@ -52,6 +56,7 @@ use fiftyone_pipeline_core::{constants, Error, Result};
 
 use crate::buffer::with_value_string;
 use crate::evidence::with_native_evidence;
+use crate::file_reads::{FileReadPermit, FileReads};
 use crate::profile::PerformanceProfile;
 use crate::status::{status_name, status_to_result, NativeException, NativeStatus};
 
@@ -60,7 +65,8 @@ use crate::status::{status_name, status_to_result, NativeException, NativeStatus
 const PSEUDO_HEADER_SEPARATOR: char = '\x1F';
 
 // ---------------------------------------------------------------------------
-// Status and exception trait wiring for the Device Detection common-cxx build
+// Status and exception trait wiring for the Device Detection common C library
+// build
 // ---------------------------------------------------------------------------
 
 impl NativeStatus for sys::StatusCode {
@@ -87,7 +93,7 @@ impl NativeException for sys::Exception {
     }
 
     unsafe fn free_message(ptr: *mut c_void) {
-        sys::fiftyoneDegreesMemoryStandardFree(ptr);
+        sys::fiftyoneDegreesFree(ptr);
     }
 }
 
@@ -169,13 +175,16 @@ pub struct Manager {
     /// lookup. Every later lookup reads it with no lock, so concurrent readers
     /// never contend.
     property_index: OnceLock<HashMap<String, c_int>>,
+    /// Permits for the calls that can read the data file, one for each of its
+    /// file handles, or [`None`] when the data set is held in memory.
+    file_reads: Option<FileReads>,
 }
 
 // Safety: the native resource manager is internally reference counted and
-// lock protected per `common-cxx/resource.h`, so concurrent access from several
+// lock protected per `src/common/resource.h`, so concurrent access from several
 // threads through a shared `&Manager` is sound. The cached property index is
-// set once through a `OnceLock` and only read after that. Therefore the
-// manager is both `Send` and `Sync`.
+// set once through a `OnceLock` and only read after that, and the file read
+// permits are lock protected. Therefore the manager is both `Send` and `Sync`.
 unsafe impl Send for Manager {}
 unsafe impl Sync for Manager {}
 
@@ -205,10 +214,11 @@ impl Manager {
     /// concurrency.
     ///
     /// `concurrency` sizes the file-handle pool the file-backed collections use
-    /// under the `LowMemory` and `Balanced` profiles, so it should be at least
-    /// the number of threads that will process through the data set at once.
-    /// [`None`] keeps the profile's default. It has no effect on the in-memory
-    /// profiles, where every collection is already resident.
+    /// under the `LowMemory` and `Balanced` profiles, which is how many calls
+    /// can read the data file at once. A call beyond that waits for a handle,
+    /// so it should be the number of threads that will process through the
+    /// data set at once. [`None`] keeps the profile's default. It has no effect
+    /// on the in-memory profiles, where every collection is already resident.
     pub fn open_with_options(
         path: impl AsRef<Path>,
         profile: PerformanceProfile,
@@ -216,14 +226,7 @@ impl Manager {
         concurrency: Option<u16>,
     ) -> Result<Arc<Manager>> {
         let path = path.as_ref();
-        let path_string = path.to_str().ok_or_else(|| Error::Native {
-            status: String::from("InvalidInput"),
-            message: format!("data file path is not valid UTF-8: {}", path.display()),
-        })?;
-        let path_c = CString::new(path_string).map_err(|_| Error::Native {
-            status: String::from("InvalidInput"),
-            message: String::from("data file path contains an interior nul byte"),
-        })?;
+        let path_c = crate::path::native_path(path)?;
 
         // A separated property list, kept alive for the duration of the init
         // call because `PropertiesRequired` only borrows the string pointer.
@@ -286,15 +289,24 @@ impl Manager {
 
         // Safety: a successful init leaves a non-null, initialized manager.
         let manager = NonNull::new(manager_ptr).expect("init produced a non-null manager");
+        // Safety: the manager was initialized above.
+        let handles = unsafe { sys::fiftyoneDegreesShimHashGetFileHandleCount(manager.as_ptr()) };
         Ok(Arc::new(Manager {
             manager,
             property_index: OnceLock::new(),
+            file_reads: FileReads::for_handles(handles),
         }))
     }
 
     /// The raw native manager pointer. For the engine wrappers in this crate.
     fn as_ptr(&self) -> *mut sys::ResourceManager {
         self.manager.as_ptr()
+    }
+
+    /// A permit for a call that can read the data file, waiting while every
+    /// file handle is in use. [`None`] when the data set is held in memory.
+    fn file_read(&self) -> Option<FileReadPermit<'_>> {
+        self.file_reads.as_ref().map(FileReads::permit)
     }
 
     /// The number of required (available) properties in the loaded data set.
@@ -370,6 +382,7 @@ impl Manager {
     /// caller can fall back to its own default rather than assert a tier.
     pub fn data_set_name(&self) -> Option<String> {
         let mut buffer = vec![0u8; 128];
+        let _file_read = self.file_read();
         // Safety: the buffer is writable for its full length and the manager is
         // initialized for the lifetime of `self`.
         let written = unsafe {
@@ -495,6 +508,7 @@ impl Results {
     pub fn process_evidence(&mut self, evidence: &fiftyone_pipeline_core::Evidence) -> Result<()> {
         let mut exception = sys::Exception::cleared();
         let results = self.as_ptr();
+        let _file_read = self.manager.file_read();
         // Safety: the array the closure receives is valid only for the call,
         // which is exactly the window the native processor reads it in.
         unsafe {
@@ -508,6 +522,7 @@ impl Results {
     /// Run a detection from a single User-Agent string.
     pub fn process_user_agent(&mut self, user_agent: &str) -> Result<()> {
         let mut exception = sys::Exception::cleared();
+        let _file_read = self.manager.file_read();
         // Safety: the user agent bytes are valid for the duration of the call.
         unsafe {
             sys::fiftyoneDegreesResultsHashFromUserAgent(
@@ -523,12 +538,21 @@ impl Results {
     /// Run a detection from a 51Degrees device id. Returns the number of valid
     /// profiles parsed from the id.
     pub fn process_device_id(&mut self, device_id: &str) -> Result<i32> {
+        // The native parser reads each profile id up to the first byte that
+        // is not a digit, whatever the length it is given, so the id is
+        // passed as a null terminated copy. A Rust string slice is not null
+        // terminated, and digits just past it would join the last profile id.
+        let device_id_c = CString::new(device_id).map_err(|_| Error::Native {
+            status: String::from("InvalidInput"),
+            message: String::from("device id contains an interior nul byte"),
+        })?;
         let mut exception = sys::Exception::cleared();
-        // Safety: the device id bytes are valid for the duration of the call.
+        let _file_read = self.manager.file_read();
+        // Safety: `device_id_c` is null terminated and valid for the call.
         let profiles = unsafe {
             sys::fiftyoneDegreesResultsHashFromDeviceId(
                 self.as_ptr(),
-                device_id.as_ptr() as *const c_char,
+                device_id_c.as_ptr(),
                 device_id.len(),
                 &mut exception,
             )
@@ -551,6 +575,7 @@ impl Results {
         // avoids a growable allocation on this metric path.
         let mut buffer = [0u8; 256];
         let mut exception = sys::Exception::cleared();
+        let _file_read = self.manager.file_read();
         // Safety: the results are valid, the buffer is writable for its full
         // length, and the exception is valid. The getter null terminates within
         // the buffer and returns the buffer pointer, or null when it did not fit.
@@ -583,6 +608,7 @@ impl Results {
             return Ok(false);
         };
         let mut exception = sys::Exception::cleared();
+        let _file_read = self.manager.file_read();
         // Safety: the results are valid and the index is a real required index.
         let has = unsafe {
             sys::fiftyoneDegreesResultsHashGetHasValues(self.as_ptr(), index, &mut exception)
@@ -619,6 +645,7 @@ impl Results {
 
         let results = self.as_ptr();
         let mut exception = sys::Exception::cleared();
+        let _file_read = self.manager.file_read();
         // Safety: the writer only touches the buffer it is given and returns the
         // native available-character count. The property and separator strings
         // outlive every invocation.
@@ -666,6 +693,7 @@ impl Results {
         }
         let results = self.as_ptr();
         let mut exception = sys::Exception::cleared();
+        let _file_read = self.manager.file_read();
         // Safety: the writer only touches the buffer it is given and returns the
         // native available-character count. The separator outlives every
         // invocation and the index is in range for this data set.
@@ -831,8 +859,8 @@ mod tests {
 
     use fiftyone_pipeline_core::Evidence;
 
-    /// The Hash data file `51DEGREES_DD_PATH` names, or the Lite file in a
-    /// `device-detection-cxx` checkout inside or beside the workspace.
+    /// The Hash data file `51DEGREES_DD_PATH` names, or the Lite file in the
+    /// `cxx` submodule.
     fn data_file() -> Option<PathBuf> {
         if let Ok(path) = std::env::var("51DEGREES_DD_PATH") {
             let path = PathBuf::from(path);
@@ -847,7 +875,7 @@ mod tests {
         roots
             .into_iter()
             .map(|root| {
-                root.join("device-detection-cxx")
+                root.join("cxx")
                     .join("device-detection-data")
                     .join("51Degrees-LiteV4.1.hash")
             })
@@ -1015,6 +1043,65 @@ mod tests {
                     "{name}"
                 );
             }
+        }
+    }
+
+    /// A device id read from a slice ends where the slice ends, however the
+    /// bytes after it in memory read.
+    #[test]
+    fn a_device_id_ends_where_its_slice_ends() {
+        let Some(path) = data_file() else {
+            eprintln!("no Hash data file found; skipping device id slices");
+            return;
+        };
+        let manager = Manager::open(&path, PerformanceProfile::Default).expect("data file loads");
+        let detected = detect(&manager, "header.user-agent", CHROME_ON_WINDOWS);
+        let device_id = detected
+            .device_id()
+            .expect("the device id reads")
+            .expect("a detection has a device id");
+        let profiles = device_id.split('-').filter(|id| *id != "0").count() as i32;
+
+        // Digits straight after the slice, as a larger buffer holding the id
+        // can have.
+        let held = format!("{device_id}5-1");
+        let mut results = manager.create_results().expect("results allocate");
+        let found = results
+            .process_device_id(&held[..device_id.len()])
+            .expect("the device id is processed");
+        assert_eq!(found, profiles, "{device_id}");
+        assert_eq!(
+            results.device_id().expect("the device id reads"),
+            Some(device_id)
+        );
+    }
+
+    /// A data set that reads from its file has a file handle for each
+    /// concurrent operation it was opened to expect, and one held in memory
+    /// has none, so its calls take no permits.
+    #[test]
+    fn file_handles_follow_the_expected_concurrency() {
+        let Some(path) = data_file() else {
+            eprintln!("no Hash data file found; skipping file handles");
+            return;
+        };
+        for (profile, concurrency, handles) in [
+            (PerformanceProfile::LowMemory, Some(3), 3),
+            (PerformanceProfile::Balanced, None, 10),
+            (PerformanceProfile::HighPerformance, Some(3), 0),
+            (PerformanceProfile::InMemory, None, 0),
+        ] {
+            let manager = Manager::open_with_options(&path, profile, None, concurrency)
+                .expect("data file loads");
+            // Safety: the manager is initialized.
+            let count = unsafe { sys::fiftyoneDegreesShimHashGetFileHandleCount(manager.as_ptr()) };
+            assert_eq!(count, handles, "{}", profile.as_str());
+            assert_eq!(
+                manager.file_reads.is_some(),
+                handles > 0,
+                "{}",
+                profile.as_str()
+            );
         }
     }
 

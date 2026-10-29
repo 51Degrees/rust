@@ -224,8 +224,13 @@ pub enum Error {
     ///
     /// Thrown at the end of processing when `suppress_process_exceptions` is
     /// `false`. Only errors whose [`FlowError::should_throw`] is `true` are
-    /// included.
-    #[error("{} error(s) occurred during pipeline processing", .0.len())]
+    /// included. The message names each one, in brackets after the count, so
+    /// the cause shows wherever the error is printed.
+    #[error(
+        "{} error(s) occurred during pipeline processing{}",
+        .0.len(),
+        describe_each(.0)
+    )]
     Aggregate(Vec<FlowError>),
 
     /// A pipeline operation was attempted that requires processing to have
@@ -340,6 +345,12 @@ impl Error {
     }
 }
 
+/// Each error of an aggregate in brackets, for the aggregate's message. Every
+/// error removes credentials from its own text.
+fn describe_each(errors: &[FlowError]) -> String {
+    errors.iter().map(|error| format!(" ({error})")).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,9 +437,33 @@ mod tests {
         let aggregate =
             Error::Aggregate(vec![FlowError::new("cloud", cloud_error_carrying_a_key())]);
         assert!(!format!("{aggregate:?}").contains(NOT_A_KEY));
+        assert!(!aggregate.to_string().contains(NOT_A_KEY));
         let flow = FlowError::new("cloud", cloud_error_carrying_a_key());
         assert!(!flow.to_string().contains(NOT_A_KEY));
         assert!(!format!("{flow:?}").contains(NOT_A_KEY));
+    }
+
+    #[test]
+    fn an_aggregate_says_what_failed() {
+        let aggregate = Error::Aggregate(vec![
+            FlowError::new("cloud", cloud_error_carrying_a_key()),
+            FlowError::new("device", Error::configuration("the engine failed")),
+        ]);
+        let shown = aggregate.to_string();
+        assert!(
+            shown.starts_with("2 error(s) occurred during pipeline processing"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("(error in element 'cloud': cloud request failed with status 400:"),
+            "the first error is named: {shown}"
+        );
+        assert!(
+            shown.contains(
+                "(error in element 'device': pipeline configuration error: the engine failed)"
+            ),
+            "the second error is named: {shown}"
+        );
     }
 
     #[test]

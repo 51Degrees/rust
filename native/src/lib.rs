@@ -40,7 +40,9 @@
 //!   loaded data set. It is reference counted (returned inside an [`Arc`](std::sync::Arc)) and
 //!   is [`Send`] and [`Sync`], because the native resource manager is internally
 //!   reference counted and lock protected, so one loaded data set is shared
-//!   across threads cheaply.
+//!   across threads cheaply. When the data set reads from its file after it is
+//!   loaded, no more calls that can read the file run at once than it has file
+//!   handles, and a call beyond them waits for one.
 //! - A `Results` per engine ([`dd::Results`], [`ipi::Results`]) that owns a
 //!   native results structure and holds an [`Arc`](std::sync::Arc) to its manager so the data
 //!   set cannot be freed while a result still references it. It is [`Send`] but
@@ -58,25 +60,25 @@
 //!
 //! # Device Detection and IP Intelligence coexist
 //!
-//! The two engines compile their own copies of the shared `common-cxx` layer.
+//! The two engines compile their own copies of the shared common C layer.
 //! The IP Intelligence build widens the file offset types for large data file
-//! support, which makes its `common-cxx` objects ABI incompatible with the
+//! support, which makes its common C library objects ABI incompatible with the
 //! Device Detection (and `fiftyone-common-sys`) build. Both copies once exported
 //! the same `fiftyoneDegrees*` C symbols, so linking both engines into one
 //! binary made the linker bind each duplicated symbol to a single definition and
 //! left one engine reading its data through the wrong common code.
 //!
 //! That collision is resolved at the source. IP Intelligence compiles its
-//! private copy of `common-cxx` into an `ipi_` prefixed symbol namespace (see
-//! `fiftyone-ip-intelligence-sys`), so the two copies no longer share a symbol
-//! and both engines load real data files side by side in one process. The two
-//! engines still get separate [`dd`] and [`ipi`] modules with their own
-//! `Manager` and `Results`, because the native types and life cycles differ, and
-//! they share the safe machinery in this crate (the profile, the status and
-//! exception mapping, the value buffer). Concretely, Device Detection builds a
-//! native evidence array through the `fiftyone-common-sys` evidence functions,
-//! while IP Intelligence is driven from the client IP string, which is the
-//! natural entry point for that engine.
+//! private copy of the common C library into an `ipi_` prefixed symbol
+//! namespace (see `fiftyone-ip-intelligence-sys`), so the two copies no longer
+//! share a symbol and both engines load real data files side by side in one
+//! process. The two engines still get separate [`dd`] and [`ipi`] modules with
+//! their own `Manager` and `Results`, because the native types and life cycles
+//! differ, and they share the safe machinery in this crate (the profile, the
+//! status and exception mapping, the value buffer). Concretely, Device
+//! Detection builds a native evidence array through the `fiftyone-common-sys`
+//! evidence functions, while IP Intelligence is driven from the client IP
+//! string, which is the natural entry point for that engine.
 //!
 //! # Example
 //!
@@ -106,21 +108,25 @@
 // it is only needed when at least one product feature is on.
 #[cfg(any(feature = "dd", feature = "ipi"))]
 mod buffer;
+#[cfg(any(feature = "dd", feature = "ipi"))]
+mod file_reads;
 mod status;
 
 // Device Detection is gated behind the `dd` feature and IP Intelligence behind
-// `ipi`, and both are on by default. Each product links its own copy of
-// common-cxx, but IP Intelligence's copy is compiled into an `ipi_` prefixed
-// symbol namespace, so the two no longer collide and a binary may enable both
-// (see this crate's Cargo.toml). The features remain a slimming knob for a
-// consumer that wants only one engine. The product-agnostic items below (the
-// performance profile, the status and exception mapping, the evidence helpers)
-// compile with either feature or none.
+// `ipi`, and both are on by default. Each product links its own copy of the
+// common C library, but IP Intelligence's copy is compiled into an `ipi_`
+// prefixed symbol namespace, so the two no longer collide and a binary may
+// enable both (see this crate's Cargo.toml). The features remain a slimming
+// knob for a consumer that wants only one engine. The product-agnostic items
+// below (the performance profile, the status and exception mapping, the
+// evidence helpers) compile with either feature or none.
 #[cfg(feature = "dd")]
 pub mod dd;
 pub mod evidence;
 #[cfg(feature = "ipi")]
 pub mod ipi;
+#[cfg(any(feature = "dd", feature = "ipi"))]
+mod path;
 pub mod profile;
 
 pub use profile::PerformanceProfile;

@@ -499,6 +499,51 @@ fn non_matching_if_none_match_returns_200() {
     assert_eq!(response.status, WebResponse::STATUS_OK);
 }
 
+/// Set in the environment of the second process the ETag test starts, which
+/// then prints its ETag rather than comparing.
+const ETAG_CHILD_VARIABLE: &str = "FIFTYONE_WEB_ETAG_CHILD";
+
+#[test]
+fn the_same_evidence_gives_the_same_etag_in_another_process() {
+    // A browser revalidates against whichever process answers, which is a
+    // different one after a restart or behind a load balancer, so the ETag for
+    // the same evidence must not depend on the process that computed it.
+    let web = web_pipeline(false);
+    let options = EndpointOptions::new(web.vary_whitelist().clone());
+    let data = processed(
+        web.pipeline(),
+        Evidence::builder().add("header.user-agent", "abc").build(),
+    );
+    let response = serve_json(&data, &TestRequest::default(), &options);
+    let etag = response.header("ETag").expect("an ETag").to_owned();
+
+    if std::env::var_os(ETAG_CHILD_VARIABLE).is_some() {
+        println!("etag={etag}");
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+        .args([
+            "the_same_evidence_gives_the_same_etag_in_another_process",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(ETAG_CHILD_VARIABLE, "1")
+        .output()
+        .expect("the test binary runs a second time");
+    // The test harness prints the test's name on the same line as its output,
+    // so the ETag is found anywhere in the second process's output.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let other = stdout
+        .split_once("etag=")
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("the second process printed no ETag:\n{stdout}"));
+    assert_eq!(
+        other, etag,
+        "the same evidence gave a different ETag in another process"
+    );
+}
+
 // ----------------------------------------------------------------------------
 // Access-Control-Allow-Origin echo (present / absent / null).
 // ----------------------------------------------------------------------------
@@ -677,4 +722,95 @@ fn vary_lists_a_header_only_the_element_knows() {
     let vary = response.header("Vary").unwrap();
     assert!(vary.split(',').any(|h| h == "x-forwarded-for"), "{vary}");
     assert!(vary.split(',').any(|h| h == "user-agent"), "{vary}");
+}
+
+// ----------------------------------------------------------------------------
+// The response to a failed request.
+// ----------------------------------------------------------------------------
+
+/// A device element that fails while `failing` is set, standing in for an
+/// engine whose cloud call failed on one request and worked on the next.
+struct FlakyElement {
+    inner: TestElement,
+    failing: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl FlowElement for FlakyElement {
+    fn process(&self, data: &mut FlowData) -> Result<()> {
+        if self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(fiftyone_pipeline_core::Error::CloudRequest {
+                status_code: 0,
+                retry_after_seconds: None,
+                message: "the request timed out".to_owned(),
+            });
+        }
+        self.inner.process(data)
+    }
+    fn data_key(&self) -> &str {
+        self.inner.data_key()
+    }
+    fn evidence_key_filter(&self) -> &dyn EvidenceKeyFilter {
+        self.inner.evidence_key_filter()
+    }
+    fn properties(&self) -> &[PropertyMetaData] {
+        self.inner.properties()
+    }
+}
+
+#[test]
+fn the_response_to_a_failed_request_is_not_kept_once_processing_recovers() {
+    // A browser keeps a response it may store and revalidates it with the
+    // response's ETag on the next page view. The response to a failed request
+    // must not be confirmed by a 304 once processing works again, or the
+    // browser goes on using the failed result for as long as the evidence
+    // stays the same.
+    let failing = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let web = WebPipeline::build(
+        vec![Arc::new(FlakyElement {
+            inner: TestElement::new(false),
+            failing: Arc::clone(&failing),
+        })],
+        WebIntegrationOptions::default(),
+    )
+    .expect("web pipeline builds");
+    let options = EndpointOptions::new(web.vary_whitelist().clone());
+    let evidence = || Evidence::builder().add("header.user-agent", "abc").build();
+
+    let failed = serve_javascript(
+        &processed(web.pipeline(), evidence()),
+        &TestRequest::default(),
+        &options,
+    );
+    assert_eq!(failed.status, WebResponse::STATUS_OK);
+    assert_eq!(failed.header("Cache-Control"), Some("no-cache"));
+    assert!(
+        failed.header("ETag").is_none(),
+        "the response to a failed request carries no validator"
+    );
+
+    failing.store(false, std::sync::atomic::Ordering::SeqCst);
+    let revalidation = TestRequest {
+        headers: failed
+            .header("ETag")
+            .map(|etag| vec![("If-None-Match".to_owned(), etag.to_owned())])
+            .unwrap_or_default(),
+        ..Default::default()
+    };
+    let recovered = serve_javascript(
+        &processed(web.pipeline(), evidence()),
+        &revalidation,
+        &options,
+    );
+    assert_eq!(
+        recovered.status,
+        WebResponse::STATUS_OK,
+        "the browser was told to keep the response to the failed request"
+    );
+    assert!(
+        recovered
+            .body_str()
+            .unwrap_or_default()
+            .contains("ismobile"),
+        "the response once processing recovers carries the device data"
+    );
 }

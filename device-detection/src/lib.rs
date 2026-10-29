@@ -90,10 +90,11 @@
 //! Distributor serves nothing without the licence keys set with
 //! `.data_update_license_keys(..)`, so a build with polling on and no key
 //! fails with an error that says so, as it does in .NET, and a deployment of
-//! the free Lite file turns polling off with `.auto_update(false)`.
-//! `.file_system_watcher(false)` turns the watcher off, and
-//! `pipeline.resource::<DataUpdateService>()` reaches the service for a check
-//! on demand.
+//! the free Lite file turns automatic updates off with `.auto_update(false)`,
+//! which stops the polling and the file watcher together, as the
+//! specification's master switch does. `.file_system_watcher(false)` turns
+//! only the watcher off, and `pipeline.resource::<DataUpdateService>()`
+//! reaches the service for a check on demand.
 //!
 //! ## Examples
 //!
@@ -314,14 +315,17 @@ impl DeviceDetectionOnPremisePipelineBuilder {
     /// with each new file. The 51Degrees Distributor serves nothing without a
     /// licence key, so [`Self::build`] refuses with this on and no key set, as
     /// .NET does, and a deployment of the Lite file turns this off or sets
-    /// [`Self::data_update_license_keys`].
+    /// [`Self::data_update_license_keys`]. This is the master switch for
+    /// automatic updates, so with it off the file-system watcher does not run
+    /// either.
     pub fn auto_update(mut self, enabled: bool) -> Self {
         self.auto_update = enabled;
         self
     }
 
     /// Enable or disable the file-system watcher, which refreshes the engine
-    /// when the data file changes on disk. On by default.
+    /// when the data file changes on disk. On by default, and it runs only
+    /// while [`Self::auto_update`] is on.
     pub fn file_system_watcher(mut self, enabled: bool) -> Self {
         self.file_system_watcher = enabled;
         self
@@ -775,8 +779,8 @@ mod tests {
         use fiftyone_pipeline_core::Evidence;
 
         // Resolve the Lite Hash data file. Honour an explicit override first,
-        // then fall back to the location it sits at in the checked-out
-        // device-detection-cxx submodule next to the workspace. Skip (not fail)
+        // then fall back to the location it sits at in the
+        // cxx submodule at the root of the workspace. Skip (not fail)
         // only when the file is genuinely absent, so CI without the data file is
         // green while a developer with it gets real coverage.
         let Some(data_file) = resolve_dd_data_file() else {
@@ -835,13 +839,13 @@ mod tests {
         }
 
         // 2. Walk up from the crate directory looking for the data file in a
-        //    sibling device-detection-cxx checkout. The crate lives at
+        //    cxx submodule. The crate lives at
         //    <workspace>/device-detection, and the data file at
-        //    <workspace-parent>/device-detection-cxx/device-detection-data/...
+        //    <workspace-parent>/cxx/device-detection-data/...
         let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         loop {
             let candidate = dir
-                .join("device-detection-cxx")
+                .join("cxx")
                 .join("device-detection-data")
                 .join("51Degrees-LiteV4.1.hash");
             if candidate.is_file() {

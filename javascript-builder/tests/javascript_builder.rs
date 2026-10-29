@@ -42,8 +42,8 @@ use fiftyone_pipeline_engines_fiftyone::SequenceElement;
 
 // ---------------------------------------------------------------------------
 // A minimal device-like element that exposes the Promise and Fetch properties
-// the JavaScript builder consults, so the promise/fetch latching can be driven
-// through a real pipeline.
+// the JavaScript builder consults, so its promise and fetch decisions can be
+// driven through a real pipeline.
 // ---------------------------------------------------------------------------
 
 struct DeviceData {
@@ -533,4 +533,108 @@ fn the_json_builder_leaves_out_this_builders_data() {
     // without depending on this crate, so the two keys are checked here.
     assert!(fiftyone_json_builder::DEFAULT_ELEMENT_EXCLUSION_LIST
         .contains(&fiftyone_javascript_builder::JAVASCRIPT_BUILDER_ELEMENT_DATA_KEY));
+}
+
+/// The user agent that makes [`CloudLikeDevice`] fail, as a device engine
+/// does when its cloud request failed.
+const FAILING_REQUEST: &str = "the cloud request for this one failed";
+
+/// A device element that behaves like the cloud device engine: it adds device
+/// data carrying full promise and fetch support, except on a request whose
+/// cloud call failed, where it records the failure and adds no device data.
+struct CloudLikeDevice {
+    filter: EvidenceKeyFilterWhitelist,
+    properties: Vec<PropertyMetaData>,
+}
+
+impl CloudLikeDevice {
+    fn new() -> Self {
+        CloudLikeDevice {
+            filter: EvidenceKeyFilterWhitelist::new(["header.user-agent"]),
+            properties: vec![
+                PropertyMetaData::new("Promise", "device", PropertyValueType::String),
+                PropertyMetaData::new("Fetch", "device", PropertyValueType::Bool),
+            ],
+        }
+    }
+}
+
+impl FlowElement for CloudLikeDevice {
+    fn process(&self, data: &mut FlowData) -> Result<()> {
+        if data.evidence().get("header.user-agent") == Some(FAILING_REQUEST) {
+            return Err(fiftyone_pipeline_core::Error::CloudRequest {
+                status_code: 0,
+                retry_after_seconds: None,
+                message: "the request timed out".to_owned(),
+            });
+        }
+        data.get_or_add(DeviceElement::KEY, || DeviceData {
+            promise: Some("Full".to_owned()),
+            fetch: Some(true),
+        })?;
+        Ok(())
+    }
+
+    fn data_key(&self) -> &str {
+        "device"
+    }
+
+    fn evidence_key_filter(&self) -> &dyn EvidenceKeyFilter {
+        &self.filter
+    }
+
+    fn properties(&self) -> &[PropertyMetaData] {
+        &self.properties
+    }
+}
+
+#[test]
+fn a_request_without_device_data_leaves_later_visitors_unaffected() {
+    // One builder serves every visitor. Whether a browser supports promises
+    // and fetch belongs to the request, so a request that got no device answer
+    // must not change the script the next visitor is given.
+    let pipeline = Pipeline::builder()
+        .add_element(Arc::new(CloudLikeDevice::new()))
+        .add_element(Arc::new(JsonBuilderElement::new()))
+        .add_element(Arc::new(
+            JavaScriptBuilderElement::builder()
+                .set_minify(false)
+                .set_protocol("https")
+                .unwrap()
+                .build(),
+        ))
+        .suppress_process_exceptions(true)
+        .build()
+        .expect("pipeline builds");
+    let script = |user_agent: &str| {
+        let mut data = pipeline.create_flow_data_with(
+            Evidence::builder()
+                .add("header.host", "example.com")
+                .add("header.user-agent", user_agent)
+                .build(),
+        );
+        data.process().expect("errors are suppressed");
+        data.get(JAVASCRIPT_BUILDER_DATA_KEY)
+            .expect("javascript builder data present")
+            .javascript()
+            .to_owned()
+    };
+
+    let failed = script(FAILING_REQUEST);
+    assert!(
+        !failed.contains("this.promise = new Promise"),
+        "with no device answer the script claims no promise support"
+    );
+
+    let next = script("Mozilla/5.0");
+    assert!(
+        next.contains("this.promise = new Promise"),
+        "the next visitor's browser supports promises, but the script was \
+         rendered without them"
+    );
+    assert!(
+        next.contains("fetch('https://example.com/51dpipeline/json'"),
+        "the next visitor's browser supports fetch, but the script was \
+         rendered without it"
+    );
 }

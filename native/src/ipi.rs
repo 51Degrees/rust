@@ -31,10 +31,10 @@
 //! [`Results::process_evidence`] looks up the client IP through the native
 //! evidence entry point. It reads the evidence keys the data file defines, in
 //! the order the native lookup tries them, and passes on every value it can
-//! read as an IP address. The engine links its own copy of the shared
-//! `common-cxx` sources built with wide file offsets, which is ABI incompatible
-//! with the copy `fiftyone-common-sys` builds, so the native evidence array is
-//! made with that copy's functions in `fiftyone-ip-intelligence-sys`. Values are
+//! read as an IP address. The engine links its own copy of the shared common C
+//! library sources built with wide file offsets, which is ABI incompatible with
+//! the copy `fiftyone-common-sys` builds, so the native evidence array is made
+//! with that copy's functions in `fiftyone-ip-intelligence-sys`. Values are
 //! read by name into the same reusable per-thread buffer the Device Detection
 //! wrapper uses.
 //!
@@ -49,7 +49,12 @@
 //!
 //! As for Device Detection, [`Manager`] is [`Send`] and [`Sync`] (the native
 //! manager is reference counted and lock protected) and [`Results`] is [`Send`]
-//! but not [`Sync`] (per-thread scratch).
+//! but not [`Sync`] (per-thread scratch). A data set that reads from its file
+//! after it is loaded holds one file handle for each concurrent operation it
+//! was opened to expect, so no more calls that can read the file run at once
+//! than there are handles, and a call beyond them waits for one. The native
+//! library ends the process when a read of a property's values finds no free
+//! handle.
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -63,11 +68,13 @@ use fiftyone_pipeline_core::{constants, Error, Evidence, Result};
 
 use crate::buffer::with_value_string;
 use crate::evidence::parse_client_ip;
+use crate::file_reads::{FileReadPermit, FileReads};
 use crate::profile::PerformanceProfile;
 use crate::status::{status_name, status_to_result, NativeException, NativeStatus};
 
 // ---------------------------------------------------------------------------
-// Status and exception trait wiring for the IP Intelligence common-cxx build
+// Status and exception trait wiring for the IP Intelligence common C library
+// build
 // ---------------------------------------------------------------------------
 
 impl NativeStatus for sys::StatusCode {
@@ -94,7 +101,7 @@ impl NativeException for sys::Exception {
     }
 
     unsafe fn free_message(ptr: *mut c_void) {
-        sys::common::fiftyoneDegreesMemoryStandardFree(ptr);
+        sys::common::fiftyoneDegreesFree(ptr);
     }
 }
 
@@ -146,6 +153,9 @@ pub struct Manager {
     /// The required property name to index map, built on first use so a read
     /// by name costs one hash lookup rather than a native name search.
     property_index: OnceLock<HashMap<String, c_int>>,
+    /// Permits for the calls that can read the data file, one for each of its
+    /// file handles, or [`None`] when the data set is held in memory.
+    file_reads: Option<FileReads>,
 }
 
 /// One evidence key the data file defines, split into the parts the native
@@ -160,8 +170,9 @@ struct EvidenceKey {
 }
 
 // Safety: the native resource manager is internally reference counted and lock
-// protected per `common-cxx/resource.h`, so a shared `&Manager` is sound to use
-// from several threads. Therefore the manager is both `Send` and `Sync`.
+// protected per `src/common/resource.h`, so a shared `&Manager` is sound to use
+// from several threads, and the file read permits are lock protected.
+// Therefore the manager is both `Send` and `Sync`.
 unsafe impl Send for Manager {}
 unsafe impl Sync for Manager {}
 
@@ -179,15 +190,26 @@ impl Manager {
         profile: PerformanceProfile,
         properties: Option<&[&str]>,
     ) -> Result<Arc<Manager>> {
+        Self::open_with_options(path, profile, properties, None)
+    }
+
+    /// Open an IP Intelligence data file with the named properties and an
+    /// optional expected concurrency.
+    ///
+    /// `concurrency` sizes the file-handle pool the file-backed collections use
+    /// under the `LowMemory` and `Balanced` profiles, which is how many calls
+    /// can read the data file at once. A call beyond that waits for a handle,
+    /// so it should be the number of threads that will look up through the
+    /// data set at once. [`None`] keeps the profile's default. It has no effect
+    /// on the in-memory profiles, where every collection is already resident.
+    pub fn open_with_options(
+        path: impl AsRef<Path>,
+        profile: PerformanceProfile,
+        properties: Option<&[&str]>,
+        concurrency: Option<u16>,
+    ) -> Result<Arc<Manager>> {
         let path = path.as_ref();
-        let path_string = path.to_str().ok_or_else(|| Error::Native {
-            status: String::from("InvalidInput"),
-            message: format!("data file path is not valid UTF-8: {}", path.display()),
-        })?;
-        let path_c = CString::new(path_string).map_err(|_| Error::Native {
-            status: String::from("InvalidInput"),
-            message: String::from("data file path contains an interior nul byte"),
-        })?;
+        let path_c = crate::path::native_path(path)?;
 
         let property_list = properties.map(|names| names.join(","));
         let property_list_c = property_list
@@ -209,11 +231,13 @@ impl Manager {
 
         let mut exception = sys::Exception::cleared();
         // Safety: all pointers are valid for the call and the path is null
-        // terminated.
+        // terminated. The shim copies the configuration before setting the
+        // concurrency, so the shared global is not changed.
         let status = unsafe {
-            sys::fiftyoneDegreesIpiInitManagerFromFile(
+            sys::fiftyoneDegreesShimIpiInitManagerFromFile(
                 manager_ptr,
                 config_for(profile),
+                concurrency.map_or(-1, i32::from),
                 &mut required,
                 path_c.as_ptr(),
                 &mut exception,
@@ -237,15 +261,24 @@ impl Manager {
         let manager = NonNull::new(manager_ptr).expect("init produced a non-null manager");
         // Safety: the manager was initialized above.
         let evidence_keys = unsafe { read_evidence_keys(manager.as_ptr()) };
+        // Safety: as above.
+        let handles = unsafe { sys::fiftyoneDegreesShimIpiGetFileHandleCount(manager.as_ptr()) };
         Ok(Arc::new(Manager {
             manager,
             evidence_keys,
             property_index: OnceLock::new(),
+            file_reads: FileReads::for_handles(handles),
         }))
     }
 
     fn as_ptr(&self) -> *mut sys::ResourceManager {
         self.manager.as_ptr()
+    }
+
+    /// A permit for a call that can read the data file, waiting while every
+    /// file handle is in use. [`None`] when the data set is held in memory.
+    fn file_read(&self) -> Option<FileReadPermit<'_>> {
+        self.file_reads.as_ref().map(FileReads::permit)
     }
 
     /// The evidence keys the data file defines, in the order the native lookup
@@ -267,6 +300,7 @@ impl Manager {
     /// rather than a fixed default.
     pub fn data_set_name(&self) -> Option<String> {
         let mut buffer = vec![0u8; 128];
+        let _file_read = self.file_read();
         // Safety: the buffer is writable for its full length and the manager is
         // initialized for the lifetime of `self`.
         let written = unsafe {
@@ -499,6 +533,7 @@ impl Results {
             message: String::from("IP address contains an interior nul byte"),
         })?;
         let mut exception = sys::Exception::cleared();
+        let _file_read = self.manager.file_read();
         // Safety: `ip_c` is a null terminated buffer valid for the duration of the
         // call, and the length passed excludes the terminator the parser reads.
         unsafe {
@@ -540,6 +575,7 @@ impl Results {
             });
         }
 
+        let _file_read = self.manager.file_read();
         // Safety: the array is created, filled and freed here. The keys belong
         // to the manager, and the values to `pairs`, so both outlive the call.
         unsafe {
@@ -582,6 +618,7 @@ impl Results {
 
         let results = self.as_ptr();
         let mut exception = sys::Exception::cleared();
+        let _file_read = self.manager.file_read();
         // Safety: the writer only touches its buffer and returns the native
         // available-character count. The strings outlive every invocation.
         let value = unsafe {
@@ -621,6 +658,7 @@ impl Results {
         self.manager.check_property_index(index)?;
         let results = self.as_ptr();
         let mut exception = sys::Exception::cleared();
+        let _file_read = self.manager.file_read();
         // Safety: the writer only touches its buffer and returns the native
         // available-character count. The separator outlives every invocation
         // and the index is in range for this data set.
@@ -705,18 +743,19 @@ impl Results {
         index: c_int,
     ) -> Result<Vec<(sys::PropertyValueType, String, u16)>> {
         let indexes = [index];
-        let mut temp = sys::Data::zeroed();
         let mut exception = sys::Exception::cleared();
-        // Safety: `results` is valid, the index array is readable for its single
-        // element, and `temp` is a zeroed scratch buffer the library may grow.
-        // The returned collection owns its memory and is released below on every
+        let _file_read = self.manager.file_read();
+        // Safety: `results` is valid and the index array is readable for its
+        // single element. With no scratch buffer passed, the library converts
+        // values to text in one of its own and frees it before returning. The
+        // returned collection owns its memory and is released below on every
         // path.
         let mut collection = unsafe {
             sys::fiftyoneDegreesResultsIpiGetValuesCollection(
                 self.as_ptr(),
                 indexes.as_ptr(),
                 indexes.len() as u32,
-                &mut temp,
+                std::ptr::null_mut(),
                 &mut exception,
             )
         };
@@ -963,7 +1002,7 @@ mod tests {
     use std::path::PathBuf;
 
     /// Resolve an IP Intelligence data file at run time, searching the
-    /// environment override, a sibling `ip-intelligence-cxx` checkout and the
+    /// environment override, the `cxx` submodule and the
     /// wider Workspace tree. Returns [`None`] when none is present so the smoke
     /// tests can skip cleanly.
     ///
@@ -983,7 +1022,7 @@ mod tests {
         let name = "51Degrees-IPIV4AsnIpiV41.ipi";
         let candidates = [
             workspace
-                .join("ip-intelligence-cxx")
+                .join("cxx")
                 .join("ip-intelligence-data")
                 .join(name),
             workspace
@@ -1133,6 +1172,35 @@ mod tests {
             );
         }
         assert!(manager.required_property_index("NoSuchProperty").is_none());
+    }
+
+    /// A data set that reads from its file has a file handle for each
+    /// concurrent operation it was opened to expect, and one held in memory
+    /// has none, so its calls take no permits.
+    #[test]
+    fn file_handles_follow_the_expected_concurrency() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping file handles");
+            return;
+        };
+        for (profile, concurrency, handles) in [
+            (PerformanceProfile::LowMemory, Some(3), 3),
+            (PerformanceProfile::Balanced, None, 10),
+            (PerformanceProfile::HighPerformance, Some(3), 0),
+            (PerformanceProfile::InMemory, None, 0),
+        ] {
+            let manager = Manager::open_with_options(&data_file, profile, None, concurrency)
+                .expect("data file loads");
+            // Safety: the manager is initialized.
+            let count = unsafe { sys::fiftyoneDegreesShimIpiGetFileHandleCount(manager.as_ptr()) };
+            assert_eq!(count, handles, "{}", profile.as_str());
+            assert_eq!(
+                manager.file_reads.is_some(),
+                handles > 0,
+                "{}",
+                profile.as_str()
+            );
+        }
     }
 
     /// An index outside the data set's required properties is refused.

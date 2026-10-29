@@ -38,6 +38,7 @@ use fiftyone_pipeline_engines::{
 };
 
 use crate::engine::{open_manager, DeviceDetectionOnPremiseEngine};
+use crate::operational_copy::OperationalCopy;
 
 /// The download type the Distributor serves Hash data files as, sent in the
 /// update URL's `Type` parameter.
@@ -72,6 +73,7 @@ pub struct DeviceDetectionOnPremiseEngineBuilder {
     data_source_tier: Option<String>,
     auto_update: Option<AutoUpdate>,
     concurrency: Option<u16>,
+    temp_dir: Option<PathBuf>,
 }
 
 /// The optional automatic-update settings captured by the builder.
@@ -95,6 +97,7 @@ impl DeviceDetectionOnPremiseEngineBuilder {
             data_source_tier: None,
             auto_update: None,
             concurrency: None,
+            temp_dir: None,
         }
     }
 
@@ -116,6 +119,15 @@ impl DeviceDetectionOnPremiseEngineBuilder {
     /// where the data set is fully resident.
     pub fn concurrency(mut self, concurrency: u16) -> Self {
         self.concurrency = Some(concurrency);
+        self
+    }
+
+    /// Set the folder for the engine's temporary files. With automatic updates
+    /// on, every profile but [`PerformanceProfile::InMemory`] reads a copy of
+    /// the data file made there, so an update can replace the data file itself.
+    /// Defaults to the system's temporary folder, [`std::env::temp_dir`].
+    pub fn temp_dir_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.temp_dir = Some(path.into());
         self
     }
 
@@ -201,7 +213,9 @@ impl DeviceDetectionOnPremiseEngineBuilder {
     /// no licence key, as .NET does. When automatic updates
     /// were configured with a service, the engine's data file is registered
     /// with that service before the engine is returned, so a startup poll (if
-    /// requested) and the polling schedule are in effect.
+    /// requested) and the polling schedule are in effect. A startup poll that
+    /// fails leaves the engine on the data file it loaded, as the
+    /// specification says, and the service logs the failure.
     pub fn build(self) -> Result<Arc<DeviceDetectionOnPremiseEngine>> {
         // The data-file configuration the engine carries. When auto-update was
         // requested, use that configuration; otherwise build a static one with
@@ -219,22 +233,35 @@ impl DeviceDetectionOnPremiseEngineBuilder {
         };
         data_file_config.check_license_keys()?;
 
-        // Open the data set with the requested property restriction.
-        let manager = open_manager(
+        // Open the data set with the requested property restriction, from a
+        // copy of the data file when updates can replace the file while it is
+        // open.
+        let copy = OperationalCopy::when_needed(
             &self.data_file_path,
+            self.temp_dir.as_deref(),
+            self.profile,
+            &data_file_config,
+        );
+        let manager = open_manager(
+            copy.as_ref()
+                .map_or(self.data_file_path.as_path(), OperationalCopy::path),
             self.profile,
             &self.requested_properties,
             self.concurrency,
         )?;
 
-        let engine = Arc::new(DeviceDetectionOnPremiseEngine::from_manager(
-            manager,
-            self.profile,
-            self.requested_properties,
-            data_file_config,
-            self.data_source_tier,
-            self.concurrency,
-        ));
+        let engine = Arc::new(
+            DeviceDetectionOnPremiseEngine::from_manager(
+                manager,
+                copy,
+                self.profile,
+                self.requested_properties,
+                data_file_config,
+                self.data_source_tier,
+                self.concurrency,
+            )
+            .with_temp_dir(self.temp_dir),
+        );
 
         // Register the data file with the update service if one was supplied.
         if let Some(service) = service {
@@ -244,9 +271,9 @@ impl DeviceDetectionOnPremiseEngineBuilder {
                 .cloned()
                 .ok_or_else(|| Error::configuration("engine has no data file to register"))?;
             let as_engine: Arc<dyn OnPremiseAspectEngine> = engine.clone();
-            service
-                .register(as_engine, data_file)
-                .map_err(|e| Error::configuration(e.to_string()))?;
+            // A failed update on start-up leaves the engine on the data file it
+            // loaded, as the specification says, and the service logs it.
+            let _ = service.register(as_engine, data_file);
         }
 
         Ok(engine)

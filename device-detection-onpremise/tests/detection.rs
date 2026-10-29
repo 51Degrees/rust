@@ -45,7 +45,7 @@ const MOBILE_USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Ma
 
 /// Locate the packaged Lite Hash data file, mirroring the native crate's test
 /// resolution. Resolution order: an explicit `51DEGREES_DD_PATH`
-/// environment variable, then a sibling `device-detection-cxx` checkout, then
+/// environment variable, then the `cxx` submodule, then
 /// the wider `Workspace` tree where the other products keep their data.
 fn lite_data_file() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("51DEGREES_DD_PATH") {
@@ -61,7 +61,7 @@ fn lite_data_file() -> Option<PathBuf> {
         .to_path_buf();
 
     let sibling = workspace
-        .join("device-detection-cxx")
+        .join("cxx")
         .join("device-detection-data")
         .join("51Degrees-LiteV4.1.hash");
     if sibling.is_file() {
@@ -70,7 +70,7 @@ fn lite_data_file() -> Option<PathBuf> {
 
     if let Some(parent) = workspace.parent() {
         let candidate = parent
-            .join("device-detection-cxx")
+            .join("cxx")
             .join("device-detection-data")
             .join("51Degrees-LiteV4.1.hash");
         if candidate.is_file() {
@@ -86,7 +86,7 @@ fn lite_data_file() -> Option<PathBuf> {
 ///
 /// A load failure is treated as a clean skip rather than a hard failure. In a
 /// test binary that links both the Device Detection and IP Intelligence native
-/// libraries, the two ship their own copies of the shared `common-cxx` layer
+/// libraries, the two ship their own copies of the shared common C layer
 /// with incompatible file-offset widths (the IP Intelligence build enables
 /// large-data-file support). When the linker resolves a Device Detection data
 /// read to an IP Intelligence definition the Hash file is parsed with the wrong
@@ -105,7 +105,7 @@ fn build_engine() -> Option<Arc<fiftyone_device_detection_onpremise::DeviceDetec
         Err(e) => {
             eprintln!(
                 "the native Hash data set did not load ({e}); skipping. This is the \
-                 Device Detection / IP Intelligence common-cxx link collision, a \
+                 Device Detection / IP Intelligence common C library link collision, a \
                  native-build concern outside this engine."
             );
             None

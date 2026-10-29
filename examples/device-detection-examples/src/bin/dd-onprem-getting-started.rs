@@ -185,7 +185,7 @@ fn output_value<T: std::fmt::Display>(
 
 /// Resolve the data file then run the example. The data file is taken from the
 /// first command-line argument, the `51DEGREES_DD_PATH` environment variable, or
-/// the Lite Hash file shipped in the `device-detection-cxx` submodule. With none
+/// the Lite Hash file shipped in the `cxx` submodule. With none
 /// of those present the example prints a clear message and exits successfully so
 /// an offline checkout is not a hard error.
 fn main() -> Result<()> {
@@ -198,7 +198,7 @@ fn main() -> Result<()> {
         eprintln!(
             "No device-detection data file found. Set 51DEGREES_DD_PATH (or pass \
              the path as the first argument), or run `git submodule update \
-             --recursive` so the Lite Hash file in device-detection-cxx is present."
+             --recursive` so the Lite Hash file in the cxx submodule is present."
         );
         return Ok(());
     };
@@ -278,6 +278,6 @@ mod tests {
  *
  * The data file is read from the first command-line argument, the
  * `51DEGREES_DD_PATH` environment variable, or the Lite Hash file shipped in the
- * device-detection-cxx submodule. The Lite file is free; the Enterprise file with
+ * cxx submodule. The Lite file is free; the Enterprise file with
  * the full property set is described at https://51degrees.com/pricing?utm_source=code&utm_medium=example&utm_campaign=rust&utm_content=examples-device-detection-examples-src-bin-dd-onprem-getting-started.rs&utm_term=dd-onprem-getting-started.
  */

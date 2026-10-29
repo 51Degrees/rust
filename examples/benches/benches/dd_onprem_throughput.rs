@@ -35,10 +35,10 @@ use fiftyone_device_detection::{
 };
 
 /// The relative path to the bundled evidence file inside the
-/// `device-detection-cxx` data submodule. `examples_shared::find_file` walks up
+/// data in the `cxx` submodule. `examples_shared::find_file` walks up
 /// the tree to locate it, so it resolves from a bench run, an IDE or CI alike.
 const EVIDENCE_RELATIVE_PATH: &str =
-    "device-detection-cxx/device-detection-data/20000 Evidence Records.yml";
+    "cxx/device-detection-data/20000 Evidence Records.yml";
 
 /// How many evidence records to load and replay per benchmark iteration. The
 /// bundled file holds 20,000. A few hundred keeps each iteration short enough for
@@ -131,7 +131,7 @@ fn dd_onprem_throughput(c: &mut Criterion) {
     let Some(data_file) = examples_shared::dd_data_path() else {
         eprintln!(
             "skipping dd_onprem_throughput: no Device Detection data file found \
-             (set {} or check out the device-detection-cxx submodule)",
+             (set {} or check out the cxx submodule)",
             examples_shared::DD_PATH_ENV_VAR
         );
         return;
@@ -139,7 +139,7 @@ fn dd_onprem_throughput(c: &mut Criterion) {
     let Some(evidence_file) = examples_shared::find_file(EVIDENCE_RELATIVE_PATH) else {
         eprintln!(
             "skipping dd_onprem_throughput: '{EVIDENCE_RELATIVE_PATH}' not found \
-             (check out the device-detection-cxx submodule)"
+             (check out the cxx submodule)"
         );
         return;
     };

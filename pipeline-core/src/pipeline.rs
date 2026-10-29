@@ -76,9 +76,10 @@ impl Pipeline {
     /// Whether the pipeline suppresses processing exceptions.
     ///
     /// When `true`, processing (via [`crate::FlowData::process`]) records
-    /// per-element errors on the flow data and returns `Ok`. When `false`, it
-    /// runs every element and then returns `Err(Error::Aggregate(..))` if any
-    /// failed. This is the `SuppressProcessExceptions` flag from the
+    /// per-element errors on the flow data, logs each at debug level and
+    /// returns `Ok`. When `false`, it runs every element and then returns
+    /// `Err(Error::Aggregate(..))` if any failed. This is the
+    /// `SuppressProcessExceptions` flag from the
     /// [exception-handling specification](https://github.com/51Degrees/specifications/blob/main/pipeline-specification/features/exception-handling.md#process-function).
     pub fn is_suppress_process_exceptions(&self) -> bool {
         self.suppress_process_exceptions
@@ -116,8 +117,8 @@ impl Pipeline {
     /// behavior depends on `suppress_process_exceptions`:
     ///
     /// - **Suppressed** (`true`): the error is recorded on the flow data via
-    ///   [`FlowData::errors`] and the remaining elements still run. The method
-    ///   returns `Ok(())`.
+    ///   [`FlowData::errors`], logged at debug level, and the remaining
+    ///   elements still run. The method returns `Ok(())`.
     /// - **Not suppressed** (`false`, the default): every element is still run
     ///   so that all errors are gathered, then the method returns
     ///   `Err(Error::Aggregate(..))` containing the errors whose
@@ -129,14 +130,22 @@ impl Pipeline {
     pub(crate) fn process(&self, data: &mut FlowData) -> Result<()> {
         for element in &self.elements {
             if let Err(error) = element.process(data) {
+                // A suppressed error is logged as well as recorded, so it can
+                // be seen without reading the flow data. Debug level, because
+                // suppressing says the caller carries on past failures.
+                if self.suppress_process_exceptions {
+                    log::debug!(
+                        "Suppressed an error in element '{}': {error}",
+                        element.data_key()
+                    );
+                }
                 data.add_error(FlowError::new(element.data_key(), error));
             }
         }
-        data.set_processed();
 
         if !self.suppress_process_exceptions {
-            // Collect the errors that should propagate. We drain them off the
-            // flow data so they are reported once, through the returned error.
+            // Collect the errors that should propagate. They stay on the flow
+            // data as well, so a caller can read them from either place.
             let to_throw: Vec<FlowError> = data
                 .errors()
                 .iter()

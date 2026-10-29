@@ -28,18 +28,19 @@
 //! populate) into the flow data under
 //! [`DEVICE_DATA_KEY`](fiftyone_device_detection_shared::DEVICE_DATA_KEY).
 
+use std::collections::HashMap;
 use std::ffi::CStr;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use arc_swap::ArcSwap;
 use chrono::{DateTime, TimeZone, Utc};
 
 use fiftyone_device_detection_shared::{
-    declared_property_value_type, DeviceDataBase, UachJsConversionElement, DEVICE_DATA_KEY,
-    DEVICE_ELEMENT_DATA_KEY, UACH_EVIDENCE_COOKIE_KEY, UACH_EVIDENCE_QUERY_KEY,
+    declared_property_value_type, DeviceDataBase, DevicePropertyReader, UachJsConversionElement,
+    DEVICE_DATA_KEY, DEVICE_ELEMENT_DATA_KEY, UACH_EVIDENCE_COOKIE_KEY, UACH_EVIDENCE_QUERY_KEY,
 };
-use fiftyone_native::dd::Manager;
+use fiftyone_native::dd::{Manager, Results};
 use fiftyone_native::PerformanceProfile;
 use fiftyone_pipeline_core::{
     constants, Error, Evidence, EvidenceKeyFilter, EvidenceKeyFilterWhitelist, FlowData,
@@ -49,6 +50,9 @@ use fiftyone_pipeline_engines::{
     AspectEngine, AspectEngineDataFile, AspectPropertyMetaData, DataFileConfiguration,
     EngineDeployment, OnPremiseAspectEngine,
 };
+
+use crate::operational_copy::OperationalCopy;
+use crate::retained::Retained;
 
 /// The separator used to join multiple values of a list-typed property into a
 /// single string when reading from the native results. The other ports use a
@@ -133,16 +137,20 @@ const METRIC_PROPERTIES: &[(&str, PropertyValueType, &str)] = &[
 /// same type and key the cloud engine uses. A consuming application can swap one
 /// engine for the other without changing how it reads the result.
 ///
-/// # No results cache
+/// # Values read on request
 ///
-/// Native results carry resources that must be cleaned up immediately after a
-/// detection, so this engine never caches results. Only the cloud path, whose
-/// data is plain owned values, may use a results cache.
+/// The device data keeps the native results of its detection and reads each
+/// property from them the first time it is requested, so a caller that reads
+/// one property does not pay to read the rest. The results, and the data set
+/// they came from, stay alive until the device data is dropped, so this engine
+/// never caches results. Only the cloud path, whose data is plain owned values,
+/// may use a results cache.
 pub struct DeviceDetectionOnPremiseEngine {
-    /// The loaded Hash data set. Swapped atomically on refresh. In-flight
+    /// The loaded Hash data set and the properties a detection reads from it,
+    /// swapped together atomically on refresh. In-flight
     /// [`fiftyone_native::dd::Results`] hold their own [`Arc`] to the manager
     /// they were created from, so a swap does not invalidate them.
-    manager: ArcSwap<Manager>,
+    loaded: ArcSwap<LoadedDataSet>,
 
     /// The performance profile used to (re)load the data file, retained so a
     /// refresh reloads with the same profile.
@@ -152,50 +160,101 @@ pub struct DeviceDetectionOnPremiseEngine {
     /// properties. Used when reloading the data set on refresh.
     requested_properties: Vec<String>,
 
-    /// Core property metadata for [`FlowElement::properties`].
-    properties: Vec<PropertyMetaData>,
+    /// The property metadata and tier of the loaded data set, for
+    /// [`FlowElement::properties`], [`AspectEngine::aspect_properties`] and
+    /// [`AspectEngine::data_source_tier`].
+    metadata: Retained<EngineMetadata>,
 
-    /// Aspect property metadata for [`AspectEngine::aspect_properties`].
-    aspect_properties: Vec<AspectPropertyMetaData>,
+    /// The tier the builder set, which every data set loaded reports, or
+    /// `None` to report the tier each data file names.
+    tier_override: Option<String>,
+
+    /// Held while a refresh loads a data set, so refreshes run one at a time.
+    refresh_lock: Mutex<()>,
 
     /// The evidence keys this engine reads, replaced on refresh.
     evidence_key_filter: HashEvidenceKeyFilter,
-
-    /// The data-source tier, for example `Lite`.
-    data_source_tier: String,
 
     /// The expected concurrency the data set's handle pool was sized for, or
     /// `None` for the profile default. Carried so a reload re-opens the data set
     /// with the same pool size.
     concurrency: Option<u16>,
 
+    /// The folder a refresh copies the data file into, or `None` for the
+    /// system's temporary folder.
+    temp_dir: Option<PathBuf>,
+
     /// The single data file's run-time state, shared with the update service.
     data_files: Vec<Arc<AspectEngineDataFile>>,
+}
+
+/// A loaded Hash data set, the properties a detection reads from it and the
+/// copy of the data file it was read from, if any.
+struct LoadedDataSet {
+    manager: Arc<Manager>,
+    readable: Arc<ReadableProperties>,
+    /// Held only to be dropped with the data set, and declared after the
+    /// manager, so it is removed after the data set that has it open is freed.
+    _copy: Option<OperationalCopy>,
+}
+
+/// The property metadata and tier of a loaded data set.
+#[derive(PartialEq)]
+struct EngineMetadata {
+    properties: Vec<PropertyMetaData>,
+    aspect_properties: Vec<AspectPropertyMetaData>,
+    tier: String,
+}
+
+/// The data set `manager` holds, read from `copy` when there is one, and its
+/// metadata, reporting `tier_override` when it is set, otherwise the tier the
+/// data file names.
+fn describe(
+    manager: Arc<Manager>,
+    copy: Option<OperationalCopy>,
+    tier_override: &Option<String>,
+) -> (LoadedDataSet, EngineMetadata) {
+    // An explicit builder override wins, then the tier read from the native
+    // data file header (Lite, Enterprise, TAC and so on), then the safe Lite
+    // default when the native name is absent.
+    let tier = tier_override
+        .clone()
+        .or_else(|| manager.data_set_name())
+        .unwrap_or_else(|| DEFAULT_DATA_SOURCE_TIER.to_owned());
+    let (properties, aspect_properties) = build_property_metadata(&manager, &Some(tier.clone()));
+    let readable = Arc::new(ReadableProperties::new(&aspect_properties));
+    (
+        LoadedDataSet {
+            manager,
+            readable,
+            _copy: copy,
+        },
+        EngineMetadata {
+            properties,
+            aspect_properties,
+            tier,
+        },
+    )
 }
 
 impl DeviceDetectionOnPremiseEngine {
     /// Build an engine from an already-loaded manager and its configuration.
     ///
-    /// Called by the builder once it has opened the data file. Derives the
-    /// property and evidence-key metadata from the data set, records the
-    /// data-file publish time from the file on disk, and assembles the engine.
+    /// Called by the builder once it has opened the data file, or `copy` of
+    /// it. Derives the property and evidence-key metadata from the data set,
+    /// records the data-file publish time from the file on disk, and assembles
+    /// the engine.
     pub(crate) fn from_manager(
         manager: Arc<Manager>,
+        copy: Option<OperationalCopy>,
         profile: PerformanceProfile,
         requested_properties: Vec<String>,
         data_file_config: DataFileConfiguration,
         data_source_tier: Option<String>,
         concurrency: Option<u16>,
     ) -> Self {
-        // Resolve the data-source tier: an explicit builder override wins, then
-        // the tier read from the native data file header (Lite, Enterprise, TAC
-        // and so on), then the safe Lite default when the native name is absent.
-        let data_source_tier = data_source_tier
-            .or_else(|| manager.data_set_name())
-            .unwrap_or_else(|| DEFAULT_DATA_SOURCE_TIER.to_owned());
-        let (properties, aspect_properties) =
-            build_property_metadata(&manager, &Some(data_source_tier.clone()));
         let evidence_key_filter = HashEvidenceKeyFilter::new(named_evidence_keys(&manager));
+        let (loaded, metadata) = describe(manager, copy, &data_source_tier);
 
         let data_file = Arc::new(AspectEngineDataFile::new(data_file_config));
         // Record the publish time from the data file on disk, the best signal
@@ -206,16 +265,24 @@ impl DeviceDetectionOnPremiseEngine {
         }
 
         DeviceDetectionOnPremiseEngine {
-            manager: ArcSwap::from(manager),
+            loaded: ArcSwap::from_pointee(loaded),
             profile,
             requested_properties,
-            properties,
-            aspect_properties,
+            metadata: Retained::new(metadata),
+            tier_override: data_source_tier,
+            refresh_lock: Mutex::new(()),
             evidence_key_filter,
-            data_source_tier,
             concurrency,
+            temp_dir: None,
             data_files: vec![data_file],
         }
+    }
+
+    /// Copy the data file into `temp_dir` on refresh, the folder the builder
+    /// copied it into, or the system's temporary folder when `None`.
+    pub(crate) fn with_temp_dir(mut self, temp_dir: Option<PathBuf>) -> Self {
+        self.temp_dir = temp_dir;
+        self
     }
 
     /// The performance profile the engine loads its data file with.
@@ -228,81 +295,51 @@ impl DeviceDetectionOnPremiseEngine {
     /// the high-entropy values keys. The engine also accepts any `query.51d_`
     /// or `cookie.51d_` value, which the client-side JavaScript sends back.
     pub fn evidence_keys(&self) -> Vec<String> {
-        named_evidence_keys(&self.manager.load())
+        named_evidence_keys(&self.loaded.load().manager)
     }
 
     /// The names of the available (required) properties in the loaded data set,
     /// including the match-metric pseudo-properties.
     pub fn available_properties(&self) -> Vec<String> {
-        self.aspect_properties
+        self.metadata
+            .current()
+            .aspect_properties
             .iter()
             .map(|p| p.name().to_owned())
             .collect()
     }
 
-    /// Run a detection for `data` and populate `device` from the results.
+    /// Run a detection for `data` into new device data.
     ///
     /// Builds a native evidence set from the flow data (preferring the decoded
-    /// UACH element-data `sec-ch-ua*` values over the raw headers), processes
-    /// it, then reads every available property as a string and stores it on the
-    /// device data, wrapping match metrics and any other requested property in
-    /// the device data's typed view through the shared accessors.
-    fn detect(&self, data: &FlowData, device: &mut DeviceDataBase) -> Result<()> {
+    /// UACH element-data `sec-ch-ua*` values over the raw headers) and processes
+    /// it. The match metrics are stored straight away, and each data file
+    /// property is read from the results the first time it is requested.
+    fn detect(&self, data: &FlowData) -> Result<DeviceDataBase> {
         // Snapshot the current data set. The snapshot is an `Arc`, so an
         // in-flight detection keeps the data set alive even if `refresh` swaps a
         // new one in mid-flight.
-        let manager = self.manager.load_full();
-        let mut results = manager.create_results()?;
+        let loaded = self.loaded.load_full();
+        let mut results = loaded.manager.create_results()?;
 
         // Marshal the evidence the engine understands, preferring decoded UACH
         // values, into one merged evidence set, then process it.
         let evidence = self.collect_evidence(data);
         results.process_evidence(&evidence)?;
 
-        // Read each available property as a string and store it, converting to
-        // the natural value type so the typed accessors (is_mobile, screen
-        // dimensions, the integer match metrics) read back correctly. Each is
-        // read by its index in the snapshot taken above, so a refresh between
-        // detections cannot pair an index with another data set. The match
-        // metrics have no index and are read further down.
-        for meta in &self.aspect_properties {
-            let name = meta.name();
-            let Some(index) = manager.required_property_index(name) else {
-                continue;
-            };
-            match results.value_as_string_by_index(index, NATIVE_VALUE_SEPARATOR)? {
-                Some(raw) => {
-                    let raw = if name.eq_ignore_ascii_case(JAVASCRIPT_HARDWARE_PROFILE) {
-                        wrap_hardware_profile(raw)
-                    } else {
-                        raw
-                    };
-                    // A typed property whose value does not parse (the `Unknown` /
-                    // `N/A` no-value sentinels, say) yields `None` and is left
-                    // unwritten, so its accessor reports a clean no-value.
-                    if let Some(value) = native_value(&raw, meta.core().value_type) {
-                        device.insert(name, value);
-                    }
-                }
-                None => {
-                    // Absent properties are simply not written. A typed accessor
-                    // then reports a no-value rather than a stale value.
-                }
-            }
-        }
+        let mut device = DeviceDataBase::new();
 
         // The device id is a match metric, not a data-file property, so the
-        // by-name value reader above does not return it. Read it through the
-        // dedicated native getter and store it under its metric name so the
-        // shared `device_id` accessor resolves it. An absent id (no match) is
-        // simply not written.
+        // reader does not return it. Read it through the dedicated native
+        // getter and store it under its metric name so the shared `device_id`
+        // accessor resolves it. An absent id (no match) is simply not written.
         if let Some(device_id) = results.device_id()? {
             device.insert("DeviceId", PropertyValue::String(device_id));
         }
 
         // The numeric match metrics and the match method are also computed
         // during detection and live on the result, not in the data file's
-        // property values, so the by-name reader above does not return them.
+        // property values, so the reader does not return them.
         // Read them from the result and store them under their metric names so
         // the shared accessors (difference, method, and so on) resolve them.
         if let Some(metrics) = results.match_metrics() {
@@ -329,7 +366,10 @@ impl DeviceDetectionOnPremiseEngine {
             PropertyValue::StringList(results.matched_user_agents()),
         );
 
-        Ok(())
+        Ok(device.with_reader(DetectionReader {
+            results: Mutex::new(results),
+            loaded,
+        }))
     }
 
     /// Collect the evidence the engine reads into a single [`Evidence`] set.
@@ -374,18 +414,35 @@ impl DeviceDetectionOnPremiseEngine {
     /// Reload the data set from the data file on disk and atomically swap it in.
     ///
     /// Shared by [`OnPremiseAspectEngine::refresh`] and the builder's reload
-    /// path. A successful reload replaces the live manager; in-flight detections
-    /// keep using the manager they snapshotted.
+    /// path. A successful reload replaces the live data set, the properties a
+    /// detection reads, the evidence keys and the metadata, because a new data
+    /// file can carry different properties or a different tier. In-flight
+    /// detections keep using the data set they snapshotted. A failed reload
+    /// changes nothing.
     fn reload_from_path(&self, path: &Path) -> Result<()> {
+        let _refreshing = self
+            .refresh_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let copy = self.data_files.first().and_then(|file| {
+            OperationalCopy::when_needed(
+                path,
+                self.temp_dir.as_deref(),
+                self.profile,
+                file.configuration(),
+            )
+        });
         let manager = open_manager(
-            path,
+            copy.as_ref().map_or(path, OperationalCopy::path),
             self.profile,
             &self.requested_properties,
             self.concurrency,
         )?;
         self.evidence_key_filter
             .replace(named_evidence_keys(&manager));
-        self.manager.store(manager);
+        let (loaded, metadata) = describe(manager, copy, &self.tier_override);
+        self.loaded.store(Arc::new(loaded));
+        self.metadata.replace(metadata);
 
         // Refresh the recorded publish time from the new file.
         if let Some(file) = self.data_files.first() {
@@ -402,8 +459,7 @@ impl FlowElement for DeviceDetectionOnPremiseEngine {
         // Build the device data outside the get_or_add closure so the detection
         // (which borrows the flow data immutably for evidence) finishes before
         // the mutable element-data borrow begins.
-        let mut device = DeviceDataBase::new();
-        self.detect(data, &mut device)?;
+        let device = self.detect(data)?;
         data.get_or_add(DEVICE_DATA_KEY, || device)?;
         Ok(())
     }
@@ -417,13 +473,13 @@ impl FlowElement for DeviceDetectionOnPremiseEngine {
     }
 
     fn properties(&self) -> &[PropertyMetaData] {
-        &self.properties
+        &self.metadata.current().properties
     }
 }
 
 impl AspectEngine for DeviceDetectionOnPremiseEngine {
     fn data_source_tier(&self) -> &str {
-        &self.data_source_tier
+        &self.metadata.current().tier
     }
 
     fn deployment(&self) -> EngineDeployment {
@@ -431,7 +487,7 @@ impl AspectEngine for DeviceDetectionOnPremiseEngine {
     }
 
     fn aspect_properties(&self) -> &[AspectPropertyMetaData] {
-        &self.aspect_properties
+        &self.metadata.current().aspect_properties
     }
 }
 
@@ -486,6 +542,91 @@ pub(crate) fn open_manager(
         Some(requested_properties.iter().map(String::as_str).collect())
     };
     Manager::open_with_options(path, profile, requested.as_deref(), concurrency)
+}
+
+/// The data file properties a detection can read, each with the value type its
+/// rendered value is converted to.
+struct ReadableProperties {
+    /// Each property's name as the metadata spells it, and its value type.
+    properties: Vec<(String, PropertyValueType)>,
+    /// Each property's name in lowercase, in the same order.
+    lowercase_names: Vec<String>,
+    /// The position of each property in `properties`, by lowercase name.
+    by_name: HashMap<String, usize>,
+}
+
+impl ReadableProperties {
+    /// Every property in the engine's metadata except the match metrics, which
+    /// the engine reads from each result straight away.
+    fn new(aspect_properties: &[AspectPropertyMetaData]) -> Self {
+        let properties: Vec<(String, PropertyValueType)> = aspect_properties
+            .iter()
+            .filter(|meta| {
+                !METRIC_PROPERTIES
+                    .iter()
+                    .any(|(metric, _, _)| metric.eq_ignore_ascii_case(meta.name()))
+            })
+            .map(|meta| (meta.name().to_owned(), meta.core().value_type))
+            .collect();
+        let lowercase_names: Vec<String> = properties
+            .iter()
+            .map(|(name, _)| name.to_lowercase())
+            .collect();
+        let by_name = lowercase_names
+            .iter()
+            .enumerate()
+            .map(|(position, name)| (name.clone(), position))
+            .collect();
+        ReadableProperties {
+            properties,
+            lowercase_names,
+            by_name,
+        }
+    }
+}
+
+/// Reads the properties of one detection from its native results when they are
+/// requested.
+struct DetectionReader {
+    /// The native results. Reading a value writes into them, so each read
+    /// holds the lock. Declared first, so they are freed before the data set
+    /// they came from.
+    results: Mutex<Results>,
+    /// The data set snapshot the results came from, which the property indexes
+    /// belong to.
+    loaded: Arc<LoadedDataSet>,
+}
+
+impl DevicePropertyReader for DetectionReader {
+    fn property_names(&self) -> &[String] {
+        &self.loaded.readable.lowercase_names
+    }
+
+    fn position(&self, name: &str) -> Option<usize> {
+        self.loaded.readable.by_name.get(name).copied()
+    }
+
+    fn read_property(&self, position: usize) -> std::result::Result<Option<PropertyValue>, String> {
+        let (name, value_type) = &self.loaded.readable.properties[position];
+        let Some(index) = self.loaded.manager.required_property_index(name) else {
+            return Ok(None);
+        };
+        let results = self.results.lock().unwrap_or_else(PoisonError::into_inner);
+        let raw = results
+            .value_as_string_by_index(index, NATIVE_VALUE_SEPARATOR)
+            .map_err(|error| error.to_string())?;
+        Ok(raw.and_then(|raw| {
+            let raw = if name.eq_ignore_ascii_case(JAVASCRIPT_HARDWARE_PROFILE) {
+                wrap_hardware_profile(raw)
+            } else {
+                raw
+            };
+            // A typed property whose value does not parse (the `Unknown` or
+            // `N/A` no-value sentinels, say) has no value, so its accessor
+            // reports a clean no-value.
+            native_value(&raw, *value_type)
+        }))
+    }
 }
 
 /// Build the core and aspect property metadata for the loaded data set.
@@ -590,7 +731,7 @@ fn native_value(raw: &str, value_type: PropertyValueType) -> Option<PropertyValu
 const JAVASCRIPT_HARDWARE_PROFILE: &str = "JavascriptHardwareProfile";
 
 /// Turn the stored `JavascriptHardwareProfile` body into the script the client
-/// runs, as the device-detection-cxx C++ results wrapper does.
+/// runs, as the C++ results wrapper in 51degrees-cxx does.
 ///
 /// The stored body pushes the profile ids it finds onto a `profileIds` array
 /// that it does not declare, and does not send them anywhere. The wrapper

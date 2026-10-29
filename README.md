@@ -47,9 +47,9 @@ path, so cloud-only users and most of CI build without a C compiler.
 
 | Crate | Responsibility |
 |-------|----------------|
-| [`fiftyone-common-sys`](common-sys) | Raw FFI bindings to common-cxx: ResourceManager, Evidence, Exception, StatusCode and result buffers. |
-| [`fiftyone-device-detection-sys`](device-detection-sys) | Raw FFI bindings to the Hash device-detection ABI in device-detection-cxx, built on fiftyone-common-sys. |
-| [`fiftyone-ip-intelligence-sys`](ip-intelligence-sys) | Raw FFI bindings to the Ipi ABI in ip-intelligence-cxx, including the weighted getters. Compiles its own common-cxx into an `ipi_*` symbol namespace so it can co-link with device-detection (see ARCHITECTURE.md). |
+| [`fiftyone-common-sys`](common-sys) | Raw FFI bindings to the 51Degrees common C library: ResourceManager, Evidence, Exception, StatusCode and result buffers. |
+| [`fiftyone-device-detection-sys`](device-detection-sys) | Raw FFI bindings to the Hash device-detection ABI in the 51Degrees C library, built on fiftyone-common-sys. |
+| [`fiftyone-ip-intelligence-sys`](ip-intelligence-sys) | Raw FFI bindings to the Ipi ABI in the 51Degrees C library, including the weighted getters. Compiles its own copy of the common C library into an `ipi_*` symbol namespace so it can co-link with device-detection (see ARCHITECTURE.md). |
 | [`fiftyone-native`](native) | Safe RAII wrapper over the native manager, results, evidence and exception types, shared by both products. |
 
 ### Device Detection
@@ -115,10 +115,12 @@ path, so cloud-only users and most of CI build without a C compiler.
   `.data_update_license_keys(..)`, and that refreshes the engine when the data
   file changes on disk. The Distributor serves nothing without a licence key,
   so a build with polling on and no key fails with an error that says so, as
-  it does in .NET, and a deployment of the free Lite file turns polling off
-  with `.auto_update(false)`. `.file_system_watcher(false)` turns the watcher
-  off, and `pipeline.resource::<DataUpdateService>()` reaches the service for
-  a check on demand.
+  it does in .NET, and a deployment of the free Lite file turns automatic
+  updates off with `.auto_update(false)`, which stops the polling and the file
+  watcher together, as the specification's master switch does.
+  `.file_system_watcher(false)` turns only the watcher off, and
+  `pipeline.resource::<DataUpdateService>()` reaches the service for a check
+  on demand.
 - JavaScript minification in `fiftyone-javascript-builder` is opt-in behind the
   `minify` feature and off by default. See ARCHITECTURE.md for why.
 

@@ -783,6 +783,7 @@ dependencies = [
  "fiftyone-native",
  "fiftyone-pipeline-core",
  "fiftyone-pipeline-engines",
+ "flate2",
 ]
 
 [[package]]
@@ -842,6 +843,7 @@ name = "fiftyone-pipeline-core"
 version = "4.5.2"
 dependencies = [
  "ahash",
+ "log",
  "thiserror 2.0.18",
 ]
 
@@ -877,6 +879,7 @@ dependencies = [
  "reqwest",
  "thiserror 2.0.18",
  "tiny_http",
+ "tokio",
  "uuid",
 ]
 

@@ -23,7 +23,7 @@
 //! [![51Degrees](https://51degrees.com/img/logo.png?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-ip-intelligence-sys-lib.rs&utm_term=logo "Data rewards the curious")](https://51degrees.com/?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-ip-intelligence-sys-lib.rs&utm_term=logo)
 //!
 //! Raw FFI bindings to the on-premise IP Intelligence ABI (`Ipi`) in
-//! `ip-intelligence-cxx`, including the weighted value getters.
+//! the 51degrees-cxx C sources, including the weighted value getters.
 //!
 //! This crate owns the compilation and static linking of the
 //! `fiftyone-ip-intelligence-c` native library (see `build.rs`) and exposes
@@ -34,7 +34,7 @@
 //! [`ResourceManager`], [`PropertiesRequired`] and evidence structures) live in
 //! the [`common`] submodule. They are declared locally rather than reused from
 //! `fiftyone-common-sys` because the IP Intelligence engine is compiled with 64
-//! bit file offsets and must link its own `common-cxx` (see the [`common`]
+//! bit file offsets and must link its own common C library (see the [`common`]
 //! module docs). Only the IP Intelligence specific surface is declared on top:
 //!
 //! - **Initialization** ([`fiftyoneDegreesIpiInitManagerFromFile`],
@@ -59,7 +59,7 @@
 //! - **Data set and metadata** ([`fiftyoneDegreesDataSetIpiGet`],
 //!   [`fiftyoneDegreesDataSetIpiRelease`] and
 //!   [`fiftyoneDegreesResourceManagerFree`], which is declared against this
-//!   crate's own `common-cxx` build).
+//!   crate's own common C library build).
 //! - **Property and header enumeration shim**
 //!   ([`fiftyoneDegreesShimIpiGetRequiredPropertyCount`],
 //!   [`fiftyoneDegreesShimIpiGetRequiredPropertyName`],
@@ -74,7 +74,7 @@
 //! - **Evidence** ([`common::fiftyoneDegreesEvidenceCreate`],
 //!   [`common::fiftyoneDegreesEvidenceAddString`] and
 //!   [`common::fiftyoneDegreesEvidenceFree`]), bound to this crate's own
-//!   `common-cxx` build for [`fiftyoneDegreesResultsIpiFromEvidence`].
+//!   common C library build for [`fiftyoneDegreesResultsIpiFromEvidence`].
 //!
 //! Internals such as collections, data sets, graphs and headers are exposed as
 //! opaque pointer types. Only the structures that genuinely cross the boundary
@@ -86,8 +86,8 @@
 //! Every item in this crate is an unchecked binding to a C function or
 //! structure. Callers are responsible for upholding the contracts described in
 //! the upstream headers (`ipi.h`, `ipi_weighted_results.h` and the shared
-//! `common-cxx` headers). Pointers handed to these functions must be valid, and
-//! results and weighted value collections must be freed with their matching
+//! common C library headers). Pointers handed to these functions must be valid,
+//! and results and weighted value collections must be freed with their matching
 //! release functions.
 
 #![warn(missing_docs)]
@@ -101,22 +101,23 @@ pub use common::{
     PropertiesAvailable, PropertiesRequired, ResourceHandle, ResourceManager, StatusCode,
 };
 
-/// Shared `common-cxx` ABI types needed by the IP Intelligence surface.
+/// Shared common C library ABI types needed by the IP Intelligence surface.
 ///
-/// These mirror the same `common-cxx` structures that the `fiftyone-common-sys`
-/// crate declares, but they are defined locally and resolved against the copy of
-/// `common-cxx` compiled into this crate's own native library. The IP
-/// Intelligence engine is built with `FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT`,
-/// which widens the file offset and on disk offset types to 64 bit. That makes
-/// its `common-cxx` objects ABI incompatible with the 32 bit offset build owned
-/// by `fiftyone-common-sys`, so the IP Intelligence library must link its own
-/// `common-cxx` and must not pull in the common crate's native library. If this
-/// crate depended on `fiftyone-common-sys`, that crate's `fiftyone-common-c`
-/// native library would also be linked, and the duplicate `common-cxx` symbols
-/// would be bound inconsistently across the two offset widths, which corrupts
-/// the data set header read and makes initialization fail with an incorrect
-/// version error. Declaring the handful of shared types here keeps a single,
-/// offset-consistent copy of `common-cxx` in any binary that links this crate.
+/// These mirror the same common C library structures that the
+/// `fiftyone-common-sys` crate declares, but they are defined locally and
+/// resolved against the copy of the common C library compiled into this crate's
+/// own native library. The IP Intelligence engine is built with
+/// `FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT`, which widens the file offset and
+/// on disk offset types to 64 bit. That makes its common C library objects ABI
+/// incompatible with the 32 bit offset build owned by `fiftyone-common-sys`, so
+/// the IP Intelligence library must link its own common C library and must not
+/// pull in the common crate's native library. If this crate depended on
+/// `fiftyone-common-sys`, that crate's `fiftyone-common-c` native library would
+/// also be linked, and the duplicate common C library symbols would be bound
+/// inconsistently across the two offset widths, which corrupts the data set
+/// header read and makes initialization fail with an incorrect version error.
+/// Declaring the handful of shared types here keeps a single, offset-consistent
+/// copy of the common C library in any binary that links this crate.
 pub mod common {
     use std::os::raw::{c_char, c_int};
 
@@ -285,9 +286,10 @@ pub mod common {
     /// Only ever passed by pointer to
     /// [`fiftyoneDegreesResultsIpiFromEvidence`](crate::fiftyoneDegreesResultsIpiFromEvidence),
     /// so it is exposed as an opaque pointer type here. Create and fill it with
-    /// [`fiftyoneDegreesEvidenceCreate`] and [`fiftyoneDegreesEvidenceAddString`]
-    /// below, which belong to this crate's own `common-cxx` build, and never with
-    /// the evidence functions of `fiftyone-common-sys`.
+    /// [`fiftyoneDegreesEvidenceCreate`] and
+    /// [`fiftyoneDegreesEvidenceAddString`] below, which belong to this crate's
+    /// own common C library build, and never with the evidence functions of
+    /// `fiftyone-common-sys`.
     #[repr(C)]
     pub struct EvidenceKeyValuePairArray {
         _private: [u8; 0],
@@ -355,30 +357,45 @@ pub mod common {
 
     extern "C" {
         /// Returns a newly allocated English message describing the exception.
-        /// Free the returned pointer with [`fiftyoneDegreesMemoryStandardFree`].
-        /// Resolved against this crate's own `common-cxx` build.
+        /// Free the returned pointer with [`fiftyoneDegreesFree`].
+        /// Resolved against this crate's own common C library build.
         ///
         /// The native symbol is `ipi_`-prefixed because this crate's private
-        /// copy of `common-cxx` is compiled into its own symbol namespace (see
-        /// `src/symbol_prefix.h` and `build.rs`), so the Rust name is bound to
-        /// the prefixed definition with `link_name`.
+        /// copy of the common C library is compiled into its own symbol
+        /// namespace (see `src/symbol_prefix.h` and `build.rs`), so the Rust
+        /// name is bound to the prefixed definition with `link_name`.
         ///
         /// # Safety
         /// `exception` must point to a valid, set [`Exception`].
         #[link_name = "ipi_fiftyoneDegreesExceptionGetMessage"]
         pub fn fiftyoneDegreesExceptionGetMessage(exception: *mut Exception) -> *const c_char;
 
-        /// Frees memory the library allocated through its standard allocator,
-        /// such as the string returned by
-        /// [`fiftyoneDegreesExceptionGetMessage`].
+        /// Frees memory through the C runtime's `free`, which is how the
+        /// library frees memory unless its allocator has been replaced. Release
+        /// what the library allocates with [`fiftyoneDegreesFree`] instead,
+        /// which follows a replaced allocator.
         ///
         /// The native symbol is `ipi_`-prefixed for the same reason as
         /// [`fiftyoneDegreesExceptionGetMessage`] above.
         ///
         /// # Safety
-        /// `ptr` must be a pointer the library allocated, or null.
+        /// `ptr` must be a pointer the C runtime's `malloc` allocated, or null.
         #[link_name = "ipi_fiftyoneDegreesMemoryStandardFree"]
         pub fn fiftyoneDegreesMemoryStandardFree(ptr: *mut std::os::raw::c_void);
+
+        /// The function the library frees memory with, the counterpart of the
+        /// allocator it allocates with. Release the string
+        /// [`fiftyoneDegreesExceptionGetMessage`] returns with it. It is
+        /// [`fiftyoneDegreesMemoryStandardFree`] unless the allocator has been
+        /// replaced, as the library's memory tracking replaces it.
+        ///
+        /// The native symbol is `ipi_`-prefixed for the same reason as
+        /// [`fiftyoneDegreesExceptionGetMessage`] above.
+        ///
+        /// # Safety
+        /// Call it only with a pointer the library allocated, or null.
+        #[link_name = "ipi_fiftyoneDegreesFree"]
+        pub static mut fiftyoneDegreesFree: unsafe extern "C" fn(ptr: *mut std::os::raw::c_void);
 
         /// Creates an evidence array with room for `capacity` pairs, or returns
         /// null when the allocation fails. Free it with
@@ -427,7 +444,7 @@ pub mod common {
 pub type FileOffset = i64;
 
 // ---------------------------------------------------------------------------
-// IP type (common-cxx/ip.h)
+// IP type (src/common/ip.h)
 // ---------------------------------------------------------------------------
 
 /// Version of an IP address, mirroring `fiftyoneDegreesIpType`.
@@ -447,7 +464,7 @@ pub enum IpType {
 }
 
 // ---------------------------------------------------------------------------
-// Property value type (common-cxx/propertyValueType.h)
+// Property value type (src/common/propertyValueType.h)
 // ---------------------------------------------------------------------------
 
 /// Stored type of a property value, mirroring `fiftyoneDegreesPropertyValueType`.
@@ -505,7 +522,7 @@ pub enum PropertyValueType {
 }
 
 // ---------------------------------------------------------------------------
-// No value reason (common-cxx/results.h)
+// No value reason (src/common/results.h)
 // ---------------------------------------------------------------------------
 
 /// Reason a result does not contain a valid value for a property, mirroring
@@ -538,7 +555,7 @@ pub enum ResultsNoValueReason {
 }
 
 // ---------------------------------------------------------------------------
-// Data buffer (common-cxx/data.h)
+// Data buffer (src/common/data.h)
 // ---------------------------------------------------------------------------
 
 /// Owned data buffer used by the weighted value collection and weighted string
@@ -630,13 +647,22 @@ pub struct StringBuilder {
     _private: [u8; 0],
 }
 
-/// Opaque collection item, mirroring `fiftyoneDegreesCollectionItem`.
+/// A value read from one of the data set's collections, mirroring
+/// `fiftyoneDegreesCollectionItem`.
 ///
-/// Used by [`fiftyoneDegreesIpiGetIpAddressAsString`] to point at a string in
-/// the strings collection. The layout is library internal, so it is opaque.
+/// It is laid out as the C structure is, because [`ProfilePercentage`] holds
+/// one ahead of its weighting, and it is passed by pointer to
+/// [`fiftyoneDegreesIpiGetIpAddressAsString`]. The library sets and releases
+/// the item, so a caller only reads it.
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct CollectionItem {
-    _private: [u8; 0],
+    /// The item's data, including any memory allocated to hold it.
+    pub data: Data,
+    /// A handle the library releases the item with, such as a cache node.
+    pub handle: *mut c_void,
+    /// The collection the item came from. Library internal.
+    pub collection: *const c_void,
 }
 
 /// Callback used to iterate matching profiles, mirroring
@@ -750,11 +776,10 @@ pub struct WeightedValuesCollection {
 /// (an alias of `fiftyoneDegreesWeightedItem`).
 ///
 /// It pairs a collection item holding the value with a `raw_weighting`. The
-/// `item` field is opaque because its internals are library managed and released
-/// when the owning results are freed.
+/// item is library managed and released when the owning results are freed.
 #[repr(C)]
 pub struct ProfilePercentage {
-    /// Opaque collection item holding the value. Library managed.
+    /// Collection item holding the value. Library managed.
     pub item: CollectionItem,
     /// Raw weighting out of the library maximum (`65535 * 65535`).
     pub raw_weighting: u32,
@@ -813,11 +838,11 @@ extern "C" {
     pub fn fiftyoneDegreesDataSetIpiRelease(dataset: *mut DataSetIpi);
 
     /// Frees a resource manager and, once no references remain, its data set.
-    /// Declared here so it links against this crate's own `common-cxx` resource
-    /// layer rather than any other build of it.
+    /// Declared here so it links against this crate's own common C library
+    /// resource layer rather than any other build of it.
     ///
     /// The native symbol is `ipi_`-prefixed because this crate's private copy of
-    /// `common-cxx` is compiled into its own symbol namespace (see
+    /// the common C library is compiled into its own symbol namespace (see
     /// `src/symbol_prefix.h` and `build.rs`), so the Rust name is bound to the
     /// prefixed definition with `link_name`. This is what keeps the resource
     /// manager freed through the matching wide-offset build rather than the
@@ -1224,35 +1249,142 @@ extern "C" {
         buffer: *mut c_char,
         length: usize,
     ) -> usize;
+
+    /// Initializes `manager` from the data file `file_name` with a copy of
+    /// `config`, setting the expected concurrency of every collection in the
+    /// copy to `concurrency` when that is zero or more, or keeping the
+    /// configuration's own when it is negative. The expected concurrency
+    /// sizes the pool of file handles the collections that are not held in
+    /// memory read through. The configuration `config` points to is not
+    /// changed. Defined by this crate's `src/shim.c`.
+    ///
+    /// # Safety
+    /// As for [`fiftyoneDegreesIpiInitManagerFromFile`], and `config` must
+    /// point to a configuration.
+    pub fn fiftyoneDegreesShimIpiInitManagerFromFile(
+        manager: *mut ResourceManager,
+        config: *const ConfigIpi,
+        concurrency: i32,
+        properties: *mut PropertiesRequired,
+        file_name: *const c_char,
+        exception: *mut Exception,
+    ) -> StatusCode;
+
+    /// Returns the number of handles in the file pool of the data set
+    /// managed by `manager` when any of its collections reads from the data
+    /// file after it is loaded, or zero when the whole data set is held in
+    /// memory. A read that finds every handle in use fails rather than
+    /// waiting for one, so this is how many calls can read the data file at
+    /// once. Defined by this crate's `src/shim.c`.
+    ///
+    /// # Safety
+    /// `manager` must be initialized.
+    pub fn fiftyoneDegreesShimIpiGetFileHandleCount(manager: *mut ResourceManager) -> u16;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::{fiftyoneDegreesExceptionGetMessage, fiftyoneDegreesMemoryStandardFree};
+    use crate::common::{fiftyoneDegreesExceptionGetMessage, fiftyoneDegreesFree};
     use std::ffi::{CStr, CString};
     use std::path::PathBuf;
 
-    /// Resolve the IP Intelligence checkout the same way `build.rs` does so the
-    /// smoke test can find the Lite data file.
-    fn ipi_cxx_dir() -> PathBuf {
-        if let Ok(dir) = std::env::var("FIFTYONE_IP_INTELLIGENCE_CXX_DIR") {
+    /// Resolve the 51degrees-cxx checkout the same way `build.rs` does so the
+    /// smoke test can find the ASN data file in it.
+    fn cxx_dir() -> PathBuf {
+        if let Ok(dir) = std::env::var("FIFTYONE_CXX_DIR") {
             return PathBuf::from(dir);
         }
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .and_then(|p| p.parent())
-            .expect("workspace parent")
-            .join("ip-intelligence-cxx")
+            .expect("workspace root")
+            .join("cxx")
     }
 
     /// Path to the ASN IP Intelligence data file checked into the data
     /// repository, if present.
     fn asn_data_file() -> Option<PathBuf> {
-        let path = ipi_cxx_dir()
+        let path = cxx_dir()
             .join("ip-intelligence-data")
             .join("51Degrees-IPIV4AsnIpiV41.ipi");
         path.is_file().then_some(path)
+    }
+
+    /// The data file `51DEGREES_IPI_PATH` names, else the ASN file.
+    fn named_or_asn_data_file() -> Option<PathBuf> {
+        std::env::var("51DEGREES_IPI_PATH")
+            .ok()
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+            .or_else(asn_data_file)
+    }
+
+    /// The weighting of the first value the legacy getter returns is the
+    /// weighting the weighted value collection gives the same value, which
+    /// needs [`ProfilePercentage`] laid out as the C structure is.
+    #[test]
+    fn the_legacy_getter_reads_each_values_weighting() {
+        let Some(data_file) = named_or_asn_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping the legacy weighting");
+            return;
+        };
+        let file = CString::new(data_file.to_string_lossy().as_ref()).expect("no nul");
+        unsafe {
+            let mut manager = ResourceManager::zeroed();
+            let mut exception = Exception::cleared();
+            let status = fiftyoneDegreesIpiInitManagerFromFile(
+                &mut manager,
+                std::ptr::addr_of_mut!(fiftyoneDegreesIpiInMemoryConfig),
+                std::ptr::null_mut(),
+                file.as_ptr(),
+                &mut exception,
+            );
+            assert_eq!(
+                status,
+                StatusCode::Success,
+                "{}",
+                exception_message(&mut exception)
+            );
+            let results = fiftyoneDegreesResultsIpiCreate(&mut manager);
+            assert!(!results.is_null(), "results should be allocated");
+            let ip = CString::new("1.1.1.1").expect("no nul");
+            fiftyoneDegreesResultsIpiFromIpAddressString(
+                results,
+                ip.as_ptr(),
+                ip.as_bytes().len(),
+                &mut exception,
+            );
+            assert!(exception.is_okay(), "{}", exception_message(&mut exception));
+
+            let mut checked = 0;
+            let count = fiftyoneDegreesShimIpiGetRequiredPropertyCount(&mut manager);
+            for index in 0..count as c_int {
+                let first = fiftyoneDegreesResultsIpiGetValues(results, index, &mut exception);
+                assert!(exception.is_okay(), "{}", exception_message(&mut exception));
+                if first.is_null() {
+                    continue;
+                }
+                let legacy = (*first).raw_weighting;
+                let indexes = [index];
+                let mut collection = fiftyoneDegreesResultsIpiGetValuesCollection(
+                    results,
+                    indexes.as_ptr(),
+                    1,
+                    std::ptr::null_mut(),
+                    &mut exception,
+                );
+                assert!(exception.is_okay(), "{}", exception_message(&mut exception));
+                assert!(collection.items_count > 0, "property {index} has values");
+                let weighted = (**collection.items).raw_weighting;
+                fiftyoneDegreesWeightedValuesCollectionRelease(&mut collection);
+                assert_eq!(legacy, weighted, "property {index}");
+                checked += 1;
+            }
+            assert!(checked > 0, "some property should have values");
+
+            fiftyoneDegreesResultsIpiFree(results);
+            fiftyoneDegreesResourceManagerFree(&mut manager);
+        }
     }
 
     /// The no value reason message getter links and returns a non-empty static
@@ -1314,8 +1446,8 @@ mod tests {
 
             // The init function ran cleanly through the FFI boundary and
             // returned a well defined status. That alone proves the
-            // initialization symbols and the whole `common-cxx` plus
-            // `ip-graph-cxx` plus `ipi` link is sound on the host toolchain. The
+            // initialization symbols and the whole common plus
+            // graph plus `ipi` link is sound on the host toolchain. The
             // data file itself may be absent or unusable (for example a Git LFS
             // pointer rather than the real file in a checkout without LFS),
             // reported as a non-Success status. Treat that as a clean skip rather
@@ -1448,7 +1580,7 @@ mod tests {
             return String::from("(exception set, no message)");
         }
         let message = CStr::from_ptr(raw).to_string_lossy().into_owned();
-        fiftyoneDegreesMemoryStandardFree(raw as *mut c_void);
+        fiftyoneDegreesFree(raw as *mut c_void);
         message
     }
 }
