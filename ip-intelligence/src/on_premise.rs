@@ -304,21 +304,13 @@ mod tests {
             .parent()?
             .to_path_buf();
         let name = "51Degrees-IPIV4AsnIpiV41.ipi";
-        // The data file lives in an `ip-intelligence-cxx` checkout, which may sit
-        // beside the Rust workspace or one level up in the wider Workspace tree.
+        // The data file lives in the `cxx` submodule, or directly in the wider
+        // Workspace tree beside the Rust workspace.
         let candidates = [
             workspace
-                .join("ip-intelligence-cxx")
+                .join("cxx")
                 .join("ip-intelligence-data")
                 .join(name),
-            workspace
-                .parent()
-                .map(|p| {
-                    p.join("ip-intelligence-cxx")
-                        .join("ip-intelligence-data")
-                        .join(name)
-                })
-                .unwrap_or_default(),
             workspace
                 .parent()
                 .map(|p| p.join("ip-intelligence-data").join(name))

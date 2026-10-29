@@ -22,11 +22,11 @@
 
 //! [![51Degrees](https://51degrees.com/img/logo.png?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-common-sys-lib.rs&utm_term=logo "Data rewards the curious")](https://51degrees.com/?utm_source=docs.rs&utm_medium=docs&utm_campaign=rust&utm_content=fiftyone-common-sys-lib.rs&utm_term=logo)
 //!
-//! Raw FFI bindings to the `common-cxx` C library shared by the on-premise
+//! Raw FFI bindings to the common C library shared by the on-premise
 //! Device Detection and IP Intelligence engines.
 //!
 //! This crate is the native foundation that both products build on. It owns the
-//! compilation and static linking of the `common-cxx` C sources (as the
+//! compilation and static linking of the common C sources (as the
 //! `fiftyone-common-c` library) and exposes hand written `extern "C"`
 //! declarations and `#[repr(C)]` structures for the portion of the public ABI
 //! that is genuinely shared between the products.

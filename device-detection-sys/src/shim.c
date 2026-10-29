@@ -29,8 +29,8 @@
  * struct exactly, which is fragile across platforms and compiler versions. The
  * helpers below read those private layouts from C, where the headers describe
  * them, and present a flat C ABI to the Rust crate. They use only the public
- * Hash and common-cxx headers, so they stay correct as the upstream layouts
- * change.
+ * Hash and common C library headers, so they stay correct as the upstream
+ * layouts change.
  */
 
 #include "hash/hash.h"

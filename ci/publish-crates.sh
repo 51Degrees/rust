@@ -15,7 +15,9 @@
 # OWID source is compiled into `fodid` from the owid-rust submodule by
 # ci/copy-owid-source.ps1, which the publish workflow runs before this script,
 # and the `fodid` manifest lists the copied directory in its `include` so that
-# `cargo publish` packages it even though git ignores it.
+# `cargo publish` packages it even though git ignores it. The three -sys crates
+# carry their C sources the same way, copied from the cxx submodule by
+# ci/copy-cxx-sources.ps1, which the publish workflow also runs first.
 set -euo pipefail
 
 # Publishing needs a crates.io token. When it is absent (for example a normal
@@ -63,11 +65,12 @@ crate_version() {
 publish_crate() {
   local crate="$1" attempt out when target now wait
   for attempt in $(seq 1 40); do
-    # --allow-dirty because the OWID source under fodid/src/owid is copied
-    # in by ci/copy-owid-source.ps1 and deliberately never committed, and
-    # cargo otherwise refuses to publish a package that includes files git
-    # does not track. The workflow starts from a clean checkout, so that
-    # copy is the only thing the flag lets through.
+    # --allow-dirty because the OWID source under fodid/src/owid and the C
+    # sources under each -sys crate's cxx folder are copied in by
+    # ci/copy-owid-source.ps1 and ci/copy-cxx-sources.ps1 and deliberately
+    # never committed, and cargo otherwise refuses to publish a package that
+    # includes files git does not track. The workflow starts from a clean
+    # checkout, so those copies are the only thing the flag lets through.
     if out="$(cargo publish -p "$crate" --allow-dirty 2>&1)"; then
       echo "$out"
       return 0

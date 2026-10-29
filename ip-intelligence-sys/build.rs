@@ -24,45 +24,42 @@
 //!
 //! This compiles the on-premise IP Intelligence C library directly with the
 //! `cc` crate and links it statically as `fiftyone-ip-intelligence-c`. The
-//! library is built self contained, meaning the shared `common-cxx` C sources
-//! and the `ip-graph-cxx` graph sources are compiled in alongside the `ipi.c`
-//! and `ipi_weighted_results.c` engine sources. Every C source is compiled
-//! into one static library.
+//! library is built self contained, meaning the shared common C sources in
+//! `src/common` and the graph sources in `src/ipi/graph` are compiled in
+//! alongside the `ipi.c` and `ipi_weighted_results.c` engine sources in
+//! `src/ipi`. Every C source is compiled into one static library.
 //!
 //! The library is deliberately self contained rather than reusing the
 //! `fiftyone-common-c` native library owned by `fiftyone-common-sys`. The IP
 //! Intelligence data format uses 64 bit file offsets, so the whole library
-//! (including the shared `common-cxx` sources it calls) must be compiled with
+//! (including the shared common sources it calls) must be compiled with
 //! `FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT`, which widens
 //! `fiftyoneDegreesFileOffset` and the on disk offset types to 64 bit. The
 //! common library compiled by `fiftyone-common-sys` does not set that define,
 //! so its objects use 32 bit offsets and are ABI incompatible with the IP
-//! Intelligence engine. Compiling a private copy of `common-cxx` here with the
-//! correct define is the only sound option.
+//! Intelligence engine. Compiling a private copy of the common sources here
+//! with the correct define is the only sound option.
 //!
 //! The `cc` crate locates the MSVC toolchain through `vswhere` on Windows, so
 //! `cl.exe` does not need to be on `PATH`. On other platforms it uses the
 //! system C compiler in the usual way.
 //!
-//! The `ip-intelligence-cxx` checkout is resolved from the
-//! `FIFTYONE_IP_INTELLIGENCE_CXX_DIR` environment variable when set, otherwise
-//! from the sibling `../ip-intelligence-cxx` directory relative to the Rust
-//! workspace.
+//! The sources are found as `resolve_cxx_dir` describes.
 
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let ipi_dir = resolve_ipi_cxx_dir();
-    let src = ipi_dir.join("src");
-    let common_cxx = src.join("common-cxx");
-    let ip_graph = src.join("ip-graph-cxx");
+    let cxx_src = resolve_cxx_dir().join("src");
+    let src = cxx_src.join("ipi");
+    let common_cxx = cxx_src.join("common");
+    let ip_graph = src.join("graph");
 
     // Rebuild whenever the override variable changes so a relocated checkout is
     // picked up without a manual clean.
-    println!("cargo:rerun-if-env-changed=FIFTYONE_IP_INTELLIGENCE_CXX_DIR");
+    println!("cargo:rerun-if-env-changed=FIFTYONE_CXX_DIR");
 
     // Gather the C sources for the three layers that make up the C library.
-    // Globbing keeps the lists in step with the upstream checkout.
+    // Globbing keeps the lists in step with the 51degrees-cxx sources.
     let mut sources: Vec<PathBuf> = Vec::new();
     collect_c_sources(&common_cxx, &mut sources);
     collect_c_sources(&ip_graph, &mut sources);
@@ -86,14 +83,14 @@ fn main() {
     println!("cargo:rerun-if-changed={}", shim.display());
     sources.push(shim);
 
-    // The forced-include header that renames this crate's private common-cxx
-    // symbols to an ipi_ prefixed namespace. It is applied to every C and C++
-    // translation unit below, so both the common-cxx definitions compiled here
-    // and every call site that references them are renamed together at
-    // preprocess time. Device Detection keeps the unprefixed names, so the two
-    // copies of common-cxx no longer collide when both engines are linked into
-    // one binary. See the header for the full rationale and how to regenerate
-    // the symbol list.
+    // The forced-include header that renames this crate's private common C
+    // library symbols to an ipi_ prefixed namespace. It is applied to every C
+    // and C++ translation unit below, so both the common C library definitions
+    // compiled here and every call site that references them are renamed
+    // together at preprocess time. Device Detection keeps the unprefixed names,
+    // so the two copies of the common C library no longer collide when both
+    // engines are linked into one binary. See the header for the full rationale
+    // and how to regenerate the symbol list.
     let symbol_prefix = PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is always set by cargo"),
     )
@@ -123,14 +120,12 @@ fn main() {
         build.flag("-include").flag(&symbol_prefix_abs);
     }
 
-    // Add only the IP Intelligence `src` directory to the angle bracket search
-    // path so the shim can resolve `#include "ipi.h"` and the engine sources can
-    // resolve their `"common-cxx/..."` prefixed includes. The `common-cxx`
-    // directory itself must NOT be placed on the search path because it ships its
-    // own `string.h` which would shadow the C runtime `<string.h>` and corrupt
-    // the CRT declarations. The `src` directory has no such shadowing header
-    // (string.h lives under `common-cxx`), so adding it is safe, exactly as the
-    // device detection build does.
+    // Add only `src/ipi` to the angle bracket search path so the shim can
+    // resolve `#include "ipi.h"`. `src/common` must NOT be placed on the search
+    // path because it ships its own `string.h` which would shadow the C runtime
+    // `<string.h>` and corrupt the CRT declarations. `src/ipi` has no such
+    // shadowing header, so adding it is safe, exactly as the device detection
+    // build does with `src/dd`.
     build.include(&src);
 
     // The IP Intelligence data format uses 64 bit file offsets, so the whole
@@ -143,11 +138,11 @@ fn main() {
         .define("FIFTYONE_DEGREES_REDUCED_FILE", None);
 
     // The engine C sources resolve their own cross includes quote relative (for
-    // example `"common-cxx/config.h"` from `src`, or `"../common-cxx/data.h"`
-    // from `ip-graph-cxx`), because the compiler always searches the including
-    // file's own directory first for quote includes. The `src` include directory
-    // added above is what lets the crate's own shim, which sits outside the C
-    // source tree, resolve `#include "ipi.h"`.
+    // example `"../common/config.h"` from `src/ipi`, or `"../../common/data.h"`
+    // from `src/ipi/graph`), because the compiler always searches the including
+    // file's own directory first for quote includes. The `src/ipi` include
+    // directory added above is what lets the crate's own shim, which sits
+    // outside the C source tree, resolve `#include "ipi.h"`.
 
     if build.get_compiler().is_like_msvc() {
         // Upstream builds warning-as-error under its own known toolchain. A
@@ -217,16 +212,24 @@ fn collect_c_sources(dir: &Path, sources: &mut Vec<PathBuf>) {
     }
 }
 
-/// Resolve the directory holding the `ip-intelligence-cxx` checkout.
+/// A file every directory holding the sources this crate compiles contains.
+const MARKER: &str = "src/ipi/ipi.h";
+
+/// Resolve the root of the 51degrees-cxx sources.
 ///
-/// Prefers `FIFTYONE_IP_INTELLIGENCE_CXX_DIR` when present, then falls back to
-/// the sibling `../ip-intelligence-cxx` directory next to the Rust workspace.
-fn resolve_ipi_cxx_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("FIFTYONE_IP_INTELLIGENCE_CXX_DIR") {
+/// Resolution order:
+/// 1. `FIFTYONE_CXX_DIR` when set, for a developer pointing at a checkout.
+/// 2. The `cxx` submodule at the root of the workspace, which a source
+///    checkout builds from.
+/// 3. The `cxx` folder inside this crate. `ci/copy-cxx-sources.ps1` copies
+///    the sources there before publishing, so the published crate carries
+///    them and builds with no submodule or environment setup.
+fn resolve_cxx_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("FIFTYONE_CXX_DIR") {
         let path = PathBuf::from(dir);
         assert!(
-            path.join("src").join("ipi.h").is_file(),
-            "FIFTYONE_IP_INTELLIGENCE_CXX_DIR={} does not contain src/ipi.h",
+            path.join(MARKER).is_file(),
+            "FIFTYONE_CXX_DIR={} does not contain {MARKER}",
             path.display()
         );
         return path;
@@ -235,27 +238,18 @@ fn resolve_ipi_cxx_dir() -> PathBuf {
     let manifest_dir = PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is always set by cargo"),
     );
-
-    // The vendored copy that ships with the crate, which makes the published
-    // crate self-contained (the C sources travel with it, so it builds with no
-    // submodule or environment setup).
-    let vendored = manifest_dir.join("vendor").join("ip-intelligence-cxx");
-    if vendored.join("src").join("ipi.h").is_file() {
-        return vendored;
-    }
-
-    // The sibling submodule checkout, two levels up from the crate.
-    let sibling = manifest_dir
+    let submodule = manifest_dir
         .parent()
-        .and_then(Path::parent)
-        .map(|workspace_parent| workspace_parent.join("ip-intelligence-cxx"))
-        .expect("crate directory has a workspace parent");
+        .map(|workspace| workspace.join("cxx"))
+        .expect("crate directory has a parent");
+    let copied = manifest_dir.join("cxx");
 
-    assert!(
-        sibling.join("src").join("ipi.h").is_file(),
-        "could not find ip-intelligence-cxx. Looked for the vendored copy and {} \
-         (set FIFTYONE_IP_INTELLIGENCE_CXX_DIR to override)",
-        sibling.display()
-    );
-    sibling
+    [submodule, copied]
+        .into_iter()
+        .find(|dir| dir.join(MARKER).is_file())
+        .expect(
+            "could not find the 51degrees-cxx sources. Run \
+             'git submodule update --init --recursive' to check out the cxx \
+             submodule, or set FIFTYONE_CXX_DIR to a checkout",
+        )
 }

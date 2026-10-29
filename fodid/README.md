@@ -331,6 +331,11 @@ came from and the library's own Apache 2.0 `LICENSE`, and the published crate
 carries that copy. No OWID package therefore has to exist on any registry for
 this crate to build, be published or be used.
 
+The submodule follows the main branch of SWAN-community/owid-rust. A nightly
+job raises a pull request in this repository whenever that branch moves, and
+once the pull request passes its checks and is merged, the next release of
+`fodid` carries the new OWID code.
+
 The OWID types a caller needs are re-exported from `fodid` itself: `Owid`,
 `ParseError`, `ParseStatus`, `SignatureStatus`, `Crypto`, `Version`,
 `ParseDetail`, `OwidError` and `SIGNATURE_LENGTH`. The two types that create

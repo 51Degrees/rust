@@ -26,3 +26,10 @@ Thumbs.db
 # before a build. The owid-rust submodule is the only copy that belongs in
 # the repository.
 /fodid/src/owid/
+
+# The C sources that ci/copy-cxx-sources.ps1 copies into the -sys crates
+# before packaging. The cxx submodule is the only copy that belongs in the
+# repository.
+/common-sys/cxx/
+/device-detection-sys/cxx/
+/ip-intelligence-sys/cxx/

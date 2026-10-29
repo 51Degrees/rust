@@ -20,12 +20,10 @@ if (!(Test-Path -Path $publishStep -PathType Leaf)) {
     Write-Error "'$publishStep' was not found. Check out 51Degrees/common-ci beside this repository, or pass -CommonCi."
 }
 
-# The ip-intelligence-cxx checkout is a sibling of the repo directory (CI
-# checks this repo out into $RepoName next to it; a local run passes "." from
-# the repo root, whose parent is the workspace holding the sibling checkout).
-# Resolve the ASN data directory against $RepoName rather than the caller's
-# current directory, so both invocations find it.
-$AsnDataDir = Join-Path $RepoName "../ip-intelligence-cxx/ip-intelligence-data"
+# The ASN data directory is in the cxx submodule. Resolve it against $RepoName
+# rather than the caller's current directory, so a CI run from the folder
+# above the checkout and a local run from the repo root both find it.
+$AsnDataDir = Join-Path $RepoName "cxx/ip-intelligence-data"
 Push-Location $AsnDataDir
 try {
     Write-Host "Entering $PWD"
@@ -54,8 +52,8 @@ try {
 # steps/compare-performance.ps1 reads, and the shared
 # steps/publish-performance-results.ps1 validates it and copies it to
 # results_<Name>.json under $OutputDir. The Rust on-premise engines call the
-# device-detection-cxx and ip-intelligence-cxx libraries through FFI, so the
-# figures track the native C/C++ performance.
+# C libraries in the cxx submodule through FFI, so the figures track the
+# native C performance.
 #
 # Name is the configuration the graph history is keyed on, and the metric
 # names inside each file are its series, so neither may change.

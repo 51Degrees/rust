@@ -83,7 +83,7 @@ fn find_up(relative: &str) -> Option<PathBuf> {
 }
 
 /// Resolve the ASN data file: an explicit `51DEGREES_IPI_PATH` first, then the
-/// ASN file shipped in a sibling `ip-intelligence-cxx` checkout.
+/// ASN file shipped in the `cxx` submodule.
 fn asn_data_file() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("51DEGREES_IPI_PATH") {
         let path = PathBuf::from(path.trim());
@@ -91,7 +91,7 @@ fn asn_data_file() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    find_up("ip-intelligence-cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi")
+    find_up("cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi")
 }
 
 /// The Enterprise data-file name on the Enterprise share.

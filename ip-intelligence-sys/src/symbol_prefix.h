@@ -21,36 +21,37 @@
  * ********************************************************************* */
 
 /*
- * Symbol namespace for this crate's private copy of common-cxx.
+ * Symbol namespace for this crate's private copy of the common C library.
  *
- * The IP Intelligence engine compiles its own copy of the shared common-cxx C
+ * The IP Intelligence engine compiles its own copy of the shared common C
  * sources with FIFTYONE_DEGREES_LARGE_DATA_FILE_SUPPORT, which widens the file
  * offset types to 64 bit. Device Detection links a separate copy of the same
- * common-cxx through fiftyone-common-sys built with 32 bit offsets. The two
- * copies export the same fiftyoneDegrees* C symbols at incompatible ABIs, so a
- * binary that links both engines would let the linker bind each duplicated
+ * common C library through fiftyone-common-sys built with 32 bit offsets. The
+ * two copies export the same fiftyoneDegrees* C symbols at incompatible ABIs,
+ * so a binary that links both engines would let the linker bind each duplicated
  * symbol to a single definition, leaving one engine reading its data through
  * the wrong, ABI incompatible common code.
  *
  * This header is force included into every IP Intelligence translation unit
- * (see build.rs). It rewrites each shared common-cxx symbol to an ipi_ prefixed
- * name at preprocess time, so both the definitions in this crate's common-cxx
- * objects and every call site that references them are renamed together. Device
- * Detection keeps the unprefixed names, so the two copies no longer collide and
- * both engines work in one binary.
+ * (see build.rs). It rewrites each shared common C library symbol to an ipi_
+ * prefixed name at preprocess time, so both the definitions in this crate's
+ * common C library objects and every call site that references them are renamed
+ * together. Device Detection keeps the unprefixed names, so the two copies no
+ * longer collide and both engines work in one binary.
  *
- * Only the common-cxx symbols shared with the Device Detection common build are
- * renamed. The IP Intelligence engine surface (fiftyoneDegreesIpi*,
+ * Only the common C library symbols shared with the Device Detection common
+ * build are renamed. The IP Intelligence engine surface (fiftyoneDegreesIpi*,
  * fiftyoneDegreesResultsIpi*, the weighted value collection and this crate's
  * shim helpers) is unique to this library, does not collide with anything, and
  * is left unprefixed so the Rust bindings keep calling it by its public name.
  *
- * This list is derived from the intersection of the common-cxx symbols defined
- * by fiftyone-common-c (the Device Detection common build) and the symbols the
- * IP Intelligence build defines or references. Regenerate it by dumping the
- * symbols of both static libraries (dumpbin /SYMBOLS) and intersecting the
- * External, defined fiftyoneDegrees* names with the names the IP Intelligence
- * build touches, excluding the fiftyoneDegreesIpi* engine surface.
+ * This list is derived from the intersection of the common C library symbols
+ * defined by fiftyone-common-c (the Device Detection common build) and the
+ * symbols the IP Intelligence build defines or references. Regenerate it by
+ * dumping the symbols of both static libraries (dumpbin /SYMBOLS) and
+ * intersecting the External, defined fiftyoneDegrees* names with the names the
+ * IP Intelligence build touches, excluding the fiftyoneDegreesIpi* engine
+ * surface.
  */
 
 #ifndef FIFTYONE_DEGREES_IPI_SYMBOL_PREFIX_H

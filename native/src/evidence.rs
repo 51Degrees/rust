@@ -39,11 +39,11 @@
 //! enough.
 //!
 //! The native evidence array here is Device Detection's. IP Intelligence
-//! compiles its own copy of `common-cxx` with wider file offsets and must not
-//! use the `fiftyone-common-sys` evidence functions (doing so would bind the
-//! two incompatible `common-cxx` builds together), so the IP Intelligence
-//! wrapper makes its evidence array with its own copy's functions. It reads
-//! each client IP value with [`parse_client_ip`].
+//! compiles its own copy of the common C library with wider file offsets and
+//! must not use the `fiftyone-common-sys` evidence functions (doing so would
+//! bind the two incompatible common C library builds together), so the IP
+//! Intelligence wrapper makes its evidence array with its own copy's functions.
+//! It reads each client IP value with [`parse_client_ip`].
 
 #[cfg(feature = "dd")]
 use std::cell::RefCell;
@@ -80,12 +80,13 @@ use fiftyone_pipeline_core::Evidence;
 ///
 /// The native [`fiftyoneDegreesEvidenceAddString`] takes the prefix as the enum
 /// argument and the bare field name as the key, NOT the full `prefix.field`
-/// pipeline key (see the device-detection-cxx examples, which add evidence keyed
-/// on `"user-agent"`, `"sec-ch-ua-mobile"` and so on). The native matcher then
-/// compares that key against the data set header names. Passing the whole
-/// pipeline key, prefix included, makes every header comparison miss, so the
-/// detection reads no values. The field part returned here is therefore the
-/// substring after the first separator, which is what the native key must be.
+/// pipeline key (see the device detection examples in 51degrees-cxx, which add
+/// evidence keyed on `"user-agent"`, `"sec-ch-ua-mobile"` and so on). The
+/// native matcher then compares that key against the data set header names.
+/// Passing the whole pipeline key, prefix included, makes every header
+/// comparison miss, so the detection reads no values. The field part returned
+/// here is therefore the substring after the first separator, which is what the
+/// native key must be.
 ///
 /// Only Device Detection builds a native evidence array, so this is gated behind
 /// the `dd` feature alongside the `fiftyone-common-sys` prefix type it returns.

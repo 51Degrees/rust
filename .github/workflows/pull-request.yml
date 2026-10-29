@@ -4,16 +4,11 @@ name: Pull Request
 # Windows, Linux and macOS (Intel and Apple Silicon). This is the primary gate
 # for every pull request and every push to main. It replaces the earlier ci.yml.
 #
-# The workspace links the 51Degrees C/C++ sources through three -sys crates
-# (common-sys, device-detection-sys, ip-intelligence-sys). This workflow builds
-# them from the copies vendored under <crate>/vendor, because those are what the
-# published crates compile. Building against the current upstream checkouts is
-# the job of vendored-c-drift.yml.
-#
-# The device-detection-cxx and ip-intelligence-cxx checkouts below supply only
-# the on-premise data files and the evidence the examples read. They are taken
-# at the commits recorded in each vendor/UPSTREAM.txt, so the data is always in
-# a format the vendored sources read.
+# The workspace links the 51Degrees C sources through three -sys crates
+# (common-sys, device-detection-sys, ip-intelligence-sys), whose build scripts
+# compile them from the cxx submodule. The data submodules inside cxx supply
+# the on-premise data files and the evidence the examples read, at the commits
+# the C sources were tested with.
 
 on:
   push:
@@ -53,69 +48,35 @@ jobs:
         os: [windows-latest, ubuntu-22.04, ubuntu-24.04, macos-latest]
 
     steps:
-      # 1. The Rust workspace itself.
+      # 1. The Rust workspace with its submodules, recursively, so the cxx
+      #    submodule brings its data submodules with it.
       - name: Checkout workspace
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2. The commits the vendored C sources were taken from.
-      - name: Read the vendored C commits
-        id: vendored
+      # 2. The data files are stored in Git LFS inside the data submodules.
+      #    actions/checkout brings the submodule pointers down but not their LFS
+      #    content, so fetch it explicitly. Without the real files the native
+      #    loader reads a pointer and reports CorruptData.
+      - name: Fetch LFS data for the cxx submodule
         shell: bash
-        run: |
-          echo "device-detection=$(sed -n 's/^commit=//p' device-detection-sys/vendor/UPSTREAM.txt)" >> "$GITHUB_OUTPUT"
-          echo "ip-intelligence=$(sed -n 's/^commit=//p' ip-intelligence-sys/vendor/UPSTREAM.txt)" >> "$GITHUB_OUTPUT"
+        run: git -C cxx submodule foreach --recursive 'git lfs install --local && git lfs pull'
 
-      # 2a. The C repositories at those commits, for their data submodules (the
-      #     Lite .hash file, the ASN .ipi file and the evidence records the
-      #     examples read). The -sys crates still compile their vendored copies,
-      #     because no override variable points them anywhere else.
-      - name: Checkout device-detection-cxx
-        uses: actions/checkout@v4
-        with:
-          repository: 51Degrees/device-detection-cxx
-          ref: ${{ steps.vendored.outputs.device-detection }}
-          path: cxx/device-detection-cxx
-          submodules: recursive
-
-      - name: Checkout ip-intelligence-cxx
-        uses: actions/checkout@v4
-        with:
-          repository: 51Degrees/ip-intelligence-cxx
-          ref: ${{ steps.vendored.outputs.ip-intelligence }}
-          path: cxx/ip-intelligence-cxx
-          submodules: recursive
-
-      # 2b. The data files are stored in Git LFS inside the *-data submodules.
-      #     actions/checkout brings the submodule pointers down but not their LFS
-      #     content, so fetch it explicitly, recursing into the submodules.
-      #     Without the real files the native loader reads a pointer and reports
-      #     CorruptData.
-      - name: Fetch LFS data for the cxx checkouts
-        shell: bash
-        run: |
-          for d in cxx/device-detection-cxx cxx/ip-intelligence-cxx; do
-            git -C "$d" lfs install --local
-            git -C "$d" lfs pull
-            git -C "$d" submodule foreach --recursive 'git lfs install --local && git lfs pull'
-          done
-
-      # 3. Point the on-premise tests at the data files the checkouts carry,
-      #    which they otherwise look for beside the workspace and skip when they
-      #    do not find them. GITHUB_WORKSPACE is the absolute path the
-      #    actions/checkout paths above are relative to. Setting these in
-      #    GITHUB_ENV makes them available to every later step in this job. A
-      #    data file that is missing, or is still a Git LFS pointer, fails the
-      #    job here, because the tests would skip without it.
+      # 3. Point the on-premise tests at the data files the cxx submodule
+      #    carries, which they otherwise look for in the workspace and skip
+      #    when they do not find them. Setting these in GITHUB_ENV makes them
+      #    available to every later step in this job. A data file that is
+      #    missing, or is still a Git LFS pointer, fails the job here, because
+      #    the tests would skip without it.
       - name: Configure data files
         shell: bash
         run: |
-          echo "51DEGREES_DD_PATH=${GITHUB_WORKSPACE}/cxx/device-detection-cxx/device-detection-data/51Degrees-LiteV4.1.hash" >> "$GITHUB_ENV"
-          echo "51DEGREES_IPI_PATH=${GITHUB_WORKSPACE}/cxx/ip-intelligence-cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi" >> "$GITHUB_ENV"
+          echo "51DEGREES_DD_PATH=${GITHUB_WORKSPACE}/cxx/device-detection-data/51Degrees-LiteV4.1.hash" >> "$GITHUB_ENV"
+          echo "51DEGREES_IPI_PATH=${GITHUB_WORKSPACE}/cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi" >> "$GITHUB_ENV"
           for file in \
-            "${GITHUB_WORKSPACE}/cxx/device-detection-cxx/device-detection-data/51Degrees-LiteV4.1.hash" \
-            "${GITHUB_WORKSPACE}/cxx/ip-intelligence-cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi"; do
+            "${GITHUB_WORKSPACE}/cxx/device-detection-data/51Degrees-LiteV4.1.hash" \
+            "${GITHUB_WORKSPACE}/cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi"; do
             if [ ! -f "$file" ] || head -c 64 "$file" | grep -q 'git-lfs'; then
               echo "::error::$file is missing or is a Git LFS pointer, so the on-premise tests would skip"
               exit 1
@@ -167,10 +128,10 @@ jobs:
       - name: cargo build
         run: cargo build --workspace --all-targets
 
-      # Device Detection and IP Intelligence each compile a copy of common-cxx.
-      # A common-cxx function the IP Intelligence renaming header misses would
-      # be defined by both libraries and bound to one of them.
-      - name: Check the two common-cxx copies share no symbol
+      # Device Detection and IP Intelligence each compile a copy of the common C
+      # library. A common C library function the IP Intelligence renaming header
+      # misses would be defined by both libraries and bound to one of them.
+      - name: Check the two common C library copies share no symbol
         shell: pwsh
         run: ./ci/check-native-symbols.ps1
 

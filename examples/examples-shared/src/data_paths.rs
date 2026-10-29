@@ -37,19 +37,19 @@ pub const DD_PATH_ENV_VAR: &str = "51DEGREES_DD_PATH";
 /// The environment variable giving an explicit IP Intelligence data-file path.
 pub const IPI_PATH_ENV_VAR: &str = "51DEGREES_IPI_PATH";
 
-/// The Lite Device Detection data file shipped in `device-detection-cxx`.
+/// The Lite Device Detection data file in the `cxx` submodule.
 pub const DD_LITE_RELATIVE_PATH: &str =
-    "device-detection-cxx/device-detection-data/51Degrees-LiteV4.1.hash";
+    "cxx/device-detection-data/51Degrees-LiteV4.1.hash";
 
 /// The ASN IP Intelligence data file checked into the `ip-intelligence-data`
-/// repository (resolved through a sibling `ip-intelligence-cxx` checkout).
+/// repository (resolved through the `cxx` submodule).
 ///
 /// As the data file committed to the repository it loads against the current
 /// native library and is the convenient default for quick tests and CI. A full
 /// IP Intelligence data file is obtained from the data repository (see its
 /// README) when richer properties are needed.
 pub const IPI_ASN_RELATIVE_PATH: &str =
-    "ip-intelligence-cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi";
+    "cxx/ip-intelligence-data/51Degrees-IPIV4AsnIpiV41.ipi";
 
 /// The Enterprise IP Intelligence data-file name on the Enterprise share.
 pub const IPI_ENTERPRISE_FILE_NAME: &str = "51Degrees-IPIV4EnterpriseIpiV41.ipi";
@@ -84,7 +84,7 @@ pub enum IpiTier {
 ///
 /// Checks [`DD_PATH_ENV_VAR`] first and returns its value when set to a non-blank
 /// path. Otherwise walks up the directory tree with [`crate::find_file`] looking
-/// for [`DD_LITE_RELATIVE_PATH`] in a sibling `device-detection-cxx` checkout.
+/// for [`DD_LITE_RELATIVE_PATH`] in the `cxx` submodule.
 /// Returns `None` if neither is available.
 pub fn dd_data_path() -> Option<PathBuf> {
     if let Some(path) = env_path(DD_PATH_ENV_VAR) {
@@ -104,8 +104,8 @@ pub fn dd_data_path() -> Option<PathBuf> {
 ///   configured share if it is reachable, and otherwise the ASN file.
 /// - [`IpiTier::Enterprise`] returns the latest Enterprise file, or `None` when
 ///   the share is unreachable.
-/// - [`IpiTier::Asn`] returns the ASN file located in a sibling
-///   `ip-intelligence-cxx` checkout.
+/// - [`IpiTier::Asn`] returns the ASN file located in the
+///   `cxx` submodule.
 ///
 /// Returns `None` when no file for the requested tier can be located.
 pub fn ipi_data_path(tier: IpiTier) -> Option<PathBuf> {
@@ -221,8 +221,8 @@ mod tests {
     fn default_tier_picks_a_loadable_file() {
         // With no explicit path and (in CI/local) no reachable Enterprise share,
         // BestAvailable must fall back to the ASN file, which is the small,
-        // current, reliable default checked into the repository. The sibling
-        // ip-intelligence-cxx checkout holds the ASN file, so this resolves when
+        // current, reliable default checked into the repository. The cxx
+        // submodule holds the ASN file, so this resolves when
         // the test runs inside the workspace.
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var(IPI_PATH_ENV_VAR);

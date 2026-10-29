@@ -31,10 +31,10 @@
 //! [`Results::process_evidence`] looks up the client IP through the native
 //! evidence entry point. It reads the evidence keys the data file defines, in
 //! the order the native lookup tries them, and passes on every value it can
-//! read as an IP address. The engine links its own copy of the shared
-//! `common-cxx` sources built with wide file offsets, which is ABI incompatible
-//! with the copy `fiftyone-common-sys` builds, so the native evidence array is
-//! made with that copy's functions in `fiftyone-ip-intelligence-sys`. Values are
+//! read as an IP address. The engine links its own copy of the shared common C
+//! library sources built with wide file offsets, which is ABI incompatible with
+//! the copy `fiftyone-common-sys` builds, so the native evidence array is made
+//! with that copy's functions in `fiftyone-ip-intelligence-sys`. Values are
 //! read by name into the same reusable per-thread buffer the Device Detection
 //! wrapper uses.
 //!
@@ -73,7 +73,8 @@ use crate::profile::PerformanceProfile;
 use crate::status::{status_name, status_to_result, NativeException, NativeStatus};
 
 // ---------------------------------------------------------------------------
-// Status and exception trait wiring for the IP Intelligence common-cxx build
+// Status and exception trait wiring for the IP Intelligence common C library
+// build
 // ---------------------------------------------------------------------------
 
 impl NativeStatus for sys::StatusCode {
@@ -169,7 +170,7 @@ struct EvidenceKey {
 }
 
 // Safety: the native resource manager is internally reference counted and lock
-// protected per `common-cxx/resource.h`, so a shared `&Manager` is sound to use
+// protected per `src/common/resource.h`, so a shared `&Manager` is sound to use
 // from several threads, and the file read permits are lock protected.
 // Therefore the manager is both `Send` and `Sync`.
 unsafe impl Send for Manager {}
@@ -1001,7 +1002,7 @@ mod tests {
     use std::path::PathBuf;
 
     /// Resolve an IP Intelligence data file at run time, searching the
-    /// environment override, a sibling `ip-intelligence-cxx` checkout and the
+    /// environment override, the `cxx` submodule and the
     /// wider Workspace tree. Returns [`None`] when none is present so the smoke
     /// tests can skip cleanly.
     ///
@@ -1021,7 +1022,7 @@ mod tests {
         let name = "51Degrees-IPIV4AsnIpiV41.ipi";
         let candidates = [
             workspace
-                .join("ip-intelligence-cxx")
+                .join("cxx")
                 .join("ip-intelligence-data")
                 .join(name),
             workspace

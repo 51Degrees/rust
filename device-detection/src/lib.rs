@@ -779,8 +779,8 @@ mod tests {
         use fiftyone_pipeline_core::Evidence;
 
         // Resolve the Lite Hash data file. Honour an explicit override first,
-        // then fall back to the location it sits at in the checked-out
-        // device-detection-cxx submodule next to the workspace. Skip (not fail)
+        // then fall back to the location it sits at in the
+        // cxx submodule at the root of the workspace. Skip (not fail)
         // only when the file is genuinely absent, so CI without the data file is
         // green while a developer with it gets real coverage.
         let Some(data_file) = resolve_dd_data_file() else {
@@ -839,13 +839,13 @@ mod tests {
         }
 
         // 2. Walk up from the crate directory looking for the data file in a
-        //    sibling device-detection-cxx checkout. The crate lives at
+        //    cxx submodule. The crate lives at
         //    <workspace>/device-detection, and the data file at
-        //    <workspace-parent>/device-detection-cxx/device-detection-data/...
+        //    <workspace-parent>/cxx/device-detection-data/...
         let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         loop {
             let candidate = dir
-                .join("device-detection-cxx")
+                .join("cxx")
                 .join("device-detection-data")
                 .join("51Degrees-LiteV4.1.hash");
             if candidate.is_file() {

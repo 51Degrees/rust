@@ -731,7 +731,7 @@ fn native_value(raw: &str, value_type: PropertyValueType) -> Option<PropertyValu
 const JAVASCRIPT_HARDWARE_PROFILE: &str = "JavascriptHardwareProfile";
 
 /// Turn the stored `JavascriptHardwareProfile` body into the script the client
-/// runs, as the device-detection-cxx C++ results wrapper does.
+/// runs, as the C++ results wrapper in 51degrees-cxx does.
 ///
 /// The stored body pushes the profile ids it finds onto a `profileIds` array
 /// that it does not declare, and does not send them anywhere. The wrapper

@@ -33,7 +33,7 @@ use fiftyone_pipeline_core::{Evidence, Pipeline};
 
 /// The relative path to the IP-intelligence evidence file in the data submodule.
 /// `examples_shared::find_file` walks up the tree to locate it.
-const IPI_EVIDENCE_RELATIVE_PATH: &str = "ip-intelligence-cxx/ip-intelligence-data/evidence.yml";
+const IPI_EVIDENCE_RELATIVE_PATH: &str = "cxx/ip-intelligence-data/evidence.yml";
 
 /// How many distinct IP addresses to load and replay per benchmark iteration.
 /// A few hundred is enough to amortise per-iteration overhead while keeping each
@@ -127,7 +127,7 @@ fn ipi_onprem_throughput(c: &mut Criterion) {
     let Some(data_file) = examples_shared::ipi_data_path(examples_shared::IpiTier::Asn) else {
         eprintln!(
             "skipping ipi_onprem_throughput: no ASN IP Intelligence data file found \
-             (set {} or check out the ip-intelligence-cxx submodule)",
+             (set {} or check out the cxx submodule)",
             examples_shared::IPI_PATH_ENV_VAR
         );
         return;
@@ -135,7 +135,7 @@ fn ipi_onprem_throughput(c: &mut Criterion) {
     let Some(evidence_file) = examples_shared::find_file(IPI_EVIDENCE_RELATIVE_PATH) else {
         eprintln!(
             "skipping ipi_onprem_throughput: '{IPI_EVIDENCE_RELATIVE_PATH}' not found \
-             (check out the ip-intelligence-cxx submodule)"
+             (check out the cxx submodule)"
         );
         return;
     };

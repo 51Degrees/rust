@@ -47,9 +47,9 @@ path, so cloud-only users and most of CI build without a C compiler.
 
 | Crate | Responsibility |
 |-------|----------------|
-| [`fiftyone-common-sys`](common-sys) | Raw FFI bindings to common-cxx: ResourceManager, Evidence, Exception, StatusCode and result buffers. |
-| [`fiftyone-device-detection-sys`](device-detection-sys) | Raw FFI bindings to the Hash device-detection ABI in device-detection-cxx, built on fiftyone-common-sys. |
-| [`fiftyone-ip-intelligence-sys`](ip-intelligence-sys) | Raw FFI bindings to the Ipi ABI in ip-intelligence-cxx, including the weighted getters. Compiles its own common-cxx into an `ipi_*` symbol namespace so it can co-link with device-detection (see ARCHITECTURE.md). |
+| [`fiftyone-common-sys`](common-sys) | Raw FFI bindings to the 51Degrees common C library: ResourceManager, Evidence, Exception, StatusCode and result buffers. |
+| [`fiftyone-device-detection-sys`](device-detection-sys) | Raw FFI bindings to the Hash device-detection ABI in the 51Degrees C library, built on fiftyone-common-sys. |
+| [`fiftyone-ip-intelligence-sys`](ip-intelligence-sys) | Raw FFI bindings to the Ipi ABI in the 51Degrees C library, including the weighted getters. Compiles its own copy of the common C library into an `ipi_*` symbol namespace so it can co-link with device-detection (see ARCHITECTURE.md). |
 | [`fiftyone-native`](native) | Safe RAII wrapper over the native manager, results, evidence and exception types, shared by both products. |
 
 ### Device Detection

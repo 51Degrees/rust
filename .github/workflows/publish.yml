@@ -43,8 +43,11 @@ jobs:
       id-token: write
     steps:
       # The owid-rust submodule holds the OWID source that ci/copy-owid-source.ps1
-      # compiles into fodid. The copy is ignored by git and listed in the fodid
-      # manifest's include, so cargo publish packages it with the crate.
+      # compiles into fodid, and the cxx submodule holds the C sources that
+      # ci/copy-cxx-sources.ps1 copies into the -sys crates. Each copy is
+      # ignored by git and listed in its crate manifest's include, so cargo
+      # publish packages it with the crate. The data submodules inside cxx are
+      # not needed to publish, so the checkout is not recursive.
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -117,6 +120,9 @@ jobs:
       - name: Copy the OWID source into fodid
         shell: pwsh
         run: ./ci/copy-owid-source.ps1
+      - name: Copy the C sources into the -sys crates
+        shell: pwsh
+        run: ./ci/copy-cxx-sources.ps1
       # The examples are built and tested against these crates at the version
       # being released, as the other languages test their examples against the
       # package they are about to publish. A failure here stops the release.

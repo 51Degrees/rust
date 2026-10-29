@@ -687,7 +687,7 @@ mod tests {
     const ASN_PROPERTIES: &[&str] = &["Asn", "AsnName"];
 
     /// Resolve an IP-intelligence data file at run time, searching the
-    /// environment override, the sibling `ip-intelligence-cxx` checkout and the
+    /// environment override, the `cxx` submodule and the
     /// wider Workspace tree. Returns [`None`] when none is present so the tests
     /// can skip cleanly only on a machine without the data file.
     ///
@@ -706,22 +706,13 @@ mod tests {
             .parent()?
             .to_path_buf();
         let name = "51Degrees-IPIV4AsnIpiV41.ipi";
-        // The data file lives in an `ip-intelligence-cxx` checkout. It may sit
-        // beside the Rust workspace, or one level up alongside it in the wider
-        // Workspace tree, so check both layouts.
+        // The data file lives in the `cxx` submodule, or directly in the wider
+        // Workspace tree beside the Rust workspace.
         let candidates = [
             workspace
-                .join("ip-intelligence-cxx")
+                .join("cxx")
                 .join("ip-intelligence-data")
                 .join(name),
-            workspace
-                .parent()
-                .map(|p| {
-                    p.join("ip-intelligence-cxx")
-                        .join("ip-intelligence-data")
-                        .join(name)
-                })
-                .unwrap_or_default(),
             workspace
                 .parent()
                 .map(|p| p.join("ip-intelligence-data").join(name))

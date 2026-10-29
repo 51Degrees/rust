@@ -2,7 +2,7 @@
 
 # 51Degrees Common Sys
 
-Raw Foreign Function Interface (FFI) bindings to common-cxx: ResourceManager, Evidence, Exception, StatusCode and result buffers.
+Raw Foreign Function Interface (FFI) bindings to the 51Degrees common C library: ResourceManager, Evidence, Exception, StatusCode and result buffers.
 
 This crate is part of the [51Degrees](https://51degrees.com/?utm_source=github&utm_medium=readme&utm_campaign=rust&utm_content=fiftyone-common-sys-readme.md&utm_term=introduction) Rust solution for high-performance
 device detection and IP intelligence, available both on-premise from a local

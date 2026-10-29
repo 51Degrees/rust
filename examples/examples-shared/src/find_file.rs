@@ -42,7 +42,7 @@ pub const MAX_PARENT_LEVELS: usize = 20;
 /// bare filename rather than a relative path.
 ///
 /// The example data files sit one or two directories below a common ancestor
-/// (for example `device-detection-cxx/device-detection-data/<file>`), so a
+/// (for example `cxx/device-detection-data/<file>`), so a
 /// shallow scan finds them without the cost of a full recursive descent of large
 /// sibling repositories.
 pub const MAX_DESCENT_DEPTH: usize = 3;
@@ -60,7 +60,7 @@ pub const MAX_DIRECTORIES_SCANNED: usize = 4096;
 ///
 /// `name` may be either a bare filename (for example
 /// `"51Degrees-LiteV4.1.hash"`) or a relative path (for example
-/// `"device-detection-cxx/device-detection-data/51Degrees-LiteV4.1.hash"`).
+/// `"cxx/device-detection-data/51Degrees-LiteV4.1.hash"`).
 ///
 /// Starting at the current working directory and climbing through up to
 /// [`MAX_PARENT_LEVELS`] ancestors, each ancestor is checked for `name`:

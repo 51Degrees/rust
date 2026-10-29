@@ -66,9 +66,10 @@ examples        examples-shared, device-detection-examples,
   the element has to run where there is no filesystem.
 - **sys / native FFI** (`fiftyone-common-sys`,
   `fiftyone-device-detection-sys`, `fiftyone-ip-intelligence-sys`,
-  `fiftyone-native`). Raw `extern "C"` bindings to the native common-cxx,
-  device-detection-cxx and ip-intelligence-cxx libraries, plus a safe RAII
-  wrapper shared by both products. This native path builds in parallel to the
+  `fiftyone-native`). Raw `extern "C"` bindings to the native common,
+  device detection and IP Intelligence C libraries in the `cxx` submodule
+  (51degrees-cxx), plus a safe RAII wrapper shared by both products. This
+  native path builds in parallel to the
   pure-Rust path and rejoins at the on-premise wrappers.
 - **products: shared / on-prem / cloud** (`*-shared`, `*-onpremise`, `*-cloud`
   for both device-detection and ip-intelligence). The product data traits with
@@ -103,20 +104,20 @@ build without a C toolchain. Cargo features gate the native path. The
 
 ## Native co-link symbol-namespacing
 
-Device Detection and IP Intelligence each embed their own copy of `common-cxx`,
-the shared C base layer. When both on-premise engines are linked into one
-binary (which the workspace supports, so a single program can do DD and IPI),
-those two copies define the same `common-cxx` symbols and the linker sees a
-duplicate-symbol collision.
+Device Detection and IP Intelligence each embed their own copy of the common
+C library (`src/common` in 51degrees-cxx), the shared C base layer. When both
+on-premise engines are linked into one binary (which the workspace supports, so
+a single program can do DD and IPI), those two copies define the same common
+symbols and the linker sees a duplicate-symbol collision.
 
 The fix is applied entirely on the IP Intelligence side, so Device Detection is
 untouched. `fiftyone-ip-intelligence-sys` force-includes a header
 (`src/symbol_prefix.h`) into every C and C++ translation unit it compiles, via
 `/FI` on MSVC and `-include` on the GNU and Clang drivers. That header renames
-this crate's private `common-cxx` symbols to an `ipi_*` namespace at preprocess
+this crate's private common symbols to an `ipi_*` namespace at preprocess
 time, so both the definitions compiled here and every call site that references
 them are renamed together. Device Detection keeps the unprefixed names. The two
-copies of `common-cxx` therefore no longer collide.
+copies of the common library therefore no longer collide.
 
 On the Rust side, the affected FFI declarations bind to the prefixed names with
 `#[link_name = "ipi_..."]` (for example `ipi_fiftyoneDegreesResourceManagerFree`
@@ -129,8 +130,8 @@ The IP Intelligence data files come in two tiers. The example data-path
 resolver in `examples-shared` (`ipi_data_path(IpiTier)`) encodes the strategy:
 
 - **ASN** (`51Degrees-IPIV4AsnIpiV41.ipi`). Small, current and checked into the
-  `ip-intelligence-data` repository (resolved through the `ip-intelligence-cxx`
-  checkout). It loads against the current native library and is the default
+  `ip-intelligence-data` repository (checked out inside the `cxx`
+  submodule). It loads against the current native library and is the default
   offline tier, suitable for quick tests.
 - **Enterprise** (`51Degrees-IPIV4EnterpriseIpiV41.ipi`, on the dated production
   UNC share). The full-accuracy file, reachable only from the 51Degrees network.
