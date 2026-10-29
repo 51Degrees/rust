@@ -4,7 +4,7 @@ Publishes every crate to crates.io for common-ci's shared publish.
 
 .DESCRIPTION
 Checks out the commit the packages were built from, writes the version into
-every crate and copies the OWID source, then publishes each crate in
+every crate and copies the OWID and C sources, then publishes each crate in
 ci/crates.txt in order.
 
 A crate whose version the crates.io index already lists is skipped, and one
@@ -149,6 +149,7 @@ rustup default stable
 
 & "$repo/ci/set-crate-versions.ps1" -Version $Version
 & "$repo/ci/copy-owid-source.ps1"
+& "$repo/ci/copy-cxx-sources.ps1"
 
 $crates = @(Get-Content -Path "$repo/ci/crates.txt" | Where-Object { $_ -notmatch '^\s*(#|$)' })
 Push-Location $repo
@@ -171,8 +172,8 @@ try {
         $token = Get-PublishToken
         try {
             $env:CARGO_REGISTRY_TOKEN = $token
-            # --allow-dirty, because the version and the OWID copy are written
-            # into the tree on the build machine and never committed.
+            # --allow-dirty, because the version and the source copies are
+            # written into the tree on the build machine and never committed.
             cargo publish -p $crate --allow-dirty
         } finally {
             Remove-Item -Path Env:CARGO_REGISTRY_TOKEN -ErrorAction SilentlyContinue

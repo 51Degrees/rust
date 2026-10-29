@@ -39,13 +39,15 @@ The publish stage calls:
   version tags and otherwise works the version out from the tags with
   common-ci's GitVersion rules.
 - `ci/build-package.ps1`, which writes the version into every crate, copies the
-  OWID source into `fodid`, tests the examples against the crates at that
-  version and packages every crate in `ci/crates.txt` into `package/`, with the
-  commit it built.
+  OWID source into `fodid` and the C sources into the `-sys` crates, tests the
+  examples against the crates at that version and packages every crate in
+  `ci/crates.txt` into `package/`, with the commit it built.
 - `ci/install-package.ps1`, which has nothing to do.
-- `ci/publish-package.ps1`, which publishes each crate from that commit in
-  `ci/crates.txt` order, through crates.io Trusted Publishing, waiting for the
-  crates.io index to list each version before the next crate.
+- `ci/publish-package.ps1`, which writes the version and copies the OWID and C
+  sources again, because `cargo publish` packages each crate afresh from the
+  tree, then publishes each crate from that commit in `ci/crates.txt` order,
+  through crates.io Trusted Publishing, waiting for the crates.io index to list
+  each version before the next crate.
 
 The shared publish then tags the release and creates its GitHub release.
 `.github/workflows/publish.yml` runs the same publish by hand, and is the only

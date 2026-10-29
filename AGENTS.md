@@ -102,7 +102,8 @@ publish works it out from the release tags with GitVersion and common-ci's
 `GitVersion.yml`, which gives `main` the next plain patch, such as 4.5.10 after
 4.5.9, and refuses a major or minor move unless a person dispatches
 `publish.yml` with `allow-version-bump`. The `ci/*.ps1` publish hooks write
-the version into every manifest on the build machine, test the examples
+the version into every manifest on the build machine, copy the OWID source
+into `fodid` and the C sources into the `-sys` crates, test the examples
 against the crates at that version, package every crate, and publish each to
 crates.io in dependency order, skipping any version already published and
 waiting for the crates.io index to list each one before the next. The shared
