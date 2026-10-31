@@ -379,7 +379,7 @@ mod tests {
  * It shows how to:
  *
  * 1. Build an on-premise IP Intelligence pipeline tuned for throughput with the
- *    `HighPerformance` profile. The other profiles (InMemory, LowMemory,
+ *    `InMemory` profile. The other profiles (HighPerformance, LowMemory,
  *    Balanced, Default) are documented inline so they can be swapped in to
  *    compare their memory/speed trade-offs.
  * 2. Load a set of IP addresses from the evidence file in the data submodule.
