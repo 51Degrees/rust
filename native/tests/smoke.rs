@@ -767,7 +767,20 @@ mod ip_intelligence {
         let every_property = ipi::Manager::open(&data_file, PerformanceProfile::LowMemory)
             .expect("the data file should load");
         let names = every_property.available_property_names();
-        assert!(!names.is_empty(), "the data file should have properties");
+        // Lists agreeing only because nothing has a value would prove nothing.
+        let answered = names
+            .iter()
+            .filter(|name| {
+                answers(&every_property, name)
+                    .iter()
+                    .any(|(value, _)| value.as_deref().is_some_and(|value| !value.is_empty()))
+            })
+            .count();
+        eprintln!(
+            "{answered} of {} properties have an answer to compare",
+            names.len()
+        );
+        assert!(answered > 0, "the compared addresses should have answers");
 
         let mut lists: Vec<Vec<&str>> = names.iter().map(|name| vec![name.as_str()]).collect();
         lists.push(vec![names[0].as_str(), names[names.len() - 1].as_str()]);
