@@ -615,6 +615,7 @@ mod device_detection {
 #[cfg(feature = "ipi")]
 mod ip_intelligence {
     use super::ipi_data_file;
+    use fiftyone_native::ipi::PropertyRead;
     use fiftyone_native::{ipi, PerformanceProfile};
     use fiftyone_pipeline_core::{Error, Evidence};
 
@@ -720,6 +721,81 @@ mod ip_intelligence {
         std::fs::remove_file(&not_data).ok();
     }
 
+    /// The addresses whose answers are compared, in both families, including
+    /// one that no public range holds.
+    const COMPARED_ADDRESSES: [&str; 5] = [
+        "1.1.1.1",
+        "8.8.8.8",
+        "185.28.167.77",
+        "2001:4860:4860::8888",
+        "10.0.0.1",
+    ];
+
+    /// What a caller can read of a property for each compared address.
+    fn answers(
+        manager: &std::sync::Arc<ipi::Manager>,
+        property: &str,
+    ) -> Vec<(Option<String>, PropertyRead)> {
+        COMPARED_ADDRESSES
+            .iter()
+            .map(|address| {
+                let mut results = manager.create_results().expect("results should allocate");
+                results
+                    .process_ip(address)
+                    .expect("looking up an address should not raise an exception");
+                (
+                    results
+                        .value_as_string(property, "|")
+                        .expect("reading a value should not error"),
+                    results
+                        .read_property(property)
+                        .expect("reading a property should not error"),
+                )
+            })
+            .collect()
+    }
+
+    /// Naming properties can change how a profile reads the data file, and
+    /// never an answer. Each list is read under each profile and compared with
+    /// a data set holding every property.
+    #[test]
+    fn naming_properties_keeps_the_answers_under_every_profile() {
+        let Some(data_file) = ipi_data_file() else {
+            eprintln!("no IP Intelligence data file found; skipping named properties test");
+            return;
+        };
+        let every_property = ipi::Manager::open(&data_file, PerformanceProfile::LowMemory)
+            .expect("the data file should load");
+        let names = every_property.available_property_names();
+        assert!(!names.is_empty(), "the data file should have properties");
+
+        let mut lists: Vec<Vec<&str>> = names.iter().map(|name| vec![name.as_str()]).collect();
+        lists.push(vec![names[0].as_str(), names[names.len() - 1].as_str()]);
+        lists.push(names.iter().map(String::as_str).collect());
+
+        for profile in [
+            PerformanceProfile::Default,
+            PerformanceProfile::Balanced,
+            PerformanceProfile::LowMemory,
+            PerformanceProfile::HighPerformance,
+            PerformanceProfile::InMemory,
+        ] {
+            for list in &lists {
+                let manager =
+                    ipi::Manager::open_with_properties(&data_file, profile, Some(list.as_slice()))
+                        .unwrap_or_else(|err| {
+                            panic!("{profile:?} naming {list:?} should load: {err}")
+                        });
+                for name in list {
+                    assert_eq!(
+                        answers(&manager, name),
+                        answers(&every_property, name),
+                        "{profile:?} naming {list:?}, reading {name}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// The proof that Device Detection and IP Intelligence coexist in one binary.
