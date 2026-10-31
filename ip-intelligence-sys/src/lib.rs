@@ -370,6 +370,21 @@ pub mod common {
         #[link_name = "ipi_fiftyoneDegreesExceptionGetMessage"]
         pub fn fiftyoneDegreesExceptionGetMessage(exception: *mut Exception) -> *const c_char;
 
+        /// Returns a newly allocated English message describing the status,
+        /// naming the file when the message is about one. Free the returned
+        /// pointer with [`fiftyoneDegreesFree`].
+        ///
+        /// The native symbol is `ipi_`-prefixed for the same reason as
+        /// [`fiftyoneDegreesExceptionGetMessage`] above.
+        ///
+        /// # Safety
+        /// `file_name` must be a valid null terminated string or null.
+        #[link_name = "ipi_fiftyoneDegreesStatusGetMessage"]
+        pub fn fiftyoneDegreesStatusGetMessage(
+            status: StatusCode,
+            file_name: *const c_char,
+        ) -> *const c_char;
+
         /// Frees memory through the C runtime's `free`, which is how the
         /// library frees memory unless its allocator has been replaced. Release
         /// what the library allocates with [`fiftyoneDegreesFree`] instead,

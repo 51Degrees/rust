@@ -123,7 +123,7 @@ fn ipi_data_file() -> Option<PathBuf> {
 mod device_detection {
     use super::dd_lite_data_file;
     use fiftyone_native::{dd, PerformanceProfile};
-    use fiftyone_pipeline_core::Evidence;
+    use fiftyone_pipeline_core::{Error, Evidence};
     use std::sync::Arc;
 
     /// A representative desktop Chrome on Windows user agent.
@@ -373,6 +373,28 @@ mod device_detection {
         assert_ne!(device_id(Some(&["IsMobile"])), every_property);
     }
 
+    /// A data file that can't be used is named in the error, so the caller can
+    /// see which one.
+    #[test]
+    fn a_failed_load_names_the_data_file() {
+        let directory = std::env::temp_dir();
+        let missing = directory.join("fiftyone-native-smoke-dd-missing.hash");
+        let not_data = directory.join("fiftyone-native-smoke-dd-not-data.hash");
+        std::fs::write(&not_data, vec![7u8; 64 * 1024]).expect("a temporary file");
+
+        for file in [&missing, &not_data] {
+            let name = file.file_name().unwrap().to_string_lossy();
+            match dd::Manager::open(file, PerformanceProfile::Default) {
+                Err(Error::Native { message, .. }) => {
+                    assert!(message.contains(&*name), "{name} is not in {message:?}");
+                }
+                Err(other) => panic!("{name} gave another kind of error: {other}"),
+                Ok(_) => panic!("{name} should not load"),
+            }
+        }
+        std::fs::remove_file(&not_data).ok();
+    }
+
     /// Evidence the engine expands during processing (a high-entropy values
     /// blob, which it turns into client hint headers) and client-side
     /// override values are accepted, and the pooled evidence array can be
@@ -594,7 +616,7 @@ mod device_detection {
 mod ip_intelligence {
     use super::ipi_data_file;
     use fiftyone_native::{ipi, PerformanceProfile};
-    use fiftyone_pipeline_core::Evidence;
+    use fiftyone_pipeline_core::{Error, Evidence};
 
     /// Open the IP Intelligence data file through the safe API. Both products are
     /// linked in this binary and now coexist, and the resolved ASN file matches
@@ -675,6 +697,29 @@ mod ip_intelligence {
             "evidence with no client IP should be an error"
         );
     }
+
+    /// A data file that can't be used is named in the error, so the caller can
+    /// see which one.
+    #[test]
+    fn a_failed_load_names_the_data_file() {
+        let directory = std::env::temp_dir();
+        let missing = directory.join("fiftyone-native-smoke-ipi-missing.ipi");
+        let not_data = directory.join("fiftyone-native-smoke-ipi-not-data.ipi");
+        std::fs::write(&not_data, vec![7u8; 64 * 1024]).expect("a temporary file");
+
+        for file in [&missing, &not_data] {
+            let name = file.file_name().unwrap().to_string_lossy();
+            match ipi::Manager::open(file, PerformanceProfile::Default) {
+                Err(Error::Native { message, .. }) => {
+                    assert!(message.contains(&*name), "{name} is not in {message:?}");
+                }
+                Err(other) => panic!("{name} gave another kind of error: {other}"),
+                Ok(_) => panic!("{name} should not load"),
+            }
+        }
+        std::fs::remove_file(&not_data).ok();
+    }
+
 }
 
 /// The proof that Device Detection and IP Intelligence coexist in one binary.
