@@ -230,6 +230,149 @@ mod device_detection {
         assert_eq!(value.as_deref(), Some("True"));
     }
 
+    /// The longest header the default configuration uses, in bytes.
+    const HEADER_LIMIT: usize = 500;
+
+    /// The mobile User-Agent padded to `length` bytes. The padding does not
+    /// change the match, so only the length can change the result.
+    fn padded_user_agent(length: usize) -> String {
+        format!("{MOBILE_USER_AGENT:x<length$}")
+    }
+
+    /// A header over the limit is ignored with no error, through the direct
+    /// User-Agent call and through evidence alike.
+    #[test]
+    fn a_header_over_the_limit_is_ignored() {
+        let Some(data_file) = dd_lite_data_file() else {
+            eprintln!("no Lite Hash data file found; skipping header limit test");
+            return;
+        };
+        let manager = open_loaded(&data_file);
+
+        for (length, matched) in [(HEADER_LIMIT, true), (HEADER_LIMIT + 1, false)] {
+            let user_agent = padded_user_agent(length);
+
+            let mut direct = manager.create_results().expect("results should allocate");
+            direct
+                .process_user_agent(&user_agent)
+                .expect("a long user agent should not raise an exception");
+
+            let mut through_evidence = manager.create_results().expect("results should allocate");
+            let evidence = Evidence::builder()
+                .add("header.user-agent", user_agent.as_str())
+                .build();
+            through_evidence
+                .process_evidence(&evidence)
+                .expect("a long header should not raise an exception");
+
+            for results in [&direct, &through_evidence] {
+                let has_values = results
+                    .has_values("IsMobile")
+                    .expect("has_values should not error");
+                assert_eq!(has_values, matched, "a header of {length} bytes");
+            }
+        }
+    }
+
+    /// Detection moves on from a header over the limit to the next evidence,
+    /// so the header is used here even though a query value takes precedence.
+    #[test]
+    fn detection_moves_on_from_a_header_over_the_limit() {
+        let Some(data_file) = dd_lite_data_file() else {
+            eprintln!("no Lite Hash data file found; skipping next header test");
+            return;
+        };
+        let manager = open_loaded(&data_file);
+        let mut results = manager.create_results().expect("results should allocate");
+
+        let over_limit = padded_user_agent(HEADER_LIMIT + 1);
+        let evidence = Evidence::builder()
+            .add("query.user-agent", over_limit.as_str())
+            .add("header.user-agent", DESKTOP_USER_AGENT)
+            .build();
+        results
+            .process_evidence(&evidence)
+            .expect("processing evidence should not raise an exception");
+
+        let value = results
+            .value_as_string("IsMobile", ",")
+            .expect("reading IsMobile should not error");
+        assert_eq!(value.as_deref(), Some("False"));
+    }
+
+    /// The limit is on headers. A high-entropy values blob is not a header, so
+    /// a longer blob is still turned into client hint headers.
+    #[test]
+    fn a_high_entropy_values_blob_over_the_limit_is_used() {
+        let Some(data_file) = dd_lite_data_file() else {
+            eprintln!("no Lite Hash data file found; skipping long blob test");
+            return;
+        };
+        let manager = open_loaded(&data_file);
+        // Base64 of the high-entropy values of Chrome on macOS, with brands
+        // and a full version list.
+        let ghev = "eyJhcmNoaXRlY3R1cmUiOiJhcm0iLCJicmFuZHMiOlt7ImJyYW5kIjoiR29vZ2xlIENocm9t\
+            ZSIsInZlcnNpb24iOiIxMzEifSx7ImJyYW5kIjoiQ2hyb21pdW0iLCJ2ZXJzaW9uIjoiMTMx\
+            In0seyJicmFuZCI6Ik5vdF9BIEJyYW5kIiwidmVyc2lvbiI6IjI0In1dLCJmdWxsVmVyc2lv\
+            bkxpc3QiOlt7ImJyYW5kIjoiR29vZ2xlIENocm9tZSIsInZlcnNpb24iOiIxMzEuMC42Nzc4\
+            LjE0MCJ9LHsiYnJhbmQiOiJDaHJvbWl1bSIsInZlcnNpb24iOiIxMzEuMC42Nzc4LjE0MCJ9\
+            LHsiYnJhbmQiOiJOb3RfQSBCcmFuZCIsInZlcnNpb24iOiIyNC4wLjAuMCJ9XSwibW9iaWxl\
+            IjpmYWxzZSwibW9kZWwiOiIiLCJwbGF0Zm9ybSI6Im1hY09TIiwicGxhdGZvcm1WZXJzaW9u\
+            IjoiMTUuMS4xIn0=";
+        assert!(ghev.len() > HEADER_LIMIT);
+
+        for key in [
+            "query.51d_gethighentropyvalues",
+            "cookie.51d_gethighentropyvalues",
+        ] {
+            let mut results = manager.create_results().expect("results should allocate");
+            let evidence = Evidence::builder().add(key, ghev).build();
+            results
+                .process_evidence(&evidence)
+                .expect("processing evidence should not raise an exception");
+
+            let value = results
+                .value_as_string("PlatformName", ",")
+                .expect("reading PlatformName should not error");
+            assert_eq!(value.as_deref(), Some("macOS"), "{key}");
+        }
+    }
+
+    /// Naming `DeviceId` resolves every component, whatever else is named, so
+    /// the id is the one a data set with every property gives. Without it, a
+    /// component with no named property reads as zero.
+    #[test]
+    fn naming_device_id_resolves_every_component() {
+        let Some(data_file) = dd_lite_data_file() else {
+            eprintln!("no Lite Hash data file found; skipping named device id test");
+            return;
+        };
+        let device_id = |names: Option<&[&str]>| {
+            let manager =
+                dd::Manager::open_with_properties(&data_file, PerformanceProfile::Default, names)
+                    .unwrap_or_else(|err| panic!("{names:?} should load: {err}"));
+            let mut results = manager.create_results().expect("results should allocate");
+            results
+                .process_user_agent(MOBILE_USER_AGENT)
+                .expect("processing a user agent should not raise an exception");
+            results
+                .device_id()
+                .expect("reading the device id should not error")
+                .expect("a match should produce a device id")
+        };
+
+        let every_property = device_id(None);
+        for names in [
+            &["DeviceId"][..],
+            &["deviceid"],
+            &["DeviceId", "IsMobile"],
+            &["IsMobile", "DeviceId"],
+        ] {
+            assert_eq!(device_id(Some(names)), every_property, "{names:?}");
+        }
+        assert_ne!(device_id(Some(&["IsMobile"])), every_property);
+    }
+
     /// Evidence the engine expands during processing (a high-entropy values
     /// blob, which it turns into client hint headers) and client-side
     /// override values are accepted, and the pooled evidence array can be

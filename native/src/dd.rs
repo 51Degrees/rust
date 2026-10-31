@@ -202,6 +202,9 @@ impl Manager {
     ///
     /// Limiting the property set reduces the memory footprint of the loaded data
     /// set, matching the `properties` option in the other 51Degrees ports.
+    ///
+    /// A component with no named property reads as `0` in the device id. Naming
+    /// `DeviceId` resolves every component, so the device id is complete.
     pub fn open_with_properties(
         path: impl AsRef<Path>,
         profile: PerformanceProfile,
@@ -505,6 +508,9 @@ impl Results {
     /// The evidence is marshalled into the native evidence array (reusing the
     /// thread-local pool) and processed. Header and query values are read as
     /// user agent style evidence and server values as the client IP.
+    ///
+    /// A header longer than 500 bytes is ignored with no error, and detection
+    /// moves on to the next header.
     pub fn process_evidence(&mut self, evidence: &fiftyone_pipeline_core::Evidence) -> Result<()> {
         let mut exception = sys::Exception::cleared();
         let results = self.as_ptr();
@@ -520,6 +526,9 @@ impl Results {
     }
 
     /// Run a detection from a single User-Agent string.
+    ///
+    /// A User-Agent longer than 500 bytes is ignored with no error, which gives
+    /// the same results as no evidence.
     pub fn process_user_agent(&mut self, user_agent: &str) -> Result<()> {
         let mut exception = sys::Exception::cleared();
         let _file_read = self.manager.file_read();

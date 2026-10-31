@@ -402,6 +402,10 @@ impl DeviceDetectionOnPremisePipelineBuilder {
     /// Restrict the engine to a single named property, adding to any already
     /// requested. With no restriction every property the data file supports is
     /// loaded.
+    ///
+    /// On premise, a component with no named property reads as `0` in the device
+    /// id. Naming `DeviceId` resolves every component, so the device id is
+    /// complete.
     pub fn property(mut self, name: impl Into<String>) -> Self {
         let name = name.into();
         if !self
