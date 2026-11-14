@@ -795,7 +795,11 @@ fn decode_base64(value: &str) -> std::result::Result<Vec<u8>, ParseError> {
     if trimmed.contains(['+', '/']) && trimmed.contains(['-', '_']) {
         return Err(invalid());
     }
-    let text = trimmed.replace('-', "+").replace('_', "/");
+    let text: String = trimmed
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || "+/=-_".contains(c) { c } else { 'A' })
+        .collect();
+    let text = text.replace('-', "+").replace('_', "/");
     BASE64.decode(text).map_err(|_| invalid())
 }
 
