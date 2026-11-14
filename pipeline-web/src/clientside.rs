@@ -371,7 +371,7 @@ fn json_body(flow_data: &FlowData, left_no_data: bool) -> String {
     if !left_no_data {
         return flow_data
             .get(JSON_BUILDER_DATA_KEY)
-            .map(|data| data.json().to_owned())
+            .map(|data| format!("{{\"json\":{}}}", data.json()))
             .unwrap_or_default();
     }
     log_missing_data(JSON_BUILDER_ELEMENT_DATA_KEY);

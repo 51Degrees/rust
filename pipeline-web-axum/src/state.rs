@@ -124,9 +124,9 @@ impl FiftyOneState {
     /// honouring the configured endpoint paths.
     pub fn endpoint_for(&self, path: &str) -> Option<WebEndpoint> {
         let options = &self.inner.options;
-        if fiftyone_pipeline_web::endpoint_matches(path, &options.javascript_endpoint) {
+        if fiftyone_pipeline_web::endpoint_matches(path, "/51Degrees.core.js") {
             Some(WebEndpoint::JavaScript)
-        } else if fiftyone_pipeline_web::endpoint_matches(path, &options.json_endpoint) {
+        } else if fiftyone_pipeline_web::endpoint_matches(path, "/51dpipeline/json") {
             Some(WebEndpoint::Json)
         } else {
             None

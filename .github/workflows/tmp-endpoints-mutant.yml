@@ -1,0 +1,18 @@
+name: Throwaway mutant run of the endpoint tests
+on:
+  push:
+    branches: [tmp/rust-endpoints-mutant]
+jobs:
+  mutant:
+    name: endpoint tests against changed endpoints
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Copy the OWID source into fodid
+        shell: pwsh
+        run: ./ci/copy-owid-source.ps1
+      - name: The axum endpoint tests
+        run: cargo test -p fiftyone-pipeline-web-axum --test web_endpoints
