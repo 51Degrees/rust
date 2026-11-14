@@ -1,0 +1,22 @@
+name: Throwaway red run of the template tests
+on:
+  push:
+    branches: [tmp/rust-template-red]
+jobs:
+  red:
+    name: template tests against rc
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Copy the OWID source into fodid
+        shell: pwsh
+        run: ./ci/copy-owid-source.ps1
+      - name: The renderer's tests
+        if: always()
+        run: cargo test -p fiftyone-javascript-builder --lib mustache
+      - name: The builder's step tests
+        if: always()
+        run: cargo test -p fiftyone-javascript-builder --test steps
