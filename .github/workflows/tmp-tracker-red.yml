@@ -1,0 +1,18 @@
+name: Throwaway red run of the repeat interval tests
+on:
+  push:
+    branches: [tmp/rust-tracker-red]
+jobs:
+  red:
+    name: repeat interval tests against rc's code
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Copy the OWID source into fodid
+        shell: pwsh
+        run: ./ci/copy-owid-source.ps1
+      - name: The tracker's tests
+        run: cargo test -p fiftyone-pipeline-engines-fiftyone --lib share_usage_tracker
